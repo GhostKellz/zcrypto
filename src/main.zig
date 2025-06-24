@@ -60,6 +60,29 @@ pub fn main() !void {
     defer allocator.free(random_bytes);
     std.debug.print("  Generated {} random bytes\n", .{random_bytes.len});
     
+    // TLS Configuration Demo
+    std.debug.print("\n🔐 TLS Configuration:\n", .{});
+    const alpn_protocols = [_][]const u8{ "h2", "http/1.1" };
+    const tls_config = zcrypto.tls.config.TlsConfig.init(allocator)
+        .withServerName("example.com")
+        .withALPN(@constCast(&alpn_protocols))
+        .withInsecureSkipVerify(false);
+    defer tls_config.deinit();
+    
+    try tls_config.validate();
+    std.debug.print("  Configured TLS client for {s}\n", .{tls_config.server_name.?});
+    std.debug.print("  Supported ALPN protocols: {} configured\n", .{tls_config.alpn_protocols.?.len});
+    
+    // TLS Key Schedule Demo
+    var key_schedule = try zcrypto.tls.KeySchedule.init(allocator, .sha256);
+    defer key_schedule.deinit();
+    
+    try key_schedule.deriveEarlySecret(null);
+    const ecdhe_secret = [_]u8{0x42} ** 32;
+    try key_schedule.deriveHandshakeSecret(&ecdhe_secret);
+    try key_schedule.deriveMasterSecret();
+    std.debug.print("  Completed TLS 1.3 key schedule derivation\n", .{});
+    
     std.debug.print("\n✅ All cryptographic operations completed successfully!\n", .{});
     std.debug.print("🚀 Ready for integration with zquic and tokioZ!\n", .{});
 }

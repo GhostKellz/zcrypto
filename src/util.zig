@@ -104,6 +104,16 @@ pub fn base64Decode(allocator: std.mem.Allocator, encoded: []const u8) ![]u8 {
     return decoded;
 }
 
+/// Convert big-endian bytes to u16
+pub fn readU16BigEndian(bytes: []const u8) u16 {
+    return std.mem.readInt(u16, bytes[0..2], .big);
+}
+
+/// Convert u16 to big-endian bytes
+pub fn writeU16BigEndian(bytes: []u8, value: u16) void {
+    std.mem.writeInt(u16, bytes[0..2], value, .big);
+}
+
 /// Convert big-endian bytes to u32
 pub fn readU32BE(bytes: []const u8) u32 {
     return std.mem.readInt(u32, bytes[0..4], .big);
@@ -121,6 +131,11 @@ pub fn readU64BE(bytes: []const u8) u64 {
 
 /// Convert u64 to big-endian bytes
 pub fn writeU64BE(value: u64, bytes: []u8) void {
+    std.mem.writeInt(u64, bytes[0..8], value, .big);
+}
+
+/// Convert u64 to big-endian bytes (alias for consistency)
+pub fn writeU64BigEndian(bytes: []u8, value: u64) void {
     std.mem.writeInt(u64, bytes[0..8], value, .big);
 }
 

@@ -62,16 +62,12 @@ pub const Curve25519KeyPair = struct {
 
 /// Generate a new Ed25519 keypair
 pub fn generateEd25519() Ed25519KeyPair {
-    // Generate random seed and create keypair properly
-    var seed: [32]u8 = undefined;
-    std.crypto.random.bytes(&seed);
-    
-    const secret_key = std.crypto.sign.Ed25519.SecretKey.fromBytes(seed ++ seed) catch unreachable;
-    const key_pair = std.crypto.sign.Ed25519.KeyPair.fromSecretKey(secret_key) catch unreachable;
+    // Generate using the standard Zig crypto library approach
+    const key_pair = std.crypto.sign.Ed25519.KeyPair.generate();
     
     return Ed25519KeyPair{
         .public_key = key_pair.public_key.bytes,
-        .private_key = secret_key.bytes,
+        .private_key = key_pair.secret_key.bytes,
     };
 }
 
@@ -154,30 +150,28 @@ pub const x25519 = struct {
 };
 
 test "ed25519 keypair generation and signing" {
-    // TODO: Fix Ed25519 implementation for Zig 0.15
-    // const keypair = generateEd25519();
-    // const message = "Hello, zcrypto signatures!";
+    const keypair = generateEd25519();
+    const message = "Hello, zcrypto signatures!";
     
-    // const signature = keypair.sign(message);
-    // const valid = keypair.verify(message, signature);
+    const signature = keypair.sign(message);
+    const valid = keypair.verify(message, signature);
     
-    // try std.testing.expect(valid);
+    try std.testing.expect(valid);
     
-    // // Test with wrong message
-    // const wrong_message = "Wrong message";
-    // const invalid = keypair.verify(wrong_message, signature);
-    // try std.testing.expect(!invalid);
+    // Test with wrong message
+    const wrong_message = "Wrong message";
+    const invalid = keypair.verify(wrong_message, signature);
+    try std.testing.expect(!invalid);
 }
 
 test "ed25519 standalone functions" {
-    // TODO: Fix Ed25519 implementation for Zig 0.15
-    // const keypair = ed25519.generate();
-    // const message = "Standalone API test";
+    const keypair = ed25519.generate();
+    const message = "Standalone API test";
     
-    // const signature = ed25519.sign(message, keypair.private_key);
-    // const valid = ed25519.verify(message, signature, keypair.public_key);
+    const signature = ed25519.sign(message, keypair.private_key);
+    const valid = ed25519.verify(message, signature, keypair.public_key);
     
-    // try std.testing.expect(valid);
+    try std.testing.expect(valid);
 }
 
 test "x25519 key exchange" {

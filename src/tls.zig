@@ -8,6 +8,14 @@ const sym = @import("sym.zig");
 const kdf = @import("kdf.zig");
 const hash = @import("hash.zig");
 const util = @import("util.zig");
+const asym = @import("asym.zig");
+
+// Re-export high-level modules for convenience
+pub const config = @import("tls_config.zig");
+pub const client = @import("tls_client.zig");
+pub const server = @import("tls_server.zig");
+pub const record = @import("tls_record.zig");
+pub const errors = @import("errors.zig");
 
 /// QUIC connection ID type
 pub const ConnectionId = []const u8;
@@ -155,15 +163,18 @@ pub fn decryptAesGcm(
     return sym.decryptAes128Gcm(allocator, key_array, nonce_array, ciphertext, tag_array, aad);
 }
 
-/// Compute packet number from truncated packet number
+/// Compute packet number from truncated packet number (RFC 9000 Section A.3)
 pub fn computePacketNumber(largest_pn: u64, truncated_pn: u32, pn_nbits: u8) u64 {
     const expected_pn = largest_pn + 1;
     const pn_win = @as(u64, 1) << @intCast(pn_nbits);
     const pn_hwin = pn_win / 2;
     const pn_mask = pn_win - 1;
     
+    // Reconstruct packet number by taking high bits from expected_pn
+    // and low bits from truncated_pn
     const candidate_pn = (expected_pn & ~pn_mask) | @as(u64, truncated_pn);
     
+    // Choose the candidate closest to expected_pn
     if (candidate_pn + pn_hwin <= expected_pn) {
         return candidate_pn + pn_win;
     } else if (candidate_pn > expected_pn + pn_hwin and candidate_pn >= pn_win) {
@@ -172,6 +183,280 @@ pub fn computePacketNumber(largest_pn: u64, truncated_pn: u32, pn_nbits: u8) u64
         return candidate_pn;
     }
 }
+
+/// Key schedule state for TLS 1.3
+pub const KeySchedule = struct {
+    /// Hash algorithm being used
+    hash_alg: config.HashAlgorithm,
+    /// Early secret
+    early_secret: []u8,
+    /// Handshake secret
+    handshake_secret: []u8,
+    /// Master secret
+    master_secret: []u8,
+    /// Allocator
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator, hash_alg: config.HashAlgorithm) !KeySchedule {
+        const hash_len = hash_alg.digestSize();
+        
+        return KeySchedule{
+            .hash_alg = hash_alg,
+            .early_secret = try allocator.alloc(u8, hash_len),
+            .handshake_secret = try allocator.alloc(u8, hash_len),
+            .master_secret = try allocator.alloc(u8, hash_len),
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: KeySchedule) void {
+        util.secureZero(self.early_secret);
+        util.secureZero(self.handshake_secret);
+        util.secureZero(self.master_secret);
+        self.allocator.free(self.early_secret);
+        self.allocator.free(self.handshake_secret);
+        self.allocator.free(self.master_secret);
+    }
+
+    /// Derive early secret from PSK (or zeros)
+    pub fn deriveEarlySecret(self: *KeySchedule, psk: ?[]const u8) !void {
+        const zero_hash = try self.allocator.alloc(u8, self.hash_alg.digestSize());
+        defer self.allocator.free(zero_hash);
+        @memset(zero_hash, 0);
+
+        const ikm = psk orelse zero_hash;
+        
+        switch (self.hash_alg) {
+            .sha256 => {
+                const extracted = std.crypto.kdf.hkdf.HkdfSha256.extract(&[_]u8{0}, ikm);
+                @memcpy(self.early_secret, &extracted);
+            },
+            .sha384, .sha512 => {
+                // For now, fall back to SHA256 for SHA384/SHA512
+                // TODO: Implement proper SHA384/SHA512 HKDF when available
+                const extracted = std.crypto.kdf.hkdf.HkdfSha256.extract(&[_]u8{0}, ikm);
+                @memcpy(self.early_secret[0..32], &extracted);
+            },
+        }
+    }
+
+    /// Derive handshake secret from ECDHE shared secret
+    pub fn deriveHandshakeSecret(self: *KeySchedule, ecdhe_secret: []const u8) !void {
+        const derived_secret = try self.deriveSecret(self.early_secret, "derived", "");
+        defer self.allocator.free(derived_secret);
+
+        switch (self.hash_alg) {
+            .sha256 => {
+                const extracted = std.crypto.kdf.hkdf.HkdfSha256.extract(derived_secret, ecdhe_secret);
+                @memcpy(self.handshake_secret, &extracted);
+            },
+            .sha384, .sha512 => {
+                const extracted = std.crypto.kdf.hkdf.HkdfSha256.extract(derived_secret, ecdhe_secret);
+                @memcpy(self.handshake_secret[0..32], &extracted);
+            },
+        }
+    }
+
+    /// Derive master secret
+    pub fn deriveMasterSecret(self: *KeySchedule) !void {
+        const derived_secret = try self.deriveSecret(self.handshake_secret, "derived", "");
+        defer self.allocator.free(derived_secret);
+
+        const zero_hash = try self.allocator.alloc(u8, self.hash_alg.digestSize());
+        defer self.allocator.free(zero_hash);
+        @memset(zero_hash, 0);
+
+        switch (self.hash_alg) {
+            .sha256 => {
+                const extracted = std.crypto.kdf.hkdf.HkdfSha256.extract(derived_secret, zero_hash);
+                @memcpy(self.master_secret, &extracted);
+            },
+            .sha384, .sha512 => {
+                const extracted = std.crypto.kdf.hkdf.HkdfSha256.extract(derived_secret, zero_hash);
+                @memcpy(self.master_secret[0..32], &extracted);
+            },
+        }
+    }
+
+    /// Derive a secret using TLS 1.3 Derive-Secret
+    pub fn deriveSecret(self: *KeySchedule, secret: []const u8, label: []const u8, messages: []const u8) ![]u8 {
+        const hash_len = self.hash_alg.digestSize();
+        const transcript_hash = try self.allocator.alloc(u8, hash_len);
+        defer self.allocator.free(transcript_hash);
+
+        // Hash the messages
+        switch (self.hash_alg) {
+            .sha256 => {
+                var h = hash.Sha256.init();
+                h.update(messages);
+                const result = h.final();
+                @memcpy(transcript_hash, &result);
+            },
+            .sha384 => {
+                var h = std.crypto.hash.sha2.Sha384.init(.{});
+                h.update(messages);
+                var result: [48]u8 = undefined;
+                h.final(&result);
+                @memcpy(transcript_hash, &result);
+            },
+            .sha512 => {
+                var h = hash.Sha512.init();
+                h.update(messages);
+                const result = h.final();
+                @memcpy(transcript_hash, &result);
+            },
+        }
+
+        return kdf.hkdfExpandLabel(self.allocator, secret, label, transcript_hash, hash_len);
+    }
+};
+
+/// Transcript hash for TLS 1.3
+pub const TranscriptHash = struct {
+    hash_alg: config.HashAlgorithm,
+    context: union(enum) {
+        sha256: hash.Sha256,
+        sha384: std.crypto.hash.sha2.Sha384,
+        sha512: hash.Sha512,
+    },
+
+    pub fn init(hash_alg: config.HashAlgorithm) TranscriptHash {
+        return switch (hash_alg) {
+            .sha256 => .{
+                .hash_alg = hash_alg,
+                .context = .{ .sha256 = hash.Sha256.init() },
+            },
+            .sha384 => .{
+                .hash_alg = hash_alg,
+                .context = .{ .sha384 = std.crypto.hash.sha2.Sha384.init(.{}) },
+            },
+            .sha512 => .{
+                .hash_alg = hash_alg,
+                .context = .{ .sha512 = hash.Sha512.init() },
+            },
+        };
+    }
+
+    pub fn update(self: *TranscriptHash, data: []const u8) void {
+        switch (self.context) {
+            .sha256 => |*h| h.update(data),
+            .sha384 => |*h| h.update(data),
+            .sha512 => |*h| h.update(data),
+        }
+    }
+
+    pub fn final(self: *TranscriptHash, out: []u8) void {
+        switch (self.context) {
+            .sha256 => |*h| {
+                const result = h.final();
+                @memcpy(out, &result);
+            },
+            .sha384 => |*h| {
+                const len = @min(out.len, 48);
+                var result: [48]u8 = undefined;
+                h.final(&result);
+                @memcpy(out[0..len], result[0..len]);
+            },
+            .sha512 => |*h| {
+                const result = h.final();
+                @memcpy(out, &result);
+            },
+        }
+    }
+
+    pub fn clone(self: TranscriptHash) TranscriptHash {
+        return switch (self.context) {
+            .sha256 => |h| .{
+                .hash_alg = self.hash_alg,
+                .context = .{ .sha256 = h },
+            },
+            .sha384 => |h| .{
+                .hash_alg = self.hash_alg,
+                .context = .{ .sha384 = h },
+            },
+            .sha512 => |h| .{
+                .hash_alg = self.hash_alg,
+                .context = .{ .sha512 = h },
+            },
+        };
+    }
+};
+
+/// AEAD cipher for TLS 1.3
+pub const AeadCipher = struct {
+    cipher_suite: config.CipherSuite,
+    key: []u8,
+    iv: []u8,
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator, cipher_suite: config.CipherSuite, key: []const u8, iv: []const u8) !AeadCipher {
+        const key_size = cipher_suite.keySize();
+        if (key.len != key_size) return error.InvalidKeySize;
+        if (iv.len != 12) return error.InvalidIvSize;
+
+        return AeadCipher{
+            .cipher_suite = cipher_suite,
+            .key = try allocator.dupe(u8, key),
+            .iv = try allocator.dupe(u8, iv),
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: AeadCipher) void {
+        util.secureZero(self.key);
+        util.secureZero(self.iv);
+        self.allocator.free(self.key);
+        self.allocator.free(self.iv);
+    }
+
+    pub fn encrypt(self: AeadCipher, allocator: std.mem.Allocator, nonce: []const u8, plaintext: []const u8, aad: []const u8) !sym.Ciphertext {
+        if (nonce.len != 12) return error.InvalidNonceSize;
+
+        switch (self.cipher_suite) {
+            .TLS_AES_128_GCM_SHA256 => {
+                const key_array: [16]u8 = self.key[0..16].*;
+                const nonce_array: [12]u8 = nonce[0..12].*;
+                return sym.encryptAes128Gcm(allocator, key_array, nonce_array, plaintext, aad);
+            },
+            .TLS_AES_256_GCM_SHA384 => {
+                const key_array: [32]u8 = self.key[0..32].*;
+                const nonce_array: [12]u8 = nonce[0..12].*;
+                return sym.encryptAes256Gcm(allocator, key_array, nonce_array, plaintext, aad);
+            },
+            .TLS_CHACHA20_POLY1305_SHA256 => {
+                const key_array: [32]u8 = self.key[0..32].*;
+                const nonce_array: [12]u8 = nonce[0..12].*;
+                return sym.encryptChaCha20Poly1305(allocator, key_array, nonce_array, plaintext, aad);
+            },
+        }
+    }
+
+    pub fn decrypt(self: AeadCipher, allocator: std.mem.Allocator, nonce: []const u8, ciphertext: []const u8, tag: []const u8, aad: []const u8) !?[]u8 {
+        if (nonce.len != 12) return error.InvalidNonceSize;
+        if (tag.len != 16) return error.InvalidTagSize;
+
+        switch (self.cipher_suite) {
+            .TLS_AES_128_GCM_SHA256 => {
+                const key_array: [16]u8 = self.key[0..16].*;
+                const nonce_array: [12]u8 = nonce[0..12].*;
+                const tag_array: [16]u8 = tag[0..16].*;
+                return sym.decryptAes128Gcm(allocator, key_array, nonce_array, ciphertext, tag_array, aad);
+            },
+            .TLS_AES_256_GCM_SHA384 => {
+                const key_array: [32]u8 = self.key[0..32].*;
+                const nonce_array: [12]u8 = nonce[0..12].*;
+                const tag_array: [16]u8 = tag[0..16].*;
+                return sym.decryptAes256Gcm(allocator, key_array, nonce_array, ciphertext, tag_array, aad);
+            },
+            .TLS_CHACHA20_POLY1305_SHA256 => {
+                const key_array: [32]u8 = self.key[0..32].*;
+                const nonce_array: [12]u8 = nonce[0..12].*;
+                const tag_array: [16]u8 = tag[0..16].*;
+                return sym.decryptChaCha20Poly1305(allocator, key_array, nonce_array, ciphertext, tag_array, aad);
+            },
+        }
+    }
+};
 
 test "derive initial secrets" {
     const cid = [_]u8{ 0x12, 0x34, 0x56, 0x78 };
@@ -235,11 +520,17 @@ test "hkdf expand label integration" {
 }
 
 test "packet number computation" {
-    // Test cases from QUIC RFC - simplified for now
-    // TODO: Fix packet number computation algorithm
+    // Test cases based on RFC 9000 Appendix A.3
+    // Case: largest_pn=0xa82f30ea, truncated=0xac (8 bits)
+    // Should reconstruct to 0xa82f30ac
     const result1 = computePacketNumber(0xa82f30ea, 0xac, 8);
-    std.debug.print("Expected: 0xac (172), Got: {} ({})\n", .{ result1, result1 });
+    try std.testing.expectEqual(@as(u64, 0xa82f30ac), result1);
     
-    // For now, just ensure it compiles and runs
-    try std.testing.expect(result1 > 0);
+    // Additional test cases
+    const result2 = computePacketNumber(0xa82f30ea, 0x9b, 8);
+    try std.testing.expectEqual(@as(u64, 0xa82f309b), result2);
+    
+    // Test edge case with wraparound
+    const result3 = computePacketNumber(0xff, 0x00, 8);
+    try std.testing.expectEqual(@as(u64, 0x100), result3);
 }
