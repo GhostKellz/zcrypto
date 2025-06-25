@@ -5,9 +5,14 @@
 
 const std = @import("std");
 
-/// Fill a buffer with secure random bytes
-pub fn fill(buf: []u8) void {
+/// Fill a buffer with secure random bytes (matches documentation API)
+pub fn fillBytes(buf: []u8) void {
     std.crypto.random.bytes(buf);
+}
+
+/// Fill a buffer with secure random bytes (legacy name)
+pub fn fill(buf: []u8) void {
+    fillBytes(buf);
 }
 
 /// Generate a slice of random bytes (caller owns memory)
@@ -71,6 +76,16 @@ pub fn iv(comptime size: usize) [size]u8 {
 
 /// Generate a session ID
 pub fn sessionId(comptime size: usize) [size]u8 {
+    return randomArray(size);
+}
+
+/// Generate cryptographic key of specified size (matches documentation API)
+pub fn generateKey(comptime size: usize) [size]u8 {
+    return randomArray(size);
+}
+
+/// Generate cryptographic salt of specified size (matches documentation API)
+pub fn generateSalt(comptime size: usize) [size]u8 {
     return randomArray(size);
 }
 
@@ -149,4 +164,18 @@ test "crypto helpers" {
     try std.testing.expectEqual(@as(usize, 32), test_salt.len);
     try std.testing.expectEqual(@as(usize, 16), test_iv.len);
     try std.testing.expectEqual(@as(usize, 24), test_session.len);
+}
+
+test "documentation api compatibility" {
+    // Test fillBytes API
+    var buf: [32]u8 = undefined;
+    fillBytes(&buf);
+    
+    // Test generateKey API
+    const key = generateKey(32);
+    try std.testing.expectEqual(@as(usize, 32), key.len);
+    
+    // Test generateSalt API  
+    const test_salt = generateSalt(16);
+    try std.testing.expectEqual(@as(usize, 16), test_salt.len);
 }

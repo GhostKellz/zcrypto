@@ -121,8 +121,42 @@ pub fn deriveKey(
     return hkdfSha256(allocator, master_secret, "", label, length);
 }
 
-/// Secure key stretching for user passwords
+/// Argon2id password hashing (RFC 9106) - Recommended for new applications
+pub fn argon2id(
+    allocator: std.mem.Allocator,
+    password: []const u8,
+    salt: []const u8,
+    key_length: usize,
+) ![]u8 {
+    const output = try allocator.alloc(u8, key_length);
+    errdefer allocator.free(output);
+    
+    // Conservative parameters for security in 2025
+    // Memory: 64MB, Time: 3 iterations, Parallelism: 4
+    try std.crypto.pwhash.argon2.kdf(
+        allocator,
+        output,
+        password,
+        salt,
+        .{ .t = 3, .m = 65536, .p = 4 },
+        .argon2id,
+    );
+    
+    return output;
+}
+
+/// Secure key stretching for user passwords using Argon2id
 pub fn stretchPassword(
+    allocator: std.mem.Allocator,
+    password: []const u8,
+    salt: []const u8,
+    key_length: usize,
+) ![]u8 {
+    return argon2id(allocator, password, salt, key_length);
+}
+
+/// Legacy PBKDF2 for compatibility (use Argon2id for new code)
+pub fn legacyStretchPassword(
     allocator: std.mem.Allocator,
     password: []const u8,
     salt: []const u8,
@@ -187,4 +221,29 @@ test "derive key convenience function" {
     defer allocator.free(key);
 
     try std.testing.expectEqual(@as(usize, 24), key.len);
+}
+
+test "argon2id password hashing" {
+    const allocator = std.testing.allocator;
+
+    const password = "secure-password-123";
+    const salt = "random-salt-16-bytes"; // Should be 16+ bytes
+    
+    const key = try argon2id(allocator, password, salt, 32);
+    defer allocator.free(key);
+    
+    try std.testing.expectEqual(@as(usize, 32), key.len);
+    
+    // Same input should produce same output
+    const key2 = try argon2id(allocator, password, salt, 32);
+    defer allocator.free(key2);
+    
+    try std.testing.expectEqualSlices(u8, key, key2);
+    
+    // Different salt should produce different output
+    const different_salt = "different-salt-16b";
+    const key3 = try argon2id(allocator, password, different_salt, 32);
+    defer allocator.free(key3);
+    
+    try std.testing.expect(!std.mem.eql(u8, key, key3));
 }

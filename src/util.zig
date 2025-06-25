@@ -5,8 +5,8 @@
 
 const std = @import("std");
 
-/// Constant-time comparison of two byte slices
-pub fn constantTimeEqual(a: []const u8, b: []const u8) bool {
+/// Constant-time comparison of two byte slices (matches documentation API)
+pub fn constantTimeCompare(a: []const u8, b: []const u8) bool {
     if (a.len != b.len) return false;
     if (a.len == 0) return true;
 
@@ -15,6 +15,11 @@ pub fn constantTimeEqual(a: []const u8, b: []const u8) bool {
         result |= byte_a ^ byte_b;
     }
     return result == 0;
+}
+
+/// Constant-time comparison of two byte slices (legacy name)
+pub fn constantTimeEqual(a: []const u8, b: []const u8) bool {
+    return constantTimeCompare(a, b);
 }
 
 /// Constant-time comparison of two fixed-size arrays
@@ -167,6 +172,16 @@ test "constant time equal" {
     try std.testing.expect(constantTimeEqual(a, b));
     try std.testing.expect(!constantTimeEqual(a, c));
     try std.testing.expect(!constantTimeEqual(a, "hell")); // Different lengths
+}
+
+test "constant time compare api" {
+    const a = "hello";
+    const b = "hello";
+    const c = "world";
+
+    try std.testing.expect(constantTimeCompare(a, b));
+    try std.testing.expect(!constantTimeCompare(a, c));
+    try std.testing.expect(!constantTimeCompare(a, "hell")); // Different lengths
 }
 
 test "pkcs7 padding" {

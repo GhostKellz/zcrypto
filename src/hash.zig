@@ -14,6 +14,15 @@ pub const Sha512Hash = [64]u8;
 /// Blake2b hash result
 pub const Blake2bHash = [64]u8;
 
+/// HMAC-SHA256 result
+pub const HmacSha256Hash = [32]u8;
+
+/// HMAC-SHA512 result
+pub const HmacSha512Hash = [64]u8;
+
+/// HMAC-Blake3 result (using 32-byte output)
+pub const HmacBlake3Hash = [32]u8;
+
 /// Compute SHA-256 hash of input data
 pub fn sha256(data: []const u8) Sha256Hash {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
@@ -32,6 +41,27 @@ pub fn sha512(data: []const u8) Sha512Hash {
 pub fn blake2b(data: []const u8) Blake2bHash {
     var result: Blake2bHash = undefined;
     std.crypto.hash.blake2.Blake2b512.hash(data, &result, .{});
+    return result;
+}
+
+/// HMAC-SHA256 computation
+pub fn hmacSha256(message: []const u8, key: []const u8) HmacSha256Hash {
+    var result: HmacSha256Hash = undefined;
+    std.crypto.auth.hmac.sha2.HmacSha256.create(&result, message, key);
+    return result;
+}
+
+/// HMAC-SHA512 computation
+pub fn hmacSha512(message: []const u8, key: []const u8) HmacSha512Hash {
+    var result: HmacSha512Hash = undefined;
+    std.crypto.auth.hmac.sha2.HmacSha512.create(&result, message, key);
+    return result;
+}
+
+/// HMAC-Blake2s computation (32-byte output)
+pub fn hmacBlake2s(message: []const u8, key: []const u8) HmacBlake3Hash {
+    var result: HmacBlake3Hash = undefined;
+    std.crypto.auth.hmac.Hmac(std.crypto.hash.blake2.Blake2s256).create(&result, message, key);
     return result;
 }
 
@@ -111,4 +141,36 @@ test "streaming sha256" {
 
     const expected = sha256("hello world");
     try std.testing.expectEqualSlices(u8, &expected, &result);
+}
+
+test "hmac sha256" {
+    const key = "secret-key";
+    const message = "Hello, HMAC!";
+    
+    const result = hmacSha256(message, key);
+    
+    // Test that we get a 32-byte result
+    try std.testing.expectEqual(@as(usize, 32), result.len);
+    
+    // Test deterministic - same input should give same output
+    const result2 = hmacSha256(message, key);
+    try std.testing.expectEqualSlices(u8, &result, &result2);
+}
+
+test "hmac sha512" {
+    const key = "another-secret-key";
+    const message = "Hello, HMAC-512!";
+    
+    const result = hmacSha512(message, key);
+    
+    try std.testing.expectEqual(@as(usize, 64), result.len);
+}
+
+test "hmac blake2s" {
+    const key = "blake2s-secret";
+    const message = "Blake2s HMAC test";
+    
+    const result = hmacBlake2s(message, key);
+    
+    try std.testing.expectEqual(@as(usize, 32), result.len);
 }
