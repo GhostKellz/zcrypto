@@ -4,6 +4,25 @@
 //! with a focus on TLS 1.3, QUIC, and modern public-key cryptography.
 const std = @import("std");
 
+/// Standardized crypto errors for consistent error handling
+pub const CryptoError = error{
+    InvalidSeed,
+    InvalidPrivateKey,
+    InvalidPublicKey,
+    InvalidSignature,
+    InvalidHmacKey,
+    InvalidKeyFormat,
+    SignatureVerificationFailed,
+    KeyDerivationFailed,
+    InsufficientEntropy,
+    InvalidKeySize,
+    InvalidNonceSize,
+    InvalidTagSize,
+    DecryptionFailed,
+    EncryptionFailed,
+    InvalidInput,
+};
+
 // Re-export all modules for clean API
 pub const hash = @import("hash.zig");
 pub const auth = @import("auth.zig");
@@ -13,12 +32,13 @@ pub const kdf = @import("kdf.zig");
 pub const rand = @import("rand.zig");
 pub const util = @import("util.zig");
 pub const bip = @import("bip.zig");
+pub const batch = @import("batch.zig");
 
 // TLS/QUIC specific modules
 pub const tls = @import("tls.zig");
 
 // Version information
-pub const version = "0.2.0";
+pub const version = "0.3.0";
 
 test {
     // Import all module tests

@@ -26,10 +26,10 @@ pub const Ed25519KeyPair = struct {
     private_key: [ED25519_PRIVATE_KEY_SIZE]u8,
 
     /// Sign a message with this keypair
-    pub fn sign(self: Ed25519KeyPair, message: []const u8) [ED25519_SIGNATURE_SIZE]u8 {
-        const secret_key = std.crypto.sign.Ed25519.SecretKey.fromBytes(self.private_key) catch unreachable;
-        const key_pair = std.crypto.sign.Ed25519.KeyPair.fromSecretKey(secret_key) catch unreachable;
-        const signature = key_pair.sign(message, null) catch unreachable;
+    pub fn sign(self: Ed25519KeyPair, message: []const u8) ![ED25519_SIGNATURE_SIZE]u8 {
+        const secret_key = std.crypto.sign.Ed25519.SecretKey.fromBytes(self.private_key) catch return error.InvalidPrivateKey;
+        const key_pair = std.crypto.sign.Ed25519.KeyPair.fromSecretKey(secret_key) catch return error.InvalidPrivateKey;
+        const signature = key_pair.sign(message, null) catch return error.SigningFailed;
         return signature.toBytes();
     }
 
@@ -75,7 +75,7 @@ pub fn generateEd25519() Ed25519KeyPair {
 pub fn generateCurve25519() Curve25519KeyPair {
     var private_key: [CURVE25519_PRIVATE_KEY_SIZE]u8 = undefined;
     std.crypto.random.bytes(&private_key);
-    const public_key = std.crypto.dh.X25519.recoverPublicKey(private_key) catch unreachable;
+    const public_key = std.crypto.dh.X25519.recoverPublicKey(private_key) catch return Curve25519KeyPair{ .public_key = [_]u8{0} ** 32, .private_key = private_key };
 
     return Curve25519KeyPair{
         .public_key = public_key,
@@ -84,10 +84,10 @@ pub fn generateCurve25519() Curve25519KeyPair {
 }
 
 /// Sign a message using Ed25519
-pub fn signEd25519(message: []const u8, private_key: [ED25519_PRIVATE_KEY_SIZE]u8) [ED25519_SIGNATURE_SIZE]u8 {
-    const secret_key = std.crypto.sign.Ed25519.SecretKey.fromBytes(private_key) catch unreachable;
-    const key_pair = std.crypto.sign.Ed25519.KeyPair.fromSecretKey(secret_key) catch unreachable;
-    const signature = key_pair.sign(message, null) catch unreachable;
+pub fn signEd25519(message: []const u8, private_key: [ED25519_PRIVATE_KEY_SIZE]u8) ![ED25519_SIGNATURE_SIZE]u8 {
+    const secret_key = std.crypto.sign.Ed25519.SecretKey.fromBytes(private_key) catch return error.InvalidPrivateKey;
+    const key_pair = std.crypto.sign.Ed25519.KeyPair.fromSecretKey(secret_key) catch return error.InvalidPrivateKey;
+    const signature = key_pair.sign(message, null) catch return error.SigningFailed;
     return signature.toBytes();
 }
 
@@ -106,7 +106,7 @@ pub fn dhX25519(private_key: [CURVE25519_PRIVATE_KEY_SIZE]u8, public_key: [CURVE
 
 /// Generate X25519 public key from private key
 pub fn x25519PublicKey(private_key: [CURVE25519_PRIVATE_KEY_SIZE]u8) [CURVE25519_PUBLIC_KEY_SIZE]u8 {
-    return std.crypto.dh.X25519.recoverPublicKey(private_key) catch unreachable;
+    return std.crypto.dh.X25519.recoverPublicKey(private_key) catch [_]u8{0} ** 32;
 }
 
 /// Ed25519 module with clean API matching your docs
@@ -118,8 +118,24 @@ pub const ed25519 = struct {
         return generateEd25519();
     }
 
+    /// Generate keypair from 32-byte seed (deterministic)
+    pub fn generateFromSeed(seed: [32]u8) KeyPair {
+        const kp = std.crypto.sign.Ed25519.KeyPair.generateDeterministic(seed) catch |err| switch (err) {
+            error.IdentityElement => {
+                // In the extremely rare case of an identity element, modify the seed slightly
+                var modified_seed = seed;
+                modified_seed[0] +%= 1;
+                return generateFromSeed(modified_seed);
+            },
+        };
+        return KeyPair{
+            .public_key = kp.public_key.bytes,
+            .private_key = kp.secret_key.bytes,
+        };
+    }
+
     /// Sign a message
-    pub fn sign(message: []const u8, private_key: [ED25519_PRIVATE_KEY_SIZE]u8) [ED25519_SIGNATURE_SIZE]u8 {
+    pub fn sign(message: []const u8, private_key: [ED25519_PRIVATE_KEY_SIZE]u8) ![ED25519_SIGNATURE_SIZE]u8 {
         return signEd25519(message, private_key);
     }
 
@@ -161,17 +177,26 @@ pub const SECP256R1_SIGNATURE_SIZE = 64;
 
 /// secp256k1 keypair for Bitcoin/Ethereum compatibility
 pub const Secp256k1KeyPair = struct {
-    public_key: [SECP256K1_PUBLIC_KEY_SIZE]u8,
+    public_key_compressed: [SECP256K1_PUBLIC_KEY_SIZE]u8,  // Full 33-byte compressed key
+    public_key_x: [32]u8,                                  // X-coordinate only (for consistency)
     private_key: [SECP256K1_PRIVATE_KEY_SIZE]u8,
 
+    /// Get public key in desired format
+    pub fn publicKey(self: @This(), format: enum { compressed, x_only }) []const u8 {
+        return switch (format) {
+            .compressed => &self.public_key_compressed,
+            .x_only => &self.public_key_x,
+        };
+    }
+
     /// Sign a message with secp256k1
-    pub fn sign(self: Secp256k1KeyPair, message: [32]u8) [SECP256K1_SIGNATURE_SIZE]u8 {
+    pub fn sign(self: Secp256k1KeyPair, message: [32]u8) ![SECP256K1_SIGNATURE_SIZE]u8 {
         return signSecp256k1(message, self.private_key);
     }
 
     /// Verify signature with this keypair's public key
     pub fn verify(self: Secp256k1KeyPair, message: [32]u8, signature: [SECP256K1_SIGNATURE_SIZE]u8) bool {
-        return verifySecp256k1(message, signature, self.public_key);
+        return verifySecp256k1(message, signature, self.public_key_compressed);
     }
 
     /// Zero out the private key
@@ -186,7 +211,7 @@ pub const Secp256r1KeyPair = struct {
     private_key: [SECP256R1_PRIVATE_KEY_SIZE]u8,
 
     /// Sign a message with secp256r1
-    pub fn sign(self: Secp256r1KeyPair, message: [32]u8) [SECP256R1_SIGNATURE_SIZE]u8 {
+    pub fn sign(self: Secp256r1KeyPair, message: [32]u8) ![SECP256R1_SIGNATURE_SIZE]u8 {
         return signSecp256r1(message, self.private_key);
     }
 
@@ -204,8 +229,11 @@ pub const Secp256r1KeyPair = struct {
 /// Generate secp256k1 keypair
 pub fn generateSecp256k1() Secp256k1KeyPair {
     const kp = std.crypto.sign.ecdsa.EcdsaSecp256k1Sha256.KeyPair.generate();
+    const compressed = kp.public_key.toCompressedSec1();
+    
     return Secp256k1KeyPair{
-        .public_key = kp.public_key.toCompressedSec1(),
+        .public_key_compressed = compressed,
+        .public_key_x = compressed[1..33].*, // Skip compression prefix
         .private_key = kp.secret_key.bytes,
     };
 }
@@ -220,10 +248,10 @@ pub fn generateSecp256r1() Secp256r1KeyPair {
 }
 
 /// Sign with secp256k1 (Bitcoin/Ethereum style)
-pub fn signSecp256k1(message: [32]u8, private_key: [SECP256K1_PRIVATE_KEY_SIZE]u8) [SECP256K1_SIGNATURE_SIZE]u8 {
-    const secret_key = std.crypto.sign.ecdsa.EcdsaSecp256k1Sha256.SecretKey.fromBytes(private_key) catch unreachable;
-    const kp = std.crypto.sign.ecdsa.EcdsaSecp256k1Sha256.KeyPair.fromSecretKey(secret_key) catch unreachable;
-    const sig = kp.sign(&message, null) catch unreachable;
+pub fn signSecp256k1(message: [32]u8, private_key: [SECP256K1_PRIVATE_KEY_SIZE]u8) ![SECP256K1_SIGNATURE_SIZE]u8 {
+    const secret_key = std.crypto.sign.ecdsa.EcdsaSecp256k1Sha256.SecretKey.fromBytes(private_key) catch return error.InvalidPrivateKey;
+    const kp = std.crypto.sign.ecdsa.EcdsaSecp256k1Sha256.KeyPair.fromSecretKey(secret_key) catch return error.InvalidPrivateKey;
+    const sig = kp.sign(&message, null) catch return error.SigningFailed;
     return sig.toBytes();
 }
 
@@ -236,10 +264,10 @@ pub fn verifySecp256k1(message: [32]u8, signature: [SECP256K1_SIGNATURE_SIZE]u8,
 }
 
 /// Sign with secp256r1 (NIST P-256)
-pub fn signSecp256r1(message: [32]u8, private_key: [SECP256R1_PRIVATE_KEY_SIZE]u8) [SECP256R1_SIGNATURE_SIZE]u8 {
-    const secret_key = std.crypto.sign.ecdsa.EcdsaP256Sha256.SecretKey.fromBytes(private_key) catch unreachable;
-    const kp = std.crypto.sign.ecdsa.EcdsaP256Sha256.KeyPair.fromSecretKey(secret_key) catch unreachable;
-    const sig = kp.sign(&message, null) catch unreachable;
+pub fn signSecp256r1(message: [32]u8, private_key: [SECP256R1_PRIVATE_KEY_SIZE]u8) ![SECP256R1_SIGNATURE_SIZE]u8 {
+    const secret_key = std.crypto.sign.ecdsa.EcdsaP256Sha256.SecretKey.fromBytes(private_key) catch return error.InvalidPrivateKey;
+    const kp = std.crypto.sign.ecdsa.EcdsaP256Sha256.KeyPair.fromSecretKey(secret_key) catch return error.InvalidPrivateKey;
+    const sig = kp.sign(&message, null) catch return error.SigningFailed;
     return sig.toBytes();
 }
 
@@ -261,7 +289,7 @@ pub const secp256k1 = struct {
     }
 
     /// Sign a message hash
-    pub fn sign(message: [32]u8, private_key: [SECP256K1_PRIVATE_KEY_SIZE]u8) [SECP256K1_SIGNATURE_SIZE]u8 {
+    pub fn sign(message: [32]u8, private_key: [SECP256K1_PRIVATE_KEY_SIZE]u8) ![SECP256K1_SIGNATURE_SIZE]u8 {
         return signSecp256k1(message, private_key);
     }
 
@@ -281,7 +309,7 @@ pub const secp256r1 = struct {
     }
 
     /// Sign a message hash
-    pub fn sign(message: [32]u8, private_key: [SECP256R1_PRIVATE_KEY_SIZE]u8) [SECP256R1_SIGNATURE_SIZE]u8 {
+    pub fn sign(message: [32]u8, private_key: [SECP256R1_PRIVATE_KEY_SIZE]u8) ![SECP256R1_SIGNATURE_SIZE]u8 {
         return signSecp256r1(message, private_key);
     }
 
@@ -295,7 +323,7 @@ test "ed25519 keypair generation and signing" {
     const keypair = generateEd25519();
     const message = "Hello, zcrypto signatures!";
     
-    const signature = keypair.sign(message);
+    const signature = try keypair.sign(message);
     const valid = keypair.verify(message, signature);
     
     try std.testing.expect(valid);
@@ -310,8 +338,27 @@ test "ed25519 standalone functions" {
     const keypair = ed25519.generate();
     const message = "Standalone API test";
     
-    const signature = ed25519.sign(message, keypair.private_key);
+    const signature = try ed25519.sign(message, keypair.private_key);
     const valid = ed25519.verify(message, signature, keypair.public_key);
+    
+    try std.testing.expect(valid);
+}
+
+test "ed25519 deterministic generation from seed" {
+    const seed = [_]u8{42} ** 32;
+    
+    // Generate two keypairs from the same seed
+    const keypair1 = ed25519.generateFromSeed(seed);
+    const keypair2 = ed25519.generateFromSeed(seed);
+    
+    // Should be identical
+    try std.testing.expectEqualSlices(u8, &keypair1.public_key, &keypair2.public_key);
+    try std.testing.expectEqualSlices(u8, &keypair1.private_key, &keypair2.private_key);
+    
+    // Test signing with generated key
+    const message = "Deterministic test message";
+    const signature = try keypair1.sign(message);
+    const valid = keypair1.verify(message, signature);
     
     try std.testing.expect(valid);
 }
@@ -339,7 +386,7 @@ test "secp256k1 keypair generation and signing" {
     const keypair = secp256k1.generate();
     const message = [_]u8{0xAB} ** 32; // Hash of message
     
-    const signature = keypair.sign(message);
+    const signature = try keypair.sign(message);
     const valid = keypair.verify(message, signature);
     
     try std.testing.expect(valid);
@@ -354,7 +401,7 @@ test "secp256r1 keypair generation and signing" {
     const keypair = secp256r1.generate();
     const message = [_]u8{0xEF} ** 32; // Hash of message
     
-    const signature = keypair.sign(message);
+    const signature = try keypair.sign(message);
     const valid = keypair.verify(message, signature);
     
     try std.testing.expect(valid);
@@ -369,17 +416,31 @@ test "secp256k1 standalone functions" {
     const keypair = secp256k1.generate();
     const message = [_]u8{0x34} ** 32;
     
-    const signature = secp256k1.sign(message, keypair.private_key);
-    const valid = secp256k1.verify(message, signature, keypair.public_key);
+    const signature = try secp256k1.sign(message, keypair.private_key);
+    const valid = secp256k1.verify(message, signature, keypair.public_key_compressed);
     
     try std.testing.expect(valid);
+}
+
+test "secp256k1 dual public key formats" {
+    const keypair = secp256k1.generate();
+    
+    // Test both public key formats
+    const compressed = keypair.publicKey(.compressed);
+    const x_only = keypair.publicKey(.x_only);
+    
+    try std.testing.expectEqual(@as(usize, 33), compressed.len);
+    try std.testing.expectEqual(@as(usize, 32), x_only.len);
+    
+    // X-only should be the compressed key without the prefix
+    try std.testing.expectEqualSlices(u8, compressed[1..], x_only);
 }
 
 test "secp256r1 standalone functions" {
     const keypair = secp256r1.generate();
     const message = [_]u8{0x56} ** 32;
     
-    const signature = secp256r1.sign(message, keypair.private_key);
+    const signature = try secp256r1.sign(message, keypair.private_key);
     const valid = secp256r1.verify(message, signature, keypair.public_key);
     
     try std.testing.expect(valid);

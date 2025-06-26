@@ -120,14 +120,16 @@ pub const ExtendedKey = struct {
     }
 
     /// Get Bitcoin keypair from this extended key
-    pub fn toSecp256k1KeyPair(self: ExtendedKey) asym.Secp256k1KeyPair {
+    pub fn toSecp256k1KeyPair(self: ExtendedKey) !asym.Secp256k1KeyPair {
         // Generate public key from private key
-        const secret_key = std.crypto.sign.ecdsa.EcdsaSecp256k1Sha256.SecretKey.fromBytes(self.key) catch unreachable;
-        const kp = std.crypto.sign.ecdsa.EcdsaSecp256k1Sha256.KeyPair.fromSecretKey(secret_key) catch unreachable;
+        const secret_key = std.crypto.sign.ecdsa.EcdsaSecp256k1Sha256.SecretKey.fromBytes(self.key) catch return error.InvalidPrivateKey;
+        const kp = std.crypto.sign.ecdsa.EcdsaSecp256k1Sha256.KeyPair.fromSecretKey(secret_key) catch return error.InvalidPrivateKey;
         
+        const compressed = kp.public_key.toCompressedSec1();
         return asym.Secp256k1KeyPair{
             .private_key = self.key,
-            .public_key = kp.public_key.toCompressedSec1(),
+            .public_key_compressed = compressed,
+            .public_key_x = compressed[1..33].*, // Skip compression prefix
         };
     }
 };
@@ -295,7 +297,7 @@ test "bip44 key derivation" {
     try std.testing.expectEqual(@as(u8, 5), derived.depth);
     
     // Convert to secp256k1 keypair
-    const keypair = derived.toSecp256k1KeyPair();
+    const keypair = try derived.toSecp256k1KeyPair();
     try std.testing.expectEqual(@as(usize, 32), keypair.private_key.len);
-    try std.testing.expectEqual(@as(usize, 33), keypair.public_key.len);
+    try std.testing.expectEqual(@as(usize, 33), keypair.public_key_compressed.len);
 }
