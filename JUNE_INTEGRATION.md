@@ -11,16 +11,17 @@ This document provides a unified integration reference for all GhostChain core p
 | `zwallet`      | Library  | Zig      | `walletd`, `ghostd`                  | Zig CLI + FFI for account/key handling       |
 | `realid`       | Library  | Zig      | `walletd`, `ghostd`, `znsd`          | Identity + Signing (FFI-exported)            |
 | `zsig`         | Library  | Zig      | `walletd`, `ghostd`                  | Signature + verification helpers             |
-| `zcrypto`      | Library  | Zig      | `walletd`, `ghostd`                  | Cryptographic primitives                     |
+| `zcrypto`      | Library  | Zig      | `walletd`, `ghostd`, `zquic`         | Cryptographic primitives + QUIC crypto       |
+| `zquic`        | Library  | Zig      | `zcrypto`, `ghostbridge`, `wraith`   | Native Zig QUIC/HTTP3 transport             |
 | `gcrypt`       | Library  | Rust     | `ghostd`, `walletd`                  | Rust-native crypto tools                     |
-| `ghostbridge`  | Daemon   | Zig      | All gRPC services                    | gRPC relay over QUIC                         |
-| `ghostlink`    | Utility  | Zig      | `ghostd`, `ghostbridge`              | Identity + P2P handshake client library      |
+| `ghostbridge`  | Daemon   | Zig      | All gRPC services, `zquic`           | gRPC relay over QUIC via zquic               |
+| `ghostlink`    | Utility  | Zig      | `ghostd`, `ghostbridge`, `zquic`     | Identity + P2P handshake via QUIC            |
 | `enoc`         | Node     | Zig      | `ghostd`, `ghostbridge`, `walletd`   | Zig prototype of GhostChain runtime          |
 | `walletd`      | Service  | Rust     | `zwallet`, `realid`, `zsig`          | Key mgmt, signing, identity API              |
 | `ghostd`       | Node     | Rust     | `walletd`, `zvm`, `rvm`, `ghostlink` | Blockchain daemon, primary chain logic       |
 | `zvm` / `zevm` | Runtime  | Rust     | `ghostd`, `walletd`                  | Smart contracts on GhostChain (WASM, hybrid) |
 | `rvm` / `revm` | Runtime  | Rust     | `ghostd`, `walletd`                  | EVM-compatible, used for ETH/ENS integration |
-| `wraith`       | Proxy    | Zig      | All services                         | QUIC-based reverse proxy and edge router     |
+| `wraith`       | Proxy    | Zig      | All services, `zquic`                | QUIC-based reverse proxy via zquic           |
 | `cns`          | Resolver | Zig      | `znsd`, `ghostd`, `walletd`          | IPv6/QUIC resolver for ENS, ZNS, UD          |
 | `zns`          | Resolver | Zig      | `walletd`, `ghostd`, `znsd`          | GhostChain's ENS alternative                 |
 | `jarvis`       | Agent    | TBD      | `walletd`, `ghostd`, `znsd`          | AI-driven automation for smart contract ops  |
@@ -93,8 +94,15 @@ println!("cargo:rustc-link-search=native=./zig-out/lib");
 
 * `zsig` and `zcrypto` are core Zig cryptographic libraries
 * `gcrypt` is a Rust-native fallback or companion lib
+* **ZQUIC Integration**: zcrypto provides native crypto backend for zquic TLS 1.3
 * Ensure consistent encoding (SHA256, Blake3, hex/base58)
 * Use extern `C` for cross-lang compatibility
+
+### 🚀 ZQUIC + ZCRYPTO SYNERGY
+* Native Zig QUIC transport with native Zig crypto primitives
+* Zero-copy crypto operations for QUIC packet encryption/decryption
+* Post-quantum QUIC cipher suites via zcrypto v0.4.0
+* Perfect integration for `ghostbridge`, `wraith`, and `ghostlink`
 
 ---
 

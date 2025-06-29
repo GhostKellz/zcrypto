@@ -34,11 +34,18 @@ pub const util = @import("util.zig");
 pub const bip = @import("bip.zig");
 pub const batch = @import("batch.zig");
 
+// Post-quantum cryptography module
+pub const pq = @import("pq.zig");
+
 // TLS/QUIC specific modules
 pub const tls = @import("tls.zig");
+pub const quic = @import("quic.zig");
 
-// Version information
-pub const version = "0.3.0";
+// FFI exports for Rust integration
+pub const ffi = @import("ffi.zig");
+
+// Version information  
+pub const version = "0.4.0";
 
 test {
     // Import all module tests
@@ -50,5 +57,8 @@ test {
     _ = rand;
     _ = util;
     _ = bip;
+    _ = pq;
     _ = tls;
+    _ = quic;
+    _ = ffi;
 }
