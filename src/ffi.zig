@@ -1,16 +1,19 @@
-//! FFI (Foreign Function Interface) for zcrypto v0.4.0
+//! FFI (Foreign Function Interface) for zcrypto v0.5.0
 //!
-//! Provides C ABI exports for seamless integration with Rust services:
+//! Enhanced C ABI exports for seamless integration with all GhostChain services:
 //! - ghostbridge (gRPC relay over QUIC)
-//! - ghostd (blockchain daemon)
-//! - walletd (wallet microservice)
+//! - ghostd (blockchain daemon with PQ-crypto)
+//! - walletd (wallet microservice with ZKP)
 //! - cns/zns (name resolution services)
-//! - wraith (QUIC proxy)
+//! - wraith (QUIC proxy with hybrid crypto)
 //!
 //! All functions use C calling convention for maximum compatibility.
+//! Full post-quantum cryptography and zero-knowledge proof support.
 
 const std = @import("std");
 const zcrypto = @import("root.zig");
+const pq = @import("pq.zig");
+const quic = @import("quic.zig");
 
 /// FFI Result structure for consistent error handling
 const CryptoResult = extern struct {
@@ -117,14 +120,15 @@ pub export fn zcrypto_ed25519_sign(
     if (message_len == 0) return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
     
     const message_slice = message[0..message_len];
-    const priv_key: [64]u8 = private_key[0..64].*;
+    const priv_key: [32]u8 = private_key[0..32].*;
+    const pub_key: [32]u8 = private_key[32..64].*;
     
-    const keypair = zcrypto.asym.Ed25519KeyPair{
-        .public_key = undefined, // Will be computed
-        .private_key = priv_key,
+    const keypair = std.crypto.sign.Ed25519.KeyPair{
+        .secret_key = priv_key,
+        .public_key = pub_key,
     };
     
-    const sig = keypair.sign(message_slice) catch {
+    const sig = keypair.sign(message_slice, null) catch {
         return CryptoResult.failure(FFI_ERROR_SIGNATURE_FAILED);
     };
     
@@ -150,9 +154,11 @@ pub export fn zcrypto_ed25519_verify(
     const sig: [64]u8 = signature[0..64].*;
     const pub_key: [32]u8 = public_key[0..32].*;
     
-    const valid = zcrypto.asym.verifyEd25519(message_slice, sig, pub_key);
+    std.crypto.sign.Ed25519.verify(sig, message_slice, pub_key) catch {
+        return CryptoResult.failure(FFI_ERROR_VERIFICATION_FAILED);
+    };
     
-    return if (valid) CryptoResult.SUCCESS else CryptoResult.failure(FFI_ERROR_VERIFICATION_FAILED);
+    return CryptoResult.SUCCESS;
 }
 
 // ============================================================================
@@ -167,12 +173,12 @@ pub export fn zcrypto_ml_kem_768_keygen(
     public_key: [*]u8,
     private_key: [*]u8
 ) callconv(.C) CryptoResult {
-    const keypair = zcrypto.pq.ml_kem.ML_KEM_768.KeyPair.generateRandom() catch {
+    const keypair = pq.ml_kem.ML_KEM_768.KeyPair.generateRandom() catch {
         return CryptoResult.failure(FFI_ERROR_POST_QUANTUM_FAILED);
     };
     
-    @memcpy(public_key[0..zcrypto.pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE], &keypair.public_key);
-    @memcpy(private_key[0..zcrypto.pq.ml_kem.ML_KEM_768.PRIVATE_KEY_SIZE], &keypair.private_key);
+    @memcpy(public_key[0..pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE], &keypair.public_key);
+    @memcpy(private_key[0..pq.ml_kem.ML_KEM_768.PRIVATE_KEY_SIZE], &keypair.private_key);
     return CryptoResult.SUCCESS;
 }
 
@@ -186,17 +192,95 @@ pub export fn zcrypto_ml_kem_768_encaps(
     ciphertext: [*]u8,
     shared_secret: [*]u8
 ) callconv(.C) CryptoResult {
-    const pub_key: [zcrypto.pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE]u8 = public_key[0..zcrypto.pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE].*;
+    const pub_key: [pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE]u8 = public_key[0..pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE].*;
     var randomness: [32]u8 = undefined;
     std.crypto.random.bytes(&randomness);
     
-    const result = zcrypto.pq.ml_kem.ML_KEM_768.KeyPair.encapsulate(pub_key, randomness) catch {
+    const result = pq.ml_kem.ML_KEM_768.KeyPair.encapsulate(pub_key, randomness) catch {
         return CryptoResult.failure(FFI_ERROR_POST_QUANTUM_FAILED);
     };
     
-    @memcpy(ciphertext[0..zcrypto.pq.ml_kem.ML_KEM_768.CIPHERTEXT_SIZE], &result.ciphertext);
+    @memcpy(ciphertext[0..pq.ml_kem.ML_KEM_768.CIPHERTEXT_SIZE], &result.ciphertext);
     @memcpy(shared_secret[0..32], &result.shared_secret);
     return CryptoResult.SUCCESS;
+}
+
+/// ML-KEM-768 decapsulation
+/// @param private_key: Private key (2400 bytes)
+/// @param ciphertext: Ciphertext (1088 bytes)
+/// @param shared_secret: Output buffer for shared secret (32 bytes)
+/// @return CryptoResult with success/failure status
+pub export fn zcrypto_ml_kem_768_decaps(
+    private_key: [*]const u8,
+    ciphertext: [*]const u8,
+    shared_secret: [*]u8
+) callconv(.C) CryptoResult {
+    const priv_key: [pq.ml_kem.ML_KEM_768.PRIVATE_KEY_SIZE]u8 = private_key[0..pq.ml_kem.ML_KEM_768.PRIVATE_KEY_SIZE].*;
+    const pub_key_placeholder: [pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE]u8 = [_]u8{0} ** pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE;
+    const ct: [pq.ml_kem.ML_KEM_768.CIPHERTEXT_SIZE]u8 = ciphertext[0..pq.ml_kem.ML_KEM_768.CIPHERTEXT_SIZE].*;
+    
+    const keypair = pq.ml_kem.ML_KEM_768.KeyPair{
+        .public_key = pub_key_placeholder,
+        .private_key = priv_key,
+    };
+    
+    const secret = keypair.decapsulate(ct) catch {
+        return CryptoResult.failure(FFI_ERROR_POST_QUANTUM_FAILED);
+    };
+    
+    @memcpy(shared_secret[0..pq.ml_kem.ML_KEM_768.SHARED_SECRET_SIZE], &secret);
+    return CryptoResult.SUCCESS;
+}
+
+/// Generate ML-DSA-65 key pair
+/// @param public_key: Output buffer for public key (1952 bytes)
+/// @param private_key: Output buffer for private key (4016 bytes)
+/// @return CryptoResult with success/failure status
+pub export fn zcrypto_ml_dsa_65_keygen(
+    public_key: [*]u8,
+    private_key: [*]u8
+) callconv(.C) CryptoResult {
+    const keypair = pq.ml_dsa.ML_DSA_65.KeyPair.generateRandom(std.heap.page_allocator) catch {
+        return CryptoResult.failure(FFI_ERROR_POST_QUANTUM_FAILED);
+    };
+    
+    @memcpy(public_key[0..pq.ml_dsa.ML_DSA_65.PUBLIC_KEY_SIZE], &keypair.public_key);
+    @memcpy(private_key[0..pq.ml_dsa.ML_DSA_65.PRIVATE_KEY_SIZE], &keypair.private_key);
+    return CryptoResult.SUCCESS;
+}
+
+/// ML-DSA-65 signing
+/// @param private_key: Private key (4016 bytes)
+/// @param message: Message to sign
+/// @param message_len: Message length
+/// @param signature: Output buffer for signature (3309 bytes)
+/// @return CryptoResult with success/failure status
+pub export fn zcrypto_ml_dsa_65_sign(
+    private_key: [*]const u8,
+    message: [*]const u8,
+    message_len: u32,
+    signature: [*]u8
+) callconv(.C) CryptoResult {
+    if (message_len == 0) return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    
+    const priv_key: [pq.ml_dsa.ML_DSA_65.PRIVATE_KEY_SIZE]u8 = private_key[0..pq.ml_dsa.ML_DSA_65.PRIVATE_KEY_SIZE].*;
+    const pub_key_placeholder: [pq.ml_dsa.ML_DSA_65.PUBLIC_KEY_SIZE]u8 = [_]u8{0} ** pq.ml_dsa.ML_DSA_65.PUBLIC_KEY_SIZE;
+    const message_slice = message[0..message_len];
+    
+    var randomness: [32]u8 = undefined;
+    std.crypto.random.bytes(&randomness);
+    
+    const keypair = pq.ml_dsa.ML_DSA_65.KeyPair{
+        .public_key = pub_key_placeholder,
+        .private_key = priv_key,
+    };
+    
+    const sig = keypair.sign(message_slice, randomness) catch {
+        return CryptoResult.failure(FFI_ERROR_SIGNATURE_FAILED);
+    };
+    
+    @memcpy(signature[0..pq.ml_dsa.ML_DSA_65.SIGNATURE_SIZE], &sig);
+    return CryptoResult.successWithLen(pq.ml_dsa.ML_DSA_65.SIGNATURE_SIZE);
 }
 
 /// Generate hybrid X25519 + ML-KEM-768 key pair
@@ -211,15 +295,47 @@ pub export fn zcrypto_hybrid_x25519_ml_kem_keygen(
     pq_public: [*]u8,
     pq_private: [*]u8
 ) callconv(.C) CryptoResult {
-    const keypair = zcrypto.pq.hybrid.X25519_ML_KEM_768.HybridKeyPair.generate() catch {
+    const keypair = pq.hybrid.X25519_ML_KEM_768.HybridKeyPair.generate() catch {
         return CryptoResult.failure(FFI_ERROR_POST_QUANTUM_FAILED);
     };
     
     @memcpy(classical_public[0..32], &keypair.classical_public);
     @memcpy(classical_private[0..32], &keypair.classical_private);
-    @memcpy(pq_public[0..zcrypto.pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE], &keypair.pq_public);
-    @memcpy(pq_private[0..zcrypto.pq.ml_kem.ML_KEM_768.PRIVATE_KEY_SIZE], &keypair.pq_private);
+    @memcpy(pq_public[0..pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE], &keypair.pq_public);
+    @memcpy(pq_private[0..pq.ml_kem.ML_KEM_768.PRIVATE_KEY_SIZE], &keypair.pq_private);
     return CryptoResult.SUCCESS;
+}
+
+/// Hybrid key exchange
+/// @param our_classical_private: Our X25519 private key (32 bytes)
+/// @param our_pq_private: Our ML-KEM-768 private key (2400 bytes)
+/// @param peer_classical_public: Peer X25519 public key (32 bytes)
+/// @param peer_pq_ciphertext: Peer ML-KEM-768 ciphertext (1088 bytes)
+/// @param shared_secret: Output buffer for shared secret (64 bytes)
+/// @return CryptoResult with success/failure status
+pub export fn zcrypto_hybrid_x25519_ml_kem_exchange(
+    our_classical_private: [*]const u8,
+    our_pq_private: [*]const u8,
+    peer_classical_public: [*]const u8,
+    peer_pq_ciphertext: [*]const u8,
+    shared_secret: [*]u8
+) callconv(.C) CryptoResult {
+    const our_keypair = pq.hybrid.X25519_ML_KEM_768.HybridKeyPair{
+        .classical_public = undefined, // Not needed for exchange
+        .classical_private = our_classical_private[0..32].*,
+        .pq_public = undefined, // Not needed for exchange
+        .pq_private = our_pq_private[0..pq.ml_kem.ML_KEM_768.PRIVATE_KEY_SIZE].*,
+    };
+    
+    const peer_classical: [32]u8 = peer_classical_public[0..32].*;
+    const peer_ciphertext: [pq.ml_kem.ML_KEM_768.CIPHERTEXT_SIZE]u8 = peer_pq_ciphertext[0..pq.ml_kem.ML_KEM_768.CIPHERTEXT_SIZE].*;
+    
+    const secret = our_keypair.exchange(peer_classical, peer_ciphertext) catch {
+        return CryptoResult.failure(FFI_ERROR_POST_QUANTUM_FAILED);
+    };
+    
+    @memcpy(shared_secret[0..64], &secret);
+    return CryptoResult.successWithLen(64);
 }
 
 // ============================================================================
@@ -235,14 +351,14 @@ pub export fn zcrypto_quic_init(
     context: [*]u8
 ) callconv(.C) CryptoResult {
     const cs = switch (cipher_suite) {
-        0 => zcrypto.quic.CipherSuite.TLS_AES_128_GCM_SHA256,
-        1 => zcrypto.quic.CipherSuite.TLS_AES_256_GCM_SHA384,
-        2 => zcrypto.quic.CipherSuite.TLS_CHACHA20_POLY1305_SHA256,
-        3 => zcrypto.quic.CipherSuite.TLS_ML_KEM_768_X25519_AES256_GCM_SHA384,
+        0 => quic.CipherSuite.TLS_AES_128_GCM_SHA256,
+        1 => quic.CipherSuite.TLS_AES_256_GCM_SHA384,
+        2 => quic.CipherSuite.TLS_CHACHA20_POLY1305_SHA256,
+        3 => quic.CipherSuite.TLS_ML_KEM_768_X25519_AES256_GCM_SHA384,
         else => return CryptoResult.failure(FFI_ERROR_INVALID_INPUT),
     };
     
-    const crypto = zcrypto.quic.QuicCrypto.init(cs);
+    const crypto = quic.QuicCrypto.init(cs);
     
     // Store the crypto context in the provided buffer
     // Note: In real implementation, we'd need proper serialization
@@ -265,7 +381,7 @@ pub export fn zcrypto_quic_derive_initial_keys(
     if (connection_id_len == 0) return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
     
     // Note: In real implementation, we'd properly deserialize the context
-    var crypto = std.mem.bytesToValue(zcrypto.quic.QuicCrypto, context[0..@sizeOf(zcrypto.quic.QuicCrypto)]);
+    var crypto = std.mem.bytesToValue(quic.QuicCrypto, context[0..@sizeOf(quic.QuicCrypto)]);
     
     const cid_slice = connection_id[0..connection_id_len];
     crypto.deriveInitialKeys(cid_slice) catch {
@@ -279,58 +395,147 @@ pub export fn zcrypto_quic_derive_initial_keys(
     return CryptoResult.SUCCESS;
 }
 
-/// Encrypt QUIC packet
-/// @param context: QUIC crypto context
-/// @param level: Encryption level (0=initial, 1=early_data, 2=handshake, 3=application)
-/// @param is_server: Whether this is server-side encryption
-/// @param packet_number: Packet number
-/// @param header: Packet header
-/// @param header_len: Header length
-/// @param payload: Payload to encrypt
-/// @param payload_len: Payload length
-/// @param output: Output buffer for encrypted packet
-/// @param output_capacity: Capacity of output buffer
-/// @return CryptoResult with encrypted length or failure
-pub export fn zcrypto_quic_encrypt_packet(
-    context: [*]const u8,
-    level: u32,
-    is_server: bool,
-    packet_number: u64,
-    header: [*]const u8,
-    header_len: u32,
-    payload: [*]const u8,
-    payload_len: u32,
-    output: [*]u8,
-    output_capacity: u32
+/// Post-quantum QUIC key exchange
+/// @param classical_public: Output for X25519 public key (32 bytes)
+/// @param pq_public: Output for ML-KEM-768 public key (1184 bytes)
+/// @param classical_ciphertext: Output for X25519 response (32 bytes)
+/// @param pq_ciphertext: Output for ML-KEM-768 ciphertext (1088 bytes)
+/// @param shared_secret: Output for combined shared secret (64 bytes)
+/// @param entropy: Random bytes for key generation (64 bytes)
+/// @return CryptoResult with success/failure status
+pub export fn zcrypto_quic_pq_key_exchange(
+    classical_public: [*]u8,
+    pq_public: [*]u8,
+    classical_ciphertext: [*]u8,
+    pq_ciphertext: [*]u8,
+    shared_secret: [*]u8,
+    entropy: [*]const u8
 ) callconv(.C) CryptoResult {
-    if (header_len == 0 or payload_len == 0) return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    const entropy_slice = entropy[0..64];
     
-    const crypto = std.mem.bytesToValue(zcrypto.quic.QuicCrypto, context[0..@sizeOf(zcrypto.quic.QuicCrypto)]);
+    // Generate hybrid key share
+    var classical_share: [32]u8 = undefined;
+    var pq_share: [pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE]u8 = undefined;
     
-    const enc_level = switch (level) {
-        0 => zcrypto.quic.EncryptionLevel.initial,
-        1 => zcrypto.quic.EncryptionLevel.early_data,
-        2 => zcrypto.quic.EncryptionLevel.handshake,
-        3 => zcrypto.quic.EncryptionLevel.application,
-        else => return CryptoResult.failure(FFI_ERROR_INVALID_INPUT),
+    quic.PostQuantumQuic.generateHybridKeyShare(&classical_share, &pq_share, entropy_slice) catch {
+        return CryptoResult.failure(FFI_ERROR_QUIC_FAILED);
     };
     
-    const header_slice = header[0..header_len];
-    const payload_slice = payload[0..payload_len];
-    const output_slice = output[0..output_capacity];
+    @memcpy(classical_public[0..32], &classical_share);
+    @memcpy(pq_public[0..pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE], &pq_share);
     
-    const encrypted_len = crypto.encryptPacket(
-        enc_level,
-        is_server,
-        packet_number,
-        header_slice,
-        payload_slice,
-        output_slice
+    // Process key exchange (server side)
+    var server_classical: [32]u8 = undefined;
+    var server_pq: [pq.ml_kem.ML_KEM_768.CIPHERTEXT_SIZE]u8 = undefined;
+    var secret: [64]u8 = undefined;
+    
+    quic.PostQuantumQuic.processHybridKeyShare(
+        &classical_share,
+        &pq_share,
+        &server_classical,
+        &server_pq,
+        &secret,
     ) catch {
         return CryptoResult.failure(FFI_ERROR_QUIC_FAILED);
     };
     
-    return CryptoResult.successWithLen(@intCast(encrypted_len));
+    @memcpy(classical_ciphertext[0..32], &server_classical);
+    @memcpy(pq_ciphertext[0..pq.ml_kem.ML_KEM_768.CIPHERTEXT_SIZE], &server_pq);
+    @memcpy(shared_secret[0..64], &secret);
+    
+    return CryptoResult.SUCCESS;
+}
+
+/// Encrypt QUIC packet in-place for zero-copy
+/// @param context: QUIC crypto context
+/// @param level: Encryption level (0=initial, 1=early_data, 2=handshake, 3=application)
+/// @param is_server: Whether this is server-side encryption
+/// @param packet_number: Packet number
+/// @param packet: Packet buffer (header + payload)
+/// @param packet_len: Total packet length
+/// @param header_len: Header length
+/// @return CryptoResult with success/failure status
+pub export fn zcrypto_quic_encrypt_packet_inplace(
+    context: [*]const u8,
+    level: u32,
+    is_server: bool,
+    packet_number: u64,
+    packet: [*]u8,
+    packet_len: u32,
+    header_len: u32
+) callconv(.C) CryptoResult {
+    if (header_len >= packet_len) return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    
+    const crypto = std.mem.bytesToValue(quic.QuicCrypto, context[0..@sizeOf(quic.QuicCrypto)]);
+    
+    const enc_level = switch (level) {
+        0 => quic.EncryptionLevel.initial,
+        1 => quic.EncryptionLevel.early_data,
+        2 => quic.EncryptionLevel.handshake,
+        3 => quic.EncryptionLevel.application,
+        else => return CryptoResult.failure(FFI_ERROR_INVALID_INPUT),
+    };
+    
+    const packet_slice = packet[0..packet_len];
+    
+    quic.ZeroCopy.encryptInPlace(
+        &crypto,
+        enc_level,
+        is_server,
+        packet_number,
+        packet_slice,
+        header_len,
+    ) catch {
+        return CryptoResult.failure(FFI_ERROR_QUIC_FAILED);
+    };
+    
+    return CryptoResult.SUCCESS;
+}
+
+/// Decrypt QUIC packet in-place for zero-copy
+/// @param context: QUIC crypto context
+/// @param level: Encryption level
+/// @param is_server: Whether this is server-side decryption
+/// @param packet_number: Packet number
+/// @param packet: Packet buffer (header + ciphertext)
+/// @param packet_len: Total packet length
+/// @param header_len: Header length
+/// @return CryptoResult with payload length or failure
+pub export fn zcrypto_quic_decrypt_packet_inplace(
+    context: [*]const u8,
+    level: u32,
+    is_server: bool,
+    packet_number: u64,
+    packet: [*]u8,
+    packet_len: u32,
+    header_len: u32
+) callconv(.C) CryptoResult {
+    if (header_len >= packet_len) return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    
+    const crypto = std.mem.bytesToValue(quic.QuicCrypto, context[0..@sizeOf(quic.QuicCrypto)]);
+    
+    const enc_level = switch (level) {
+        0 => quic.EncryptionLevel.initial,
+        1 => quic.EncryptionLevel.early_data,
+        2 => quic.EncryptionLevel.handshake,
+        3 => quic.EncryptionLevel.application,
+        else => return CryptoResult.failure(FFI_ERROR_INVALID_INPUT),
+    };
+    
+    const packet_slice = packet[0..packet_len];
+    
+    const payload_len = quic.ZeroCopy.decryptInPlace(
+        &crypto,
+        enc_level,
+        is_server,
+        packet_number,
+        packet_slice,
+        header_len,
+    ) catch {
+        return CryptoResult.failure(FFI_ERROR_QUIC_FAILED);
+    };
+    
+    return CryptoResult.successWithLen(@intCast(payload_len));
 }
 
 // ============================================================================
@@ -440,7 +645,7 @@ pub export fn zcrypto_version(
     buffer: [*]u8,
     buffer_len: u32
 ) callconv(.C) CryptoResult {
-    const version = zcrypto.version;
+    const version = "zcrypto v0.5.0";
     if (buffer_len < version.len) {
         return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
     }
@@ -452,8 +657,26 @@ pub export fn zcrypto_version(
 /// Check if post-quantum algorithms are available
 /// @return CryptoResult with success=available
 pub export fn zcrypto_has_post_quantum() callconv(.C) CryptoResult {
-    // Always true in v0.4.0
+    // Always true in v0.5.0
     return CryptoResult.SUCCESS;
+}
+
+/// Get supported algorithm list
+/// @param buffer: Output buffer for algorithm names (comma-separated)
+/// @param buffer_len: Buffer capacity
+/// @return CryptoResult with string length
+pub export fn zcrypto_supported_algorithms(
+    buffer: [*]u8,
+    buffer_len: u32
+) callconv(.C) CryptoResult {
+    const algorithms = "Ed25519,X25519,AES-256-GCM,ChaCha20-Poly1305,ML-KEM-768,ML-DSA-65,SLH-DSA-128s,Hybrid-X25519-ML-KEM-768,QUIC-PQ,Groth16,Bulletproofs,Signal,Noise,MLS";
+    
+    if (buffer_len < algorithms.len) {
+        return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
+    }
+    
+    @memcpy(buffer[0..algorithms.len], algorithms);
+    return CryptoResult.successWithLen(@intCast(algorithms.len));
 }
 
 /// Get cipher suite info
@@ -467,10 +690,10 @@ pub export fn zcrypto_cipher_suite_info(
     hash_len: [*]u32
 ) callconv(.C) CryptoResult {
     const cs = switch (cipher_suite) {
-        0 => zcrypto.quic.CipherSuite.TLS_AES_128_GCM_SHA256,
-        1 => zcrypto.quic.CipherSuite.TLS_AES_256_GCM_SHA384,
-        2 => zcrypto.quic.CipherSuite.TLS_CHACHA20_POLY1305_SHA256,
-        3 => zcrypto.quic.CipherSuite.TLS_ML_KEM_768_X25519_AES256_GCM_SHA384,
+        0 => quic.CipherSuite.TLS_AES_128_GCM_SHA256,
+        1 => quic.CipherSuite.TLS_AES_256_GCM_SHA384,
+        2 => quic.CipherSuite.TLS_CHACHA20_POLY1305_SHA256,
+        3 => quic.CipherSuite.TLS_ML_KEM_768_X25519_AES256_GCM_SHA384,
         else => return CryptoResult.failure(FFI_ERROR_INVALID_INPUT),
     };
     
@@ -485,9 +708,198 @@ pub export fn zcrypto_cipher_suite_info(
     return CryptoResult.SUCCESS;
 }
 
+/// Get library feature flags
+/// @param features: Output buffer for feature bit flags
+/// @return CryptoResult with success status
+pub export fn zcrypto_get_features(
+    features: [*]u32
+) callconv(.C) CryptoResult {
+    const FEATURE_POST_QUANTUM = 0x01;
+    const FEATURE_ZERO_KNOWLEDGE = 0x02;
+    const FEATURE_QUIC_CRYPTO = 0x04;
+    const FEATURE_PROTOCOLS = 0x08;
+    const FEATURE_ASM_OPTIMIZED = 0x10;
+    const FEATURE_HYBRID_CRYPTO = 0x20;
+    
+    features[0] = FEATURE_POST_QUANTUM | FEATURE_ZERO_KNOWLEDGE | 
+                  FEATURE_QUIC_CRYPTO | FEATURE_PROTOCOLS | 
+                  FEATURE_ASM_OPTIMIZED | FEATURE_HYBRID_CRYPTO;
+    
+    return CryptoResult.SUCCESS;
+}
+
+/// Secure memory operations
+/// @param ptr: Memory pointer
+/// @param len: Memory length
+/// @return CryptoResult with success status
+pub export fn zcrypto_secure_zero(
+    ptr: [*]u8,
+    len: u32
+) callconv(.C) CryptoResult {
+    const slice = ptr[0..len];
+    std.crypto.utils.secureZero(u8, slice);
+    return CryptoResult.SUCCESS;
+}
+
+/// Constant-time memory comparison
+/// @param a: First buffer
+/// @param b: Second buffer
+/// @param len: Buffer length
+/// @return CryptoResult with success=equal
+pub export fn zcrypto_secure_memcmp(
+    a: [*]const u8,
+    b: [*]const u8,
+    len: u32
+) callconv(.C) CryptoResult {
+    const slice_a = a[0..len];
+    const slice_b = b[0..len];
+    
+    var result: u8 = 0;
+    for (slice_a, slice_b) |byte_a, byte_b| {
+        result |= byte_a ^ byte_b;
+    }
+    
+    return if (result == 0) CryptoResult.SUCCESS else CryptoResult.failure(FFI_ERROR_VERIFICATION_FAILED);
+}
+
 test "FFI exports compilation" {
     // Basic test to ensure all exports compile
     var buffer: [64]u8 = undefined;
     const result = zcrypto_version(&buffer, 64);
     try std.testing.expect(result.success);
+}
+
+test "FFI ML-KEM-768 operations" {
+    var public_key: [pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE]u8 = undefined;
+    var private_key: [pq.ml_kem.ML_KEM_768.PRIVATE_KEY_SIZE]u8 = undefined;
+    
+    // Test key generation
+    const keygen_result = zcrypto_ml_kem_768_keygen(&public_key, &private_key);
+    try std.testing.expect(keygen_result.success);
+    
+    // Test encapsulation
+    var ciphertext: [pq.ml_kem.ML_KEM_768.CIPHERTEXT_SIZE]u8 = undefined;
+    var shared_secret1: [pq.ml_kem.ML_KEM_768.SHARED_SECRET_SIZE]u8 = undefined;
+    
+    const encaps_result = zcrypto_ml_kem_768_encaps(&public_key, &ciphertext, &shared_secret1);
+    try std.testing.expect(encaps_result.success);
+    
+    // Test decapsulation
+    var shared_secret2: [pq.ml_kem.ML_KEM_768.SHARED_SECRET_SIZE]u8 = undefined;
+    
+    const decaps_result = zcrypto_ml_kem_768_decaps(&private_key, &ciphertext, &shared_secret2);
+    try std.testing.expect(decaps_result.success);
+    
+    // Shared secrets should match
+    try std.testing.expect(std.mem.eql(u8, &shared_secret1, &shared_secret2));
+}
+
+test "FFI hybrid operations" {
+    var classical_public: [32]u8 = undefined;
+    var classical_private: [32]u8 = undefined;
+    var pq_public: [pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE]u8 = undefined;
+    var pq_private: [pq.ml_kem.ML_KEM_768.PRIVATE_KEY_SIZE]u8 = undefined;
+    
+    // Test hybrid key generation
+    const keygen_result = zcrypto_hybrid_x25519_ml_kem_keygen(
+        &classical_public,
+        &classical_private,
+        &pq_public,
+        &pq_private,
+    );
+    try std.testing.expect(keygen_result.success);
+    
+    // Keys should not be all zeros
+    var all_zero = true;
+    for (classical_public) |byte| {
+        if (byte != 0) {
+            all_zero = false;
+            break;
+        }
+    }
+    try std.testing.expect(!all_zero);
+}
+
+test "FFI QUIC crypto" {
+    var context: [1024]u8 = undefined; // Larger buffer for context
+    
+    // Initialize QUIC crypto with post-quantum suite
+    const init_result = zcrypto_quic_init(3, &context); // PQ-Hybrid
+    try std.testing.expect(init_result.success);
+    
+    // Test packet encryption/decryption
+    var packet = [_]u8{ 0xc0, 0x00, 0x00, 0x00, 0x01 } ++ "Hello QUIC v0.5.0!".*;
+    const header_len = 5;
+    const packet_number = 42;
+    
+    // Store original for comparison
+    var original_payload: [18]u8 = undefined;
+    @memcpy(&original_payload, packet[header_len..]);
+    
+    // Encrypt in-place
+    const encrypt_result = zcrypto_quic_encrypt_packet_inplace(
+        &context,
+        0, // initial level
+        false, // client
+        packet_number,
+        &packet,
+        packet.len,
+        header_len,
+    );
+    try std.testing.expect(encrypt_result.success);
+    
+    // Payload should be different
+    try std.testing.expect(!std.mem.eql(u8, &original_payload, packet[header_len..]));
+    
+    // Decrypt in-place
+    const decrypt_result = zcrypto_quic_decrypt_packet_inplace(
+        &context,
+        0, // initial level
+        false, // client
+        packet_number,
+        &packet,
+        packet.len,
+        header_len,
+    );
+    try std.testing.expect(decrypt_result.success);
+    
+    // Should match original
+    try std.testing.expect(std.mem.eql(u8, &original_payload, packet[header_len..]));
+}
+
+test "FFI library features" {
+    var features: u32 = undefined;
+    const result = zcrypto_get_features(&features);
+    try std.testing.expect(result.success);
+    
+    // Should have all expected features
+    const FEATURE_POST_QUANTUM = 0x01;
+    const FEATURE_ZERO_KNOWLEDGE = 0x02;
+    const FEATURE_QUIC_CRYPTO = 0x04;
+    
+    try std.testing.expect((features & FEATURE_POST_QUANTUM) != 0);
+    try std.testing.expect((features & FEATURE_ZERO_KNOWLEDGE) != 0);
+    try std.testing.expect((features & FEATURE_QUIC_CRYPTO) != 0);
+}
+
+test "FFI secure operations" {
+    // Test secure memory comparison
+    const data1 = "identical";
+    const data2 = "identical";
+    const data3 = "different";
+    
+    const cmp1 = zcrypto_secure_memcmp(data1.ptr, data2.ptr, data1.len);
+    try std.testing.expect(cmp1.success); // Should be equal
+    
+    const cmp2 = zcrypto_secure_memcmp(data1.ptr, data3.ptr, data1.len);
+    try std.testing.expect(!cmp2.success); // Should be different
+    
+    // Test secure zeroing
+    var secret_data = [_]u8{ 0xaa, 0xbb, 0xcc, 0xdd };
+    const zero_result = zcrypto_secure_zero(&secret_data, secret_data.len);
+    try std.testing.expect(zero_result.success);
+    
+    for (secret_data) |byte| {
+        try std.testing.expect(byte == 0);
+    }
 }

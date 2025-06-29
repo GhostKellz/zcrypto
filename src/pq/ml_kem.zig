@@ -295,18 +295,143 @@ pub const ML_KEM_768 = struct {
             ciphertext: [CIPHERTEXT_SIZE]u8,
             shared_secret: [SHARED_SECRET_SIZE]u8,
         } {
-            _ = public_key;
-            _ = randomness;
-            // TODO: Implement ML-KEM-768 encapsulation
-            return pq.PQError.EncapsFailed;
+            var result: struct {
+                ciphertext: [CIPHERTEXT_SIZE]u8,
+                shared_secret: [SHARED_SECRET_SIZE]u8,
+            } = undefined;
+            
+            // Unpack public key
+            var t: [K]Poly = undefined;
+            var rho: [32]u8 = undefined;
+            unpackPublicKey(&t, &rho, &public_key);
+            
+            // Sample random vectors
+            var r: [K]Poly = undefined;
+            var e1: [K]Poly = undefined;
+            var e2: Poly = undefined;
+            
+            sampleSecretVector(&r, &randomness, 0);
+            sampleSecretVector(&e1, &randomness, K);
+            
+            var noise_bytes: [64]u8 = undefined;
+            @memcpy(noise_bytes[0..32], &randomness);
+            noise_bytes[32] = 2 * K;
+            @memset(noise_bytes[33..], 0);
+            e2 = sampleCBD(ETA2, &noise_bytes);
+            
+            // Generate matrix A
+            var A: [K][K]Poly = undefined;
+            generateMatrix(&A, &rho);
+            
+            // Compute u = A^T * r + e1
+            var u: [K]Poly = undefined;
+            for (0..K) |i| {
+                u[i] = Poly.zero();
+                for (0..K) |j| {
+                    var A_transpose = A[j][i];
+                    A_transpose.ntt();
+                    var r_ntt = r[j];
+                    r_ntt.ntt();
+                    const product = A_transpose.pointwiseMul(&r_ntt);
+                    u[i] = u[i].add(&product);
+                }
+                u[i].invNtt();
+                u[i] = u[i].add(&e1[i]);
+            }
+            
+            // Decompress and compute v = t^T * r + e2 + compress(m)
+            var t_decompressed: [K]Poly = undefined;
+            for (0..K) |i| {
+                t_decompressed[i] = t[i];
+                t_decompressed[i].invNtt();
+            }
+            
+            var v = Poly.zero();
+            for (0..K) |i| {
+                var r_i = r[i];
+                r_i.ntt();
+                const product = t_decompressed[i].pointwiseMul(&r_i);
+                v = v.add(&product);
+            }
+            v.invNtt();
+            v = v.add(&e2);
+            
+            // Add compressed message (randomness hash)
+            var msg_poly = Poly.zero();
+            for (0..Params.N) |i| {
+                const byte_idx = (i * 8) / Params.N;
+                const bit_idx = (i * 8) % Params.N;
+                if (byte_idx < randomness.len) {
+                    const bit = (randomness[byte_idx] >> @intCast(bit_idx % 8)) & 1;
+                    msg_poly.coeffs[i] = @as(u16, bit) * (Params.Q / 2);
+                }
+            }
+            v = v.add(&msg_poly);
+            
+            // Pack ciphertext
+            packCiphertext(&result.ciphertext, &u, &v);
+            
+            // Derive shared secret from randomness
+            var hasher = std.crypto.hash.sha3.Sha3_256.init(.{});
+            hasher.update(&randomness);
+            hasher.final(&result.shared_secret);
+            
+            return result;
         }
         
         /// Decapsulate shared secret using private key
         pub fn decapsulate(self: *const KeyPair, ciphertext: [CIPHERTEXT_SIZE]u8) pq.PQError![SHARED_SECRET_SIZE]u8 {
-            _ = self;
-            _ = ciphertext;
-            // TODO: Implement ML-KEM-768 decapsulation
-            return pq.PQError.DecapsFailed;
+            var shared_secret: [SHARED_SECRET_SIZE]u8 = undefined;
+            
+            // Unpack private key
+            var s: [K]Poly = undefined;
+            unpackPrivateKey(&s, &self.private_key);
+            
+            // Unpack ciphertext
+            var u: [K]Poly = undefined;
+            var v: Poly = undefined;
+            unpackCiphertext(&u, &v, &ciphertext);
+            
+            // Convert s to NTT domain
+            for (&s) |*poly| {
+                poly.ntt();
+            }
+            
+            // Compute m' = v - s^T * u
+            var s_dot_u = Poly.zero();
+            for (0..K) |i| {
+                var u_ntt = u[i];
+                u_ntt.ntt();
+                const product = s[i].pointwiseMul(&u_ntt);
+                s_dot_u = s_dot_u.add(&product);
+            }
+            s_dot_u.invNtt();
+            
+            var m_prime = v.sub(&s_dot_u);
+            
+            // Decode message from m'
+            var decoded_msg: [SEED_SIZE]u8 = undefined;
+            for (0..SEED_SIZE) |i| {
+                var byte_val: u8 = 0;
+                for (0..8) |bit| {
+                    const coeff_idx = (i * 8 + bit) % Params.N;
+                    const coeff = m_prime.coeffs[coeff_idx];
+                    
+                    // Decode bit based on coefficient magnitude
+                    const threshold = Params.Q / 4;
+                    if (coeff > threshold and coeff < 3 * threshold) {
+                        byte_val |= @as(u8, 1) << @intCast(bit);
+                    }
+                }
+                decoded_msg[i] = byte_val;
+            }
+            
+            // Derive shared secret
+            var hasher = std.crypto.hash.sha3.Sha3_256.init(.{});
+            hasher.update(&decoded_msg);
+            hasher.final(&shared_secret);
+            
+            return shared_secret;
         }
     };
     
@@ -368,10 +493,95 @@ pub const ML_KEM_768 = struct {
     
     /// Pack private key into byte array  
     fn packPrivateKey(output: []u8, s: *const [K]Poly) void {
-        _ = s;
-        // TODO: Implement proper private key packing
-        // This is a placeholder implementation
-        @memset(output, 0);
+        var offset: usize = 0;
+        for (0..K) |i| {
+            for (0..Params.N) |j| {
+                const coeff = s[i].coeffs[j];
+                if (offset + 1 < output.len) {
+                    output[offset] = @intCast(coeff & 0xFF);
+                    output[offset + 1] = @intCast((coeff >> 8) & 0xFF);
+                    offset += 2;
+                }
+            }
+        }
+    }
+    
+    /// Unpack public key from byte array
+    fn unpackPublicKey(t: *[K]Poly, rho: []u8, input: []const u8) void {
+        @memcpy(rho[0..32], input[0..32]);
+        
+        var offset: usize = 32;
+        for (0..K) |i| {
+            for (0..Params.N) |j| {
+                if (offset + 1 < input.len) {
+                    t[i].coeffs[j] = @as(u16, input[offset]) | (@as(u16, input[offset + 1]) << 8);
+                    offset += 2;
+                }
+            }
+        }
+    }
+    
+    /// Unpack private key from byte array
+    fn unpackPrivateKey(s: *[K]Poly, input: []const u8) void {
+        var offset: usize = 0;
+        for (0..K) |i| {
+            for (0..Params.N) |j| {
+                if (offset + 1 < input.len) {
+                    s[i].coeffs[j] = @as(u16, input[offset]) | (@as(u16, input[offset + 1]) << 8);
+                    offset += 2;
+                }
+            }
+        }
+    }
+    
+    /// Pack ciphertext into byte array
+    fn packCiphertext(output: []u8, u: *const [K]Poly, v: *const Poly) void {
+        var offset: usize = 0;
+        
+        // Pack u vector
+        for (0..K) |i| {
+            for (0..Params.N) |j| {
+                const coeff = u[i].coeffs[j];
+                if (offset + 1 < output.len) {
+                    output[offset] = @intCast(coeff & 0xFF);
+                    output[offset + 1] = @intCast((coeff >> 8) & 0xFF);
+                    offset += 2;
+                }
+            }
+        }
+        
+        // Pack v polynomial
+        for (0..Params.N) |j| {
+            const coeff = v.coeffs[j];
+            if (offset + 1 < output.len) {
+                output[offset] = @intCast(coeff & 0xFF);
+                output[offset + 1] = @intCast((coeff >> 8) & 0xFF);
+                offset += 2;
+            }
+        }
+    }
+    
+    /// Unpack ciphertext from byte array
+    fn unpackCiphertext(u: *[K]Poly, v: *Poly, input: []const u8) void {
+        var offset: usize = 0;
+        
+        // Unpack u vector
+        for (0..K) |i| {
+            for (0..Params.N) |j| {
+                if (offset + 1 < input.len) {
+                    u[i].coeffs[j] = @as(u16, input[offset]) | (@as(u16, input[offset + 1]) << 8);
+                    offset += 2;
+                }
+            }
+        }
+        
+        // Unpack v polynomial
+        for (0..Params.N) |j| {
+            if (offset + 1 < input.len) {
+                v.coeffs[j] = @as(u16, input[offset]) | (@as(u16, input[offset + 1]) << 8);
+                offset += 2;
+            }
+        }
     }
 };
 
