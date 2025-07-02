@@ -76,7 +76,6 @@ pub const ml_dsa = struct {
                 
                 // Generate matrix A (placeholder)
                 const rho = expanded[0..32];
-                _ = rho;
                 
                 // Generate secret keys s1, s2 (placeholder)
                 var s1_bytes: [L * 32]u8 = undefined;

@@ -8,7 +8,7 @@ const std = @import("std");
 /// Ed25519 public key size
 pub const ED25519_PUBLIC_KEY_SIZE = 32;
 
-/// Ed25519 private key size (seed)
+/// Ed25519 private key size (seed) - zcrypto v0.5.0 uses 64-byte private keys
 pub const ED25519_PRIVATE_KEY_SIZE = 64;
 
 /// Ed25519 signature size

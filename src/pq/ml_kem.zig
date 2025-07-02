@@ -407,7 +407,7 @@ pub const ML_KEM_768 = struct {
             }
             s_dot_u.invNtt();
             
-            var m_prime = v.sub(&s_dot_u);
+            const m_prime = v.sub(&s_dot_u);
             
             // Decode message from m'
             var decoded_msg: [SEED_SIZE]u8 = undefined;
