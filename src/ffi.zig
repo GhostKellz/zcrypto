@@ -120,13 +120,9 @@ pub export fn zcrypto_ed25519_sign(
     if (message_len == 0) return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
     
     const message_slice = message[0..message_len];
-    const priv_key: [32]u8 = private_key[0..32].*;
-    const pub_key: [32]u8 = private_key[32..64].*;
+    const priv_key: [64]u8 = private_key[0..64].*;
     
-    const keypair = std.crypto.sign.Ed25519.KeyPair{
-        .secret_key = priv_key,
-        .public_key = pub_key,
-    };
+    const keypair = std.crypto.sign.Ed25519.KeyPair.fromSecretKey(priv_key);
     
     const sig = keypair.sign(message_slice, null) catch {
         return CryptoResult.failure(FFI_ERROR_SIGNATURE_FAILED);
@@ -869,7 +865,7 @@ test "FFI QUIC crypto" {
 
 test "FFI library features" {
     var features: u32 = undefined;
-    const result = zcrypto_get_features(&features);
+    const result = zcrypto_get_features(@ptrCast(&features));
     try std.testing.expect(result.success);
     
     // Should have all expected features
