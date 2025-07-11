@@ -34,7 +34,20 @@ pub const util = @import("util.zig");
 pub const bip = @import("bip.zig");
 pub const batch = @import("batch.zig");
 
-// Post-quantum cryptography module
+// Advanced cryptographic modules
+pub const quic_crypto = @import("quic_crypto.zig");
+pub const hardware = @import("hardware.zig");
+pub const post_quantum = @import("post_quantum.zig");
+pub const kex = @import("kex.zig");
+pub const async_crypto = @import("async_crypto.zig");
+pub const zkp = @import("zkp.zig");
+
+// Enterprise and security features
+pub const formal = @import("formal.zig");
+pub const hsm = @import("hsm.zig");
+pub const perf_analysis = @import("perf_analysis.zig");
+
+// Post-quantum cryptography module (legacy compatibility)
 pub const pq = @import("pq.zig");
 
 // TLS/QUIC specific modules
@@ -44,8 +57,14 @@ pub const quic = @import("quic.zig");
 // FFI exports for Rust integration
 pub const ffi = @import("ffi.zig");
 
-// Version information  
-pub const version = "0.4.0";
+// Convenience exports for common algorithms
+pub const kyber = post_quantum.ML_KEM_768;
+pub const dilithium = post_quantum.ML_DSA_65;
+pub const x25519 = kex.X25519;
+pub const ed25519 = kex.Ed25519;
+
+// Version information
+pub const version = "0.6.0";
 
 test {
     // Import all module tests
@@ -61,4 +80,13 @@ test {
     _ = tls;
     _ = quic;
     _ = ffi;
+    _ = quic_crypto;
+    _ = hardware;
+    _ = post_quantum;
+    _ = kex;
+    _ = async_crypto;
+    _ = zkp;
+    _ = formal;
+    _ = hsm;
+    _ = perf_analysis;
 }
