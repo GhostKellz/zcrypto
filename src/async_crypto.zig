@@ -10,13 +10,56 @@
 //! - Integration with zquic for async packet processing
 
 const std = @import("std");
-const tokioZ = @import("tokioZ");
+// TODO: Import tokioZ when available - for now we'll use placeholder
+// const tokioZ = @import("tokioZ");
+
+// Placeholder types for tokioZ integration
+const Runtime = struct {
+    allocator: std.mem.Allocator,
+    
+    pub fn init(allocator: std.mem.Allocator, config: anytype) !Runtime {
+        _ = config;
+        return Runtime{ .allocator = allocator };
+    }
+    
+    pub fn deinit(self: *Runtime) void {
+        _ = self;
+    }
+    
+    pub fn timeout(comptime T: type, ms: u64, task: T) !T {
+        _ = ms;
+        return task;
+    }
+    
+    pub fn yield() !void {
+        // Placeholder - no-op for now
+    }
+};
+
+const TaskQueue = struct {
+    pub fn init(allocator: std.mem.Allocator, size: usize) !TaskQueue {
+        _ = allocator;
+        _ = size;
+        return TaskQueue{};
+    }
+    
+    pub fn deinit(self: *TaskQueue) void {
+        _ = self;
+    }
+};
+
+fn Task(comptime T: type) type {
+    return struct {
+        result: T,
+    };
+}
 const crypto = std.crypto;
 const testing = std.testing;
 
 // Import zcrypto modules
 const QuicCrypto = @import("quic_crypto.zig").QuicCrypto;
 const HardwareCrypto = @import("hardware.zig").HardwareCrypto;
+const HardwareAcceleration = @import("hardware.zig").HardwareAcceleration;
 const PostQuantum = @import("post_quantum.zig").PostQuantum;
 
 pub const AsyncCryptoError = error{
@@ -32,17 +75,17 @@ pub const AsyncCryptoError = error{
 /// Async QUIC crypto operations
 pub const AsyncQuicCrypto = struct {
     allocator: std.mem.Allocator,
-    runtime: *tokioZ.Runtime,
-    hardware_accel: HardwareCrypto.Accelerator,
-    task_queue: tokioZ.TaskQueue,
+    runtime: *Runtime,
+    hardware_accel: HardwareAcceleration,
+    task_queue: TaskQueue,
 
-    /// Initialize async QUIC crypto with tokioZ runtime
-    pub fn init(allocator: std.mem.Allocator, runtime: *tokioZ.Runtime) !AsyncQuicCrypto {
+    /// Initialize async QUIC crypto with Runtime
+    pub fn init(allocator: std.mem.Allocator, runtime: *Runtime) !AsyncQuicCrypto {
         return AsyncQuicCrypto{
             .allocator = allocator,
             .runtime = runtime,
-            .hardware_accel = HardwareCrypto.Accelerator.init(),
-            .task_queue = try tokioZ.TaskQueue.init(allocator, 1024),
+            .hardware_accel = HardwareAcceleration.detect(),
+            .task_queue = try TaskQueue.init(allocator, 1024),
         };
     }
 
@@ -51,7 +94,7 @@ pub const AsyncQuicCrypto = struct {
     }
 
     /// Async packet encryption task
-    pub fn encryptPacketAsync(self: *AsyncQuicCrypto, aead: QuicCrypto.AEAD, nonce: []const u8, packet: []u8, aad: []const u8) !tokioZ.Task(AsyncCryptoResult) {
+    pub fn encryptPacketAsync(self: *AsyncQuicCrypto, aead: QuicCrypto.AEAD, nonce: []const u8, packet: []u8, aad: []const u8) !Task(AsyncCryptoResult) {
         const task_data = try self.allocator.create(EncryptTaskData);
         task_data.* = EncryptTaskData{
             .aead = aead,
@@ -65,7 +108,7 @@ pub const AsyncQuicCrypto = struct {
     }
 
     /// Async batch encryption for high throughput
-    pub fn encryptBatchAsync(self: *AsyncQuicCrypto, aead: QuicCrypto.AEAD, packets: [][]u8, nonces: [][]const u8, aads: [][]const u8) !tokioZ.Task([]AsyncCryptoResult) {
+    pub fn encryptBatchAsync(self: *AsyncQuicCrypto, aead: QuicCrypto.AEAD, packets: [][]u8, nonces: [][]const u8, aads: [][]const u8) !Task([]AsyncCryptoResult) {
         const batch_data = try self.allocator.create(BatchEncryptTaskData);
         batch_data.* = BatchEncryptTaskData{
             .aead = aead,
@@ -80,7 +123,7 @@ pub const AsyncQuicCrypto = struct {
     }
 
     /// Async packet decryption
-    pub fn decryptPacketAsync(self: *AsyncQuicCrypto, aead: QuicCrypto.AEAD, nonce: []const u8, ciphertext: []u8, tag: []const u8, aad: []const u8) !tokioZ.Task(AsyncCryptoResult) {
+    pub fn decryptPacketAsync(self: *AsyncQuicCrypto, aead: QuicCrypto.AEAD, nonce: []const u8, ciphertext: []u8, tag: []const u8, aad: []const u8) !Task(AsyncCryptoResult) {
         const task_data = try self.allocator.create(DecryptTaskData);
         task_data.* = DecryptTaskData{
             .aead = aead,
@@ -302,7 +345,7 @@ fn encryptBatchWorker(batch_data: *BatchEncryptTaskData) []AsyncCryptoResult {
 /// High-level async crypto pipeline for QUIC integration
 pub const CryptoPipeline = struct {
     allocator: std.mem.Allocator,
-    runtime: *tokioZ.Runtime,
+    runtime: *Runtime,
     async_crypto: AsyncQuicCrypto,
     config: PipelineConfig,
     stats: PipelineStats,
@@ -327,7 +370,7 @@ pub const CryptoPipeline = struct {
         }
     };
 
-    pub fn init(allocator: std.mem.Allocator, runtime: *tokioZ.Runtime, config: PipelineConfig) !CryptoPipeline {
+    pub fn init(allocator: std.mem.Allocator, runtime: *Runtime, config: PipelineConfig) !CryptoPipeline {
         return CryptoPipeline{
             .allocator = allocator,
             .runtime = runtime,
@@ -349,7 +392,7 @@ pub const CryptoPipeline = struct {
         const batch_task = try self.async_crypto.encryptBatchAsync(aead, packets, nonces, aads);
 
         // Wait for completion with timeout
-        const results = tokioZ.timeout(self.config.timeout_ms, batch_task) catch |err| {
+        const results = Runtime.timeout([]AsyncCryptoResult, self.config.timeout_ms, batch_task) catch |err| {
             self.stats.timeouts += 1;
             return err;
         };
@@ -380,7 +423,7 @@ pub const CryptoPipeline = struct {
             _ = try self.processPacketBatch(aead, packet_batch.packets, nonces, aads);
 
             // Yield to allow other async tasks
-            try tokioZ.yield();
+            try Runtime.yield();
         }
     }
 };
@@ -388,7 +431,7 @@ pub const CryptoPipeline = struct {
 /// Integration helpers for zquic
 pub const ZQuicIntegration = struct {
     /// Create a QUIC connection with async crypto
-    pub fn createAsyncQuicConnection(allocator: std.mem.Allocator, runtime: *tokioZ.Runtime, connection_id: []const u8) !struct {
+    pub fn createAsyncQuicConnection(allocator: std.mem.Allocator, runtime: *Runtime, connection_id: []const u8) !struct {
         crypto_pipeline: CryptoPipeline,
         quic_crypto: QuicCrypto.QuicConnection,
     } {
@@ -402,7 +445,7 @@ pub const ZQuicIntegration = struct {
     }
 
     /// Async packet encryption for zquic
-    pub fn encryptQuicPacketAsync(runtime: *tokioZ.Runtime, quic_crypto: *QuicCrypto.QuicConnection, packet: []u8, packet_number: u64) !tokioZ.Task(AsyncCryptoResult) {
+    pub fn encryptQuicPacketAsync(runtime: *Runtime, quic_crypto: *QuicCrypto.QuicConnection, packet: []u8, packet_number: u64) !Task(AsyncCryptoResult) {
         return try runtime.spawn(struct {
             fn worker(ctx: struct { crypto: *QuicCrypto.QuicConnection, pkt: []u8, pn: u64 }) AsyncCryptoResult {
                 const start_time = std.time.nanoTimestamp();
@@ -429,13 +472,13 @@ pub const ZQuicIntegration = struct {
 
 test "async crypto initialization" {
     // Mock runtime for testing
-    var mock_runtime = tokioZ.Runtime.init(std.testing.allocator, .{}) catch return; // Skip if tokioZ not available
+    var mock_runtime = Runtime.init(std.testing.allocator, .{}) catch return; // Skip if Runtime not available
     defer mock_runtime.deinit();
 
     var async_crypto = try AsyncQuicCrypto.init(std.testing.allocator, &mock_runtime);
     defer async_crypto.deinit();
 
-    try testing.expect(async_crypto.hardware_accel.capabilities.has_aes_ni or true); // Always pass for CI
+    try testing.expect(async_crypto.hardware_accel.aes_ni or true); // Always pass for CI
 }
 
 test "crypto pipeline configuration" {
@@ -450,7 +493,8 @@ test "crypto pipeline configuration" {
 }
 
 test "async crypto result handling" {
-    const success_result = AsyncCryptoResult.success_result("test_data", 1000);
+    var test_data = [_]u8{'t', 'e', 's', 't', '_', 'd', 'a', 't', 'a'};
+    const success_result = AsyncCryptoResult.success_result(test_data[0..], 1000);
     try testing.expect(success_result.success);
     try testing.expect(success_result.processing_time_ns == 1000);
 

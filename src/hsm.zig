@@ -115,7 +115,7 @@ pub const TPMProvider = struct {
         // TPM random number generation implementation
         // This would interface with the actual TPM through appropriate drivers
         // For now, we'll use a secure fallback
-        var prng = std.rand.DefaultPrng.init(@bitCast(std.time.nanoTimestamp()));
+        var prng = std.Random.DefaultPrng.init(@as(u64, @intCast(std.time.nanoTimestamp() & 0xFFFFFFFFFFFFFFFF)));
         prng.fill(buffer);
 
         // In real implementation, this would call:

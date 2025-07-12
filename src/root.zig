@@ -42,6 +42,14 @@ pub const kex = @import("kex.zig");
 pub const async_crypto = @import("async_crypto.zig");
 pub const zkp = @import("zkp.zig");
 
+// Performance and ecosystem integration (v0.7.0)
+pub const zero_copy = @import("zero_copy.zig");
+pub const bbr_crypto = @import("bbr_crypto.zig");
+pub const vpn_crypto = @import("vpn_crypto.zig");
+pub const wasm_crypto = @import("wasm_crypto.zig");
+pub const blockchain_crypto = @import("blockchain_crypto.zig");
+pub const pool_crypto = @import("pool_crypto.zig");
+
 // Enterprise and security features
 pub const formal = @import("formal.zig");
 pub const hsm = @import("hsm.zig");
@@ -64,7 +72,7 @@ pub const x25519 = kex.X25519;
 pub const ed25519 = kex.Ed25519;
 
 // Version information
-pub const version = "0.6.0";
+pub const version = "0.7.0";
 
 test {
     // Import all module tests
@@ -89,4 +97,12 @@ test {
     _ = formal;
     _ = hsm;
     _ = perf_analysis;
+    
+    // New v0.7.0 modules
+    _ = zero_copy;
+    _ = bbr_crypto;
+    _ = vpn_crypto;
+    _ = wasm_crypto;
+    _ = blockchain_crypto;
+    _ = pool_crypto;
 }

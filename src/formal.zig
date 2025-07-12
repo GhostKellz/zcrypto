@@ -208,6 +208,7 @@ pub const SideChannelVerifier = struct {
         for (test_inputs) |input| {
             // Flush cache before measurement
             comptime var dummy: [1024]u8 = undefined;
+            @setEvalBranchQuota(2000);
             inline for (0..dummy.len) |i| {
                 dummy[i] = @intCast(i % 256);
             }

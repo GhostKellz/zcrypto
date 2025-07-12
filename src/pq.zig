@@ -327,10 +327,11 @@ pub const hybrid = struct {
                 std.crypto.random.bytes(&classical_seed);
                 
                 keypair.classical_private = classical_seed;
-                const x25519_keypair = std.crypto.dh.X25519.KeyPair.create(classical_seed) catch {
+                // Use X25519 basepoint to generate public key manually
+                const basepoint = [_]u8{9} ++ [_]u8{0} ** 31;
+                keypair.classical_public = std.crypto.dh.X25519.scalarmult(classical_seed, basepoint) catch {
                     return PQError.KeyGenFailed;
                 };
-                keypair.classical_public = x25519_keypair.public_key;
                 
                 // Generate ML-KEM-768 key pair
                 var pq_seed: [32]u8 = undefined;
@@ -351,12 +352,7 @@ pub const hybrid = struct {
                 var shared_secret: [SHARED_SECRET_SIZE]u8 = undefined;
                 
                 // X25519 key exchange
-                const x25519_private = std.crypto.dh.X25519.KeyPair{
-                    .public_key = self.classical_public,
-                    .secret_key = self.classical_private,
-                };
-                
-                const classical_shared = x25519_private.secret_key.mul(peer_classical) catch {
+                const classical_shared = std.crypto.dh.X25519.scalarmult(self.classical_private, peer_classical) catch {
                     return PQError.DecapsFailed;
                 };
                 

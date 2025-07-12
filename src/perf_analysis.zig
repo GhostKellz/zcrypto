@@ -166,7 +166,7 @@ pub const StatisticalResults = struct {
 
 /// Memory leak detector with advanced analysis
 pub const MemoryLeakDetector = struct {
-    allocations: std.HashMap(usize, AllocationRecord, std.hash_map.DefaultContext(usize), 80),
+    allocations: std.HashMap(usize, AllocationRecord, std.hash_map.AutoContext(usize), 80),
     allocation_timeline: std.ArrayList(AllocationEvent),
     total_allocated: u64,
     total_freed: u64,
@@ -192,7 +192,7 @@ pub const MemoryLeakDetector = struct {
 
     pub fn init(allocator: std.mem.Allocator) MemoryLeakDetector {
         return MemoryLeakDetector{
-            .allocations = std.HashMap(usize, AllocationRecord, std.hash_map.DefaultContext(usize), 80).init(allocator),
+            .allocations = std.HashMap(usize, AllocationRecord, std.hash_map.AutoContext(usize), 80).init(allocator),
             .allocation_timeline = std.ArrayList(AllocationEvent).init(allocator),
             .total_allocated = 0,
             .total_freed = 0,
@@ -398,7 +398,7 @@ pub const RealTimeMonitor = struct {
     /// Start real-time monitoring
     pub fn startMonitoring(self: *RealTimeMonitor) void {
         self.monitoring_active = true;
-        std.log.info("Real-time performance monitoring started");
+        std.log.info("Real-time performance monitoring started", .{});
     }
 
     /// Stop monitoring and generate final report

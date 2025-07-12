@@ -5,7 +5,6 @@
 //! - Packet number protection and header protection
 //! - AEAD encryption/decryption for QUIC packets
 //! - Post-quantum QUIC extensions
-//!
 //! This module integrates seamlessly with zquic for optimal performance.
 
 const std = @import("std");
@@ -282,10 +281,11 @@ pub const PostQuantumQuic = struct {
         var x25519_seed: [32]u8 = undefined;
         @memcpy(&x25519_seed, entropy[0..32]);
         
-        const x25519_keypair = std.crypto.dh.X25519.KeyPair.create(x25519_seed) catch {
+        const basepoint = [_]u8{9} ++ [_]u8{0} ** 31;
+        const x25519_public = std.crypto.dh.X25519.scalarmult(x25519_seed, basepoint) catch {
             return pq.PQError.KeyGenFailed;
         };
-        @memcpy(classical_share, &x25519_keypair.public_key);
+        @memcpy(classical_share, &x25519_public);
         
         // Generate ML-KEM-768 key pair
         var pq_seed: [32]u8 = undefined;
@@ -313,14 +313,17 @@ pub const PostQuantumQuic = struct {
         var x25519_seed: [32]u8 = undefined;
         std.crypto.random.bytes(&x25519_seed);
         
-        const server_x25519 = std.crypto.dh.X25519.KeyPair.create(x25519_seed) catch {
+        var server_x25519_seed: [32]u8 = undefined;
+        std.crypto.random.bytes(&server_x25519_seed);
+        const basepoint = [_]u8{9} ++ [_]u8{0} ** 31;
+        const server_x25519_public = std.crypto.dh.X25519.scalarmult(server_x25519_seed, basepoint) catch {
             return pq.PQError.KeyGenFailed;
         };
-        @memcpy(server_classical, &server_x25519.public_key);
+        @memcpy(server_classical, &server_x25519_public);
         
         // Perform X25519 DH
         const client_x25519: [32]u8 = client_classical[0..32].*;
-        const classical_shared = server_x25519.secret_key.mul(client_x25519) catch {
+        const classical_shared = std.crypto.dh.X25519.scalarmult(server_x25519_seed, client_x25519) catch {
             return pq.PQError.EncapsFailed;
         };
         
@@ -355,7 +358,8 @@ pub const PostQuantumQuic = struct {
             var offset: usize = 0;
             
             // Encode max_pq_key_update_interval (8 bytes)
-            std.mem.writeIntBig(u64, output[offset..offset + 8], self.max_pq_key_update_interval);
+            const interval_bytes = std.mem.toBytes(self.max_pq_key_update_interval);
+            @memcpy(output[offset..offset + 8], &interval_bytes);
             offset += 8;
             
             // Encode algorithm preference length and data
@@ -383,7 +387,7 @@ pub const PostQuantumQuic = struct {
             var offset: usize = 0;
             
             // Decode max_pq_key_update_interval
-            const interval = std.mem.readIntBig(u64, data[offset..offset + 8]);
+            const interval = std.mem.bytesToValue(u64, data[offset..offset + 8]);
             offset += 8;
             
             // Decode algorithm preference

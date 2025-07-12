@@ -44,7 +44,7 @@ pub const QuicCrypto = struct {
     pub const HKDF = struct {
         pub fn extract(salt: []const u8, ikm: []const u8, prk: []u8) void {
             std.debug.assert(prk.len == 32); // SHA-256 output size
-            crypto.auth.hmac.sha2.HmacSha256.create(prk, ikm, salt);
+            crypto.auth.hmac.sha2.HmacSha256.create(prk[0..32], ikm, salt);
         }
 
         pub fn expand(prk: []const u8, info: []const u8, okm: []u8) void {
@@ -148,7 +148,8 @@ pub const QuicCrypto = struct {
             try self.createMask(packet[sample_offset .. sample_offset + 16], &mask);
 
             // Apply mask to first byte and packet number
-            packet[0] ^= mask[0] & if (packet[0] & 0x80 != 0) 0x0F else 0x1F;
+            const mask_bits: u8 = if (packet[0] & 0x80 != 0) 0x0F else 0x1F;
+            packet[0] ^= mask[0] & mask_bits;
 
             // Determine packet number length and apply mask
             const pn_length = (packet[0] & 0x03) + 1;
@@ -214,21 +215,24 @@ pub const QuicCrypto = struct {
                 .aes_128_gcm => {
                     const key_array: [16]u8 = self.key[0..16].*;
                     const nonce_array: [12]u8 = nonce[0..12].*;
-                    crypto.aead.aes_gcm.Aes128Gcm.decrypt(ciphertext, ciphertext, tag[0..16], aad, nonce_array, key_array) catch {
+                    const tag_array: [16]u8 = tag[0..16].*;
+                    crypto.aead.aes_gcm.Aes128Gcm.decrypt(ciphertext, ciphertext, tag_array, aad, nonce_array, key_array) catch {
                         return Error.DecryptionFailed;
                     };
                 },
                 .aes_256_gcm => {
                     const key_array: [32]u8 = self.key[0..32].*;
                     const nonce_array: [12]u8 = nonce[0..12].*;
-                    crypto.aead.aes_gcm.Aes256Gcm.decrypt(ciphertext, ciphertext, tag[0..16], aad, nonce_array, key_array) catch {
+                    const tag_array: [16]u8 = tag[0..16].*;
+                    crypto.aead.aes_gcm.Aes256Gcm.decrypt(ciphertext, ciphertext, tag_array, aad, nonce_array, key_array) catch {
                         return Error.DecryptionFailed;
                     };
                 },
                 .chacha20_poly1305 => {
                     const key_array: [32]u8 = self.key[0..32].*;
                     const nonce_array: [12]u8 = nonce[0..12].*;
-                    crypto.aead.chacha_poly.ChaCha20Poly1305.decrypt(ciphertext, ciphertext, tag[0..16], aad, nonce_array, key_array) catch {
+                    const tag_array: [16]u8 = tag[0..16].*;
+                    crypto.aead.chacha_poly.ChaCha20Poly1305.decrypt(ciphertext, ciphertext, tag_array, aad, nonce_array, key_array) catch {
                         return Error.DecryptionFailed;
                     };
                 },

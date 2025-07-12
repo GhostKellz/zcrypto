@@ -1,8 +1,105 @@
-# zcrypto v0.5.0 Documentation
+# zcrypto v0.7.0 Documentation
 
-`zcrypto` is a comprehensive, high-performance **post-quantum ready** cryptography library for [Zig](https://ziglang.org) designed for modern applications including TLS 1.3, QUIC, blockchain, wallets, and secure networking. It provides production-ready implementations of all major cryptographic primitives plus cutting-edge post-quantum algorithms with clean, consistent APIs.
+`zcrypto` is a comprehensive, high-performance **post-quantum ready** cryptography library for [Zig](https://ziglang.org) designed for modern applications including TLS 1.3, QUIC, blockchain, wallets, VPN, and secure networking. It provides production-ready implementations of all major cryptographic primitives plus cutting-edge post-quantum algorithms with clean, consistent APIs.
 
-**🔥 NEW in v0.5.0**: World's first production-ready post-quantum QUIC implementation, complete ML-KEM/ML-DSA support, zero-knowledge proofs, and seamless Rust FFI integration.
+**🔥 NEW in v0.7.0**: Zero-copy crypto operations, BBR crypto profiling, VPN-optimized crypto suite, WASM crypto interface, blockchain crypto primitives, connection pooling crypto, and enhanced performance analysis.
+
+---
+
+## 🚀 **V0.7.0 NEW FEATURES**
+
+### Zero-Copy Crypto Operations
+High-performance packet processing with SIMD optimizations and memory-efficient operations.
+
+```zig
+const zero_copy = zcrypto.zero_copy;
+
+// Create packet buffer pool
+var pool = try zero_copy.PacketBufferPool.init(allocator, 1024, .aes_256_gcm);
+defer pool.deinit(allocator);
+
+// Acquire buffer for zero-copy operations
+const buffer = pool.acquire() orelse return error.NoBuffersAvailable;
+defer pool.release(buffer);
+
+// Encrypt in-place
+try buffer.encryptInPlace(data, nonce, aad);
+```
+
+### BBR Crypto Profiling
+Network-aware crypto performance monitoring for optimal throughput.
+
+```zig
+const bbr_crypto = zcrypto.bbr_crypto;
+
+var profiler = bbr_crypto.BBRCryptoProfiler.init();
+
+// Profile encryption operations
+const start = std.time.nanoTimestamp();
+try encryptData(data);
+const end = std.time.nanoTimestamp();
+
+profiler.recordEncryption(start, end, data.len);
+
+// Get performance metrics
+const metrics = profiler.getMetrics();
+std.log.info("Throughput: {} MB/s", .{metrics.throughput_mbps});
+```
+
+### VPN Crypto Suite
+Optimized crypto operations for VPN applications.
+
+```zig
+const vpn_crypto = zcrypto.vpn_crypto;
+
+// Initialize VPN tunnel
+var tunnel = try vpn_crypto.VpnTunnel.init(allocator, .wireguard_compatible);
+
+// Process VPN packet
+const encrypted = try tunnel.encryptPacket(plaintext_packet);
+const decrypted = try tunnel.decryptPacket(encrypted_packet);
+```
+
+### WASM Crypto Interface
+Crypto interface optimized for WebAssembly environments.
+
+```zig
+const wasm_crypto = zcrypto.wasm_crypto;
+
+// Export crypto functions to WASM
+export fn wasm_encrypt(data_ptr: [*]const u8, data_len: usize, key_ptr: [*]const u8) [*]u8 {
+    return wasm_crypto.encrypt(data_ptr[0..data_len], key_ptr[0..32]) catch null;
+}
+```
+
+### Blockchain Crypto Primitives
+Bitcoin-compatible crypto operations with BIP support.
+
+```zig
+const blockchain_crypto = zcrypto.blockchain_crypto;
+
+// Generate Bitcoin-compatible address
+const keypair = try blockchain_crypto.BitcoinKeypair.generate();
+const address = try blockchain_crypto.generateBitcoinAddress(keypair.public_key, .p2pkh);
+
+// Sign transaction
+const signature = try blockchain_crypto.signTransaction(transaction, keypair.private_key);
+```
+
+### Connection Pooling Crypto
+Scalable crypto context management for high-load applications.
+
+```zig
+const pool_crypto = zcrypto.pool_crypto;
+
+// Create crypto context pool
+var context_pool = try pool_crypto.CryptoContextPool.init(allocator, 100);
+defer context_pool.deinit();
+
+// Get context for session
+const context = try context_pool.getContext(session_id);
+const encrypted = try context.encrypt(data);
+```
 
 ---
 
@@ -472,8 +569,38 @@ zcrypto v0.5.0 delivers industry-leading performance:
 - PQ handshake: <2ms
 - Packet encryption: >10M packets/sec
 - Zero-copy processing: minimal overhead
+````markdown
+### Performance Analysis & Profiling
+Enterprise-grade performance monitoring with detailed analytics and memory profiling.
 
----
+```zig
+const perf_analysis = zcrypto.perf_analysis;
+
+// Configure performance analysis
+const config = perf_analysis.AnalysisConfig{
+    .enable_memory_tracking = true,
+    .enable_timing_analysis = true,
+    .max_samples = 10000,
+};
+
+var analyzer = try perf_analysis.PerformanceAnalyzer.init(allocator, config);
+defer analyzer.deinit();
+
+// Profile crypto operations
+try analyzer.startProfiling("aes_encryption");
+try performAESEncryption(data);
+try analyzer.stopProfiling("aes_encryption");
+
+// Get detailed metrics
+const metrics = analyzer.getDetailedMetrics("aes_encryption");
+std.log.info("Average time: {d}ns, Memory usage: {d} bytes", 
+    .{ metrics.avg_time_ns, metrics.peak_memory_bytes });
+
+// Statistical analysis
+const stats = analyzer.getStatisticalSummary();
+std.log.info("P95 latency: {d}ns", .{stats.p95_latency_ns});
+```
+````
 
 ## 🧩 Integration Examples
 

@@ -183,6 +183,160 @@ const encryptedPacket = quicCrypto.encryptPacket(packetData, keys);
 
 ---
 
+## 🚀 **V0.7.0 NEW INTEGRATION PATTERNS**
+
+### 🌐 WebAssembly (WASM) Integration
+
+**NEW in v0.7.0**: Sandboxed crypto operations for WASM runtimes with gas metering.
+
+```zig
+const zcrypto = @import("zcrypto");
+const wasm_crypto = zcrypto.wasm_crypto;
+
+// Initialize WASM crypto context with gas limit
+var crypto_ctx = wasm_crypto.WasmCrypto.init(allocator, 100000, 1024);
+
+// Set up WASM memory interface
+var buffer: [4096]u8 = undefined;
+const memory = wasm_crypto.WasmMemory.init(&buffer, buffer.len);
+
+// Hash operation with gas metering
+const data = "Hello, WASM!";
+try memory.write(0, data);
+try crypto_ctx.sha256(memory, 0, data.len, 100); // result at offset 100
+
+// Sandboxed AEAD encryption
+try crypto_ctx.aeadEncrypt(.ChaCha20Poly1305, memory, 0, data.len, 200);
+```
+
+### 🔒 VPN Integration
+
+**NEW in v0.7.0**: Optimized crypto suite for VPN applications.
+
+```zig
+const zcrypto = @import("zcrypto");
+const vpn_crypto = zcrypto.vpn_crypto;
+
+// Configure VPN tunnel
+const tunnel_config = vpn_crypto.TunnelConfig{
+    .tunnel_id = 12345,
+    .peer_public_key = peer_key,
+    .encryption_algorithm = .ChaCha20Poly1305,
+    .enable_header_protection = true,
+    .enable_traffic_obfuscation = true,
+};
+
+// Establish tunnel
+var tunnel = try vpn_crypto.VpnTunnel.init(allocator, tunnel_config);
+defer tunnel.deinit();
+
+// Encrypt VPN packet
+const encrypted = try tunnel.encryptPacket(plaintext_packet);
+const decrypted = try tunnel.decryptPacket(encrypted_packet);
+
+// Automatic key rotation
+if (tunnel.shouldRotateKeys()) {
+    try tunnel.rotateKeys();
+}
+```
+
+### ⚡ Zero-Copy Packet Processing
+
+**NEW in v0.7.0**: High-performance packet crypto for network applications.
+
+```zig
+const zcrypto = @import("zcrypto");
+const zero_copy = zcrypto.zero_copy;
+
+// Create packet buffer pool
+var pool = try zero_copy.PacketBufferPool.init(allocator, 1024, .aes_256_gcm);
+defer pool.deinit(allocator);
+
+// Acquire buffer for zero-copy operations
+const buffer = pool.acquire() orelse return error.NoBuffersAvailable;
+defer pool.release(buffer);
+
+// Encrypt directly in packet buffer
+try buffer.encryptInPlace(packet_data, nonce, additional_data);
+
+// Batch processing for high throughput
+const packets = &[_][]u8{ packet1, packet2, packet3 };
+try zero_copy.batchEncrypt(packets, keys, nonces);
+```
+
+### 📊 BBR Crypto Profiling
+
+**NEW in v0.7.0**: Network-aware crypto performance monitoring.
+
+```zig
+const zcrypto = @import("zcrypto");
+const bbr_crypto = zcrypto.bbr_crypto;
+
+// Initialize profiler for BBR congestion control
+var profiler = bbr_crypto.BBRCryptoProfiler.init();
+
+// Profile crypto operations
+const start = std.time.nanoTimestamp();
+try performCryptoOperation();
+const end = std.time.nanoTimestamp();
+
+profiler.recordEncryption(start, end, data_size);
+
+// Get metrics for BBR decision making
+const metrics = profiler.getMetrics();
+std.log.info("Crypto overhead: {d}ms, Throughput: {d} MB/s", 
+    .{ metrics.avg_latency_ms, metrics.throughput_mbps });
+```
+
+### ⛓️ Blockchain Integration
+
+**NEW in v0.7.0**: Bitcoin-compatible crypto primitives.
+
+```zig
+const zcrypto = @import("zcrypto");
+const blockchain_crypto = zcrypto.blockchain_crypto;
+
+// Generate Bitcoin keypair
+const keypair = try blockchain_crypto.BitcoinKeypair.generate();
+
+// Generate address
+const address = try blockchain_crypto.generateBitcoinAddress(
+    keypair.public_key, .p2pkh
+);
+
+// Sign transaction
+const signature = try blockchain_crypto.signTransaction(
+    transaction_data, keypair.private_key
+);
+
+// Verify signature
+const valid = try blockchain_crypto.verifyTransaction(
+    transaction_data, signature, keypair.public_key
+);
+```
+
+### 🔄 Connection Pooling
+
+**NEW in v0.7.0**: Scalable crypto context management.
+
+```zig
+const zcrypto = @import("zcrypto");
+const pool_crypto = zcrypto.pool_crypto;
+
+// Create crypto context pool
+var context_pool = try pool_crypto.CryptoContextPool.init(allocator, 100);
+defer context_pool.deinit();
+
+// Get context for session
+const context = try context_pool.getContext(session_id);
+const encrypted = try context.encrypt(data);
+
+// Pool automatically manages context lifecycle
+context_pool.releaseContext(session_id);
+```
+
+---
+
 ## 🚀 Key Features
 
 ### 🔐 Post-Quantum Ready

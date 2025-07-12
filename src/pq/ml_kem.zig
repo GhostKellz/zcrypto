@@ -105,8 +105,13 @@ pub const Poly = struct {
                 var j: u32 = start;
                 while (j < start + len) {
                     const t = self.coeffs[j];
-                    self.coeffs[j] = barrettReduce(t + self.coeffs[j + len]);
-                    self.coeffs[j + len] = montgomeryMul(zeta, t + Params.Q - self.coeffs[j + len]);
+                    const sum = @as(u32, t) + @as(u32, self.coeffs[j + len]);
+                    self.coeffs[j] = barrettReduce(sum);
+                    const diff_val = if (t >= self.coeffs[j + len]) 
+                        @as(u32, t) - @as(u32, self.coeffs[j + len])
+                    else 
+                        (@as(u32, t) + Params.Q) - @as(u32, self.coeffs[j + len]);
+                    self.coeffs[j + len] = montgomeryMul(zeta, @as(u16, @intCast(diff_val % Params.Q)));
                     j += 1;
                 }
                 start = j + len;
@@ -290,15 +295,15 @@ pub const ML_KEM_768 = struct {
             return generate(seed);
         }
         
-        /// Encapsulate shared secret using public key
-        pub fn encapsulate(public_key: [PUBLIC_KEY_SIZE]u8, randomness: [SEED_SIZE]u8) pq.PQError!struct {
+        /// Encapsulation result
+        pub const EncapsulationResult = struct {
             ciphertext: [CIPHERTEXT_SIZE]u8,
             shared_secret: [SHARED_SECRET_SIZE]u8,
-        } {
-            var result: struct {
-                ciphertext: [CIPHERTEXT_SIZE]u8,
-                shared_secret: [SHARED_SECRET_SIZE]u8,
-            } = undefined;
+        };
+        
+        /// Encapsulate shared secret using public key
+        pub fn encapsulate(public_key: [PUBLIC_KEY_SIZE]u8, randomness: [SEED_SIZE]u8) pq.PQError!EncapsulationResult {
+            var result: EncapsulationResult = undefined;
             
             // Unpack public key
             var t: [K]Poly = undefined;
@@ -363,7 +368,7 @@ pub const ML_KEM_768 = struct {
                 const bit_idx = (i * 8) % Params.N;
                 if (byte_idx < randomness.len) {
                     const bit = (randomness[byte_idx] >> @intCast(bit_idx % 8)) & 1;
-                    msg_poly.coeffs[i] = @as(u16, bit) * (Params.Q / 2);
+                    msg_poly.coeffs[i] = @as(u16, @intCast(bit * (Params.Q / 2)));
                 }
             }
             v = v.add(&msg_poly);

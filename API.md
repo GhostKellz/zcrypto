@@ -1,6 +1,8 @@
-# 🔌 ZCRYPTO v0.5.0 API REFERENCE
+# 🔌 ZCRYPTO v0.7.0 API REFERENCE
 
 **Complete API Documentation for Post-Quantum Cryptographic Library**
+
+**🚀 NEW in v0.7.0**: Zero-copy operations, BBR profiling, VPN crypto, WASM interface, blockchain primitives, connection pooling, and performance analysis.
 
 ---
 
@@ -8,13 +10,14 @@
 
 1. [Quick Start](#quick-start)
 2. [Core Cryptographic Primitives](#core-cryptographic-primitives)
-3. [Post-Quantum Algorithms](#post-quantum-algorithms)
-4. [QUIC Cryptography](#quic-cryptography)
-5. [TLS Integration](#tls-integration)
-6. [Foreign Function Interface](#foreign-function-interface)
-7. [Usage Examples](#usage-examples)
-8. [Error Handling](#error-handling)
-9. [Integration Patterns](#integration-patterns)
+3. [V0.7.0 New Features](#v070-new-features)
+4. [Post-Quantum Algorithms](#post-quantum-algorithms)
+5. [QUIC Cryptography](#quic-cryptography)
+6. [TLS Integration](#tls-integration)
+7. [Foreign Function Interface](#foreign-function-interface)
+8. [Usage Examples](#usage-examples)
+9. [Error Handling](#error-handling)
+10. [Integration Patterns](#integration-patterns)
 
 ---
 
@@ -42,12 +45,217 @@ const zcrypto = @import("zcrypto");
 
 pub fn main() !void {
     // Hash some data
-    const message = "Hello, zcrypto!";
+    const message = "Hello, zcrypto v0.7.0!";
     const hash = zcrypto.hash.sha256(message);
     
     // Generate Ed25519 key pair
     const keypair = zcrypto.asym.ed25519.generate();
     
+    // NEW v0.7.0: Zero-copy operations
+    var pool = try zcrypto.zero_copy.PacketBufferPool.init(allocator, 1024, .aes_256_gcm);
+    defer pool.deinit(allocator);
+    
+    // NEW v0.7.0: BBR crypto profiling
+    var profiler = zcrypto.bbr_crypto.BBRCryptoProfiler.init();
+    
+    // NEW v0.7.0: VPN crypto
+    var tunnel = try zcrypto.vpn_crypto.VpnTunnel.init(allocator, .wireguard_compatible);
+}
+```
+
+---
+
+## 🔥 **V0.7.0 NEW FEATURES**
+
+### **Zero-Copy Crypto Operations**
+
+High-performance packet processing with SIMD optimizations.
+
+```zig
+// zcrypto.zero_copy module
+const ZeroCopy = zcrypto.zero_copy;
+
+// Packet Buffer Pool
+const PacketBufferPool = struct {
+    pub fn init(allocator: Allocator, pool_size: usize, cipher_suite: CipherSuite) !PacketBufferPool;
+    pub fn deinit(self: *PacketBufferPool, allocator: Allocator) void;
+    pub fn acquire(self: *PacketBufferPool) ?*CryptoPacketBuffer;
+    pub fn release(self: *PacketBufferPool, buffer: *CryptoPacketBuffer) void;
+};
+
+// Crypto Packet Buffer
+const CryptoPacketBuffer = struct {
+    pub fn encryptInPlace(self: *CryptoPacketBuffer, data: []u8, nonce: []const u8, aad: []const u8) !void;
+    pub fn decryptInPlace(self: *CryptoPacketBuffer, data: []u8, nonce: []const u8, aad: []const u8) !void;
+    pub fn getAvailableSpace(self: *CryptoPacketBuffer) usize;
+};
+
+// Lock-free Ring Buffer
+const LockFreeRingBuffer = struct {
+    pub fn push(self: *LockFreeRingBuffer, data: []const u8) !void;
+    pub fn pop(self: *LockFreeRingBuffer, buffer: []u8) !usize;
+    pub fn availableRead(self: *LockFreeRingBuffer) usize;
+    pub fn availableWrite(self: *LockFreeRingBuffer) usize;
+};
+```
+
+### **BBR Crypto Profiling**
+
+Network-aware crypto performance monitoring.
+
+```zig
+// zcrypto.bbr_crypto module
+const BBRCrypto = zcrypto.bbr_crypto;
+
+// BBR Crypto Profiler
+const BBRCryptoProfiler = struct {
+    pub fn init() BBRCryptoProfiler;
+    pub fn recordEncryption(self: *BBRCryptoProfiler, start_time_ns: u64, end_time_ns: u64, bytes_processed: usize) void;
+    pub fn recordDecryption(self: *BBRCryptoProfiler, start_time_ns: u64, end_time_ns: u64, bytes_processed: usize) void;
+    pub fn getMetrics(self: *BBRCryptoProfiler) CryptoMetrics;
+    pub fn suggestOptimalCipher(self: *BBRCryptoProfiler, target_throughput_mbps: u32) CipherSuite;
+    pub fn shouldTriggerKeyRotation(self: *BBRCryptoProfiler) bool;
+};
+
+// Crypto Metrics
+const CryptoMetrics = struct {
+    avg_encryption_latency_us: u32,
+    avg_decryption_latency_us: u32,
+    throughput_mbps: u32,
+    cpu_utilization_percent: u8,
+    hw_acceleration_available: bool,
+    last_update_time: u64,
+};
+```
+
+### **VPN Crypto Suite**
+
+Optimized crypto operations for VPN applications.
+
+```zig
+// zcrypto.vpn_crypto module
+const VpnCrypto = zcrypto.vpn_crypto;
+
+// VPN Tunnel
+const VpnTunnel = struct {
+    pub fn init(allocator: Allocator, config: VpnConfig) !VpnTunnel;
+    pub fn deinit(self: *VpnTunnel) void;
+    pub fn encryptPacket(self: *VpnTunnel, packet: []const u8) ![]u8;
+    pub fn decryptPacket(self: *VpnTunnel, encrypted_packet: []const u8) ![]u8;
+    pub fn performHandshake(self: *VpnTunnel, peer_public_key: [32]u8) !HandshakeResult;
+    pub fn rotateKeys(self: *VpnTunnel) !void;
+};
+
+// VPN Configuration
+const VpnConfig = enum {
+    wireguard_compatible,
+    ipsec_compatible,
+    custom,
+};
+
+// WireGuard-compatible implementation
+const WireGuardCrypto = struct {
+    pub fn generateKeypair() ![64]u8; // 32-byte private + 32-byte public
+    pub fn performHandshake(private_key: [32]u8, peer_public_key: [32]u8, preshared_key: ?[32]u8) !HandshakeKeys;
+    pub fn encryptTransport(keys: *HandshakeKeys, counter: u64, plaintext: []const u8) ![]u8;
+    pub fn decryptTransport(keys: *HandshakeKeys, counter: u64, ciphertext: []const u8) ![]u8;
+};
+```
+
+### **WASM Crypto Interface**
+
+Crypto interface optimized for WebAssembly environments.
+
+```zig
+// zcrypto.wasm_crypto module
+const WasmCrypto = zcrypto.wasm_crypto;
+
+// WASM Memory Management
+const WasmMemoryManager = struct {
+    pub fn allocate(size: usize) !*anyopaque;
+    pub fn deallocate(ptr: *anyopaque) void;
+    pub fn getUsage() MemoryUsage;
+};
+
+// WASM-exported functions
+export fn wasm_hash_sha256(data_ptr: [*]const u8, data_len: usize, output_ptr: [*]u8) void;
+export fn wasm_encrypt_aes256_gcm(data_ptr: [*]const u8, data_len: usize, key_ptr: [*]const u8, nonce_ptr: [*]const u8, output_ptr: [*]u8) usize;
+export fn wasm_decrypt_aes256_gcm(data_ptr: [*]const u8, data_len: usize, key_ptr: [*]const u8, nonce_ptr: [*]const u8, output_ptr: [*]u8) usize;
+export fn wasm_ed25519_sign(message_ptr: [*]const u8, message_len: usize, private_key_ptr: [*]const u8, signature_ptr: [*]u8) void;
+export fn wasm_ed25519_verify(message_ptr: [*]const u8, message_len: usize, signature_ptr: [*]const u8, public_key_ptr: [*]const u8) bool;
+```
+
+### **Blockchain Crypto Primitives**
+
+Bitcoin-compatible crypto operations with BIP support.
+
+```zig
+// zcrypto.blockchain_crypto module
+const BlockchainCrypto = zcrypto.blockchain_crypto;
+
+// Bitcoin Keypair
+const BitcoinKeypair = struct {
+    pub fn generate() !BitcoinKeypair;
+    pub fn fromSeed(seed: [32]u8) !BitcoinKeypair;
+    pub fn getPublicKey(self: *const BitcoinKeypair) [33]u8; // Compressed
+    pub fn sign(self: *const BitcoinKeypair, message_hash: [32]u8) ![64]u8;
+};
+
+// Bitcoin Address Generation
+const AddressType = enum { p2pkh, p2sh, p2wpkh, p2wsh };
+pub fn generateBitcoinAddress(public_key: [33]u8, address_type: AddressType) ![]const u8;
+
+// Transaction Signing
+pub fn signTransaction(transaction: []const u8, private_key: [32]u8) ![64]u8;
+pub fn verifyTransaction(transaction: []const u8, signature: [64]u8, public_key: [33]u8) !bool;
+
+// BIP-32 HD Wallets (already implemented, now enhanced)
+pub fn deriveHardenedChild(parent_key: [32]u8, parent_chain_code: [32]u8, index: u32) ![64]u8;
+pub fn derivePublicChild(parent_public: [33]u8, parent_chain_code: [32]u8, index: u32) ![65]u8;
+
+// Multisig Support
+const MultisigScript = struct {
+    pub fn create(threshold: u8, public_keys: []const [33]u8) ![]u8;
+    pub fn verify(script: []const u8, signatures: []const [64]u8, message_hash: [32]u8) !bool;
+};
+```
+
+### **Connection Pooling Crypto**
+
+Scalable crypto context management for high-load applications.
+
+```zig
+// zcrypto.pool_crypto module
+const PoolCrypto = zcrypto.pool_crypto;
+
+// Crypto Context Pool
+const CryptoContextPool = struct {
+    pub fn init(allocator: Allocator, max_contexts: usize) !CryptoContextPool;
+    pub fn deinit(self: *CryptoContextPool) void;
+    pub fn getContext(self: *CryptoContextPool, session_id: u64) !*CryptoContext;
+    pub fn releaseContext(self: *CryptoContextPool, context: *CryptoContext) void;
+    pub fn cleanupExpired(self: *CryptoContextPool) void;
+};
+
+// Crypto Context
+const CryptoContext = struct {
+    pub fn encrypt(self: *CryptoContext, data: []const u8) ![]u8;
+    pub fn decrypt(self: *CryptoContext, ciphertext: []const u8) ![]u8;
+    pub fn rotateKeys(self: *CryptoContext) !void;
+    pub fn getSessionInfo(self: *CryptoContext) SessionInfo;
+};
+
+// Session Pool Manager
+const SessionPoolManager = struct {
+    pub fn init(allocator: Allocator, config: PoolConfig) !SessionPoolManager;
+    pub fn createSession(self: *SessionPoolManager, peer_info: PeerInfo) !u64;
+    pub fn getSession(self: *SessionPoolManager, session_id: u64) ?*SessionData;
+    pub fn closeSession(self: *SessionPoolManager, session_id: u64) void;
+    pub fn performMaintenance(self: *SessionPoolManager) void;
+};
+```
+
+---
     // Sign a message
     const signature = try keypair.sign(message);
     const is_valid = keypair.verify(message, signature);
@@ -2013,71 +2221,67 @@ pub const ZVM = struct {
 };
 ```
 
-### **For Key Management Services**
+### **Performance Analysis & Profiling**
+
+Enterprise-grade performance monitoring with detailed analytics.
 
 ```zig
-// Key management integration
-const KeyManager = struct {
-    master_key: [32]u8,
-    allocator: std.mem.Allocator,
-    
-    pub fn deriveServiceKey(
-        self: *const KeyManager,
-        service_name: []const u8,
-        key_type: []const u8,
-    ) ![]u8 {
-        const info = try std.fmt.allocPrint(
-            self.allocator, "{s}:{s}", .{ service_name, key_type }
-        );
-        defer self.allocator.free(info);
-        
-        return try zcrypto.kdf.deriveKey(
-            self.allocator, &self.master_key, info, 32
-        );
-    }
+// zcrypto.perf_analysis module
+const PerfAnalysis = zcrypto.perf_analysis;
+
+// Performance Analyzer
+const PerformanceAnalyzer = struct {
+    pub fn init(allocator: Allocator, config: AnalysisConfig) !PerformanceAnalyzer;
+    pub fn deinit(self: *PerformanceAnalyzer) void;
+    pub fn startProfiling(self: *PerformanceAnalyzer, operation_name: []const u8) !void;
+    pub fn stopProfiling(self: *PerformanceAnalyzer, operation_name: []const u8) !void;
+    pub fn getDetailedMetrics(self: *PerformanceAnalyzer, operation_name: []const u8) DetailedMetrics;
+    pub fn getStatisticalSummary(self: *PerformanceAnalyzer) StatisticalSummary;
+    pub fn exportReport(self: *PerformanceAnalyzer, format: ReportFormat) ![]u8;
+};
+
+// Analysis Configuration
+const AnalysisConfig = struct {
+    enable_memory_tracking: bool = true,
+    enable_timing_analysis: bool = true,
+    enable_cache_analysis: bool = false,
+    enable_statistical_analysis: bool = true,
+    max_samples: u32 = 10000,
+    sampling_interval_ns: u64 = 1000,
+};
+
+// Detailed Metrics
+const DetailedMetrics = struct {
+    operation_name: []const u8,
+    sample_count: u32,
+    avg_time_ns: u64,
+    min_time_ns: u64,
+    max_time_ns: u64,
+    std_dev_ns: f64,
+    peak_memory_bytes: u64,
+    avg_memory_bytes: u64,
+    cache_hit_rate: f32,
+    hw_acceleration_used: bool,
+};
+
+// Statistical Summary
+const StatisticalSummary = struct {
+    total_operations: u64,
+    total_time_ns: u64,
+    avg_latency_ns: u64,
+    p50_latency_ns: u64,
+    p95_latency_ns: u64,
+    p99_latency_ns: u64,
+    throughput_ops_per_sec: f64,
+    memory_efficiency_score: f32,
+};
+
+// Memory Profiler
+const MemoryProfiler = struct {
+    pub fn init(allocator: Allocator) MemoryProfiler;
+    pub fn trackAllocation(self: *MemoryProfiler, size: usize, category: []const u8) void;
+    pub fn trackDeallocation(self: *MemoryProfiler, size: usize, category: []const u8) void;
+    pub fn detectLeaks(self: *MemoryProfiler) []MemoryLeak;
+    pub fn getMemoryReport(self: *MemoryProfiler) MemoryReport;
 };
 ```
-
----
-
-## 🚀 **PERFORMANCE NOTES**
-
-### **Zero-Copy Operations**
-
-- Use `zcrypto.quic.ZeroCopy` for high-throughput packet processing
-- Prefer in-place encryption/decryption when possible
-- Stack allocation is preferred over heap allocation for keys
-
-### **Batch Processing**
-
-- Use batch operations for multiple cryptographic operations
-- Consider SIMD optimizations available in x86_64 and ARM modules
-
-### **Memory Management**
-
-```zig
-// Efficient memory patterns
-pub fn efficientCrypto(allocator: std.mem.Allocator) !void {
-    // Use stack allocation for keys
-    var keypair: zcrypto.asym.ed25519.KeyPair = undefined;
-    keypair = zcrypto.asym.ed25519.generate();
-    
-    // Use arena allocator for temporary operations
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-    
-    // Temporary keys automatically freed
-    const derived_key = try zcrypto.kdf.deriveKey(
-        arena_allocator, "master", "derived", 32
-    );
-    _ = derived_key;
-    
-    // Secure cleanup
-    defer zcrypto.util.secureZero(std.mem.asBytes(&keypair));
-}
-```
-
----
-
-**🎯 This API documentation provides everything you need to integrate zcrypto v0.5.0 into your projects with confidence and security!**
