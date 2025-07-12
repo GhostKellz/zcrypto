@@ -167,6 +167,63 @@ pub fn legacyStretchPassword(
     return pbkdf2Sha256(allocator, password, salt, iterations, key_length);
 }
 
+// =============================================================================
+// ASYNC CONVENIENCE FUNCTIONS
+// =============================================================================
+
+/// Async convenience functions that use the async_crypto module
+/// Import async_crypto to use these functions in async contexts
+pub const Async = struct {
+    /// Get async KDF crypto handler
+    /// Usage: const async_kdf = zcrypto.kdf.Async.init(allocator, runtime);
+    pub fn init(allocator: std.mem.Allocator, runtime: anytype) !@import("async_crypto.zig").AsyncKdf {
+        return @import("async_crypto.zig").AsyncKdf.init(allocator, runtime);
+    }
+
+    /// Async Argon2id password hashing
+    /// Returns Task that can be awaited for hashed password
+    /// This is the most expensive KDF operation and benefits greatly from async execution
+    pub fn argon2idAsync(allocator: std.mem.Allocator, runtime: anytype, password: []const u8, salt: []const u8) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
+        const async_kdf = init(allocator, runtime) catch unreachable;
+        return async_kdf.argon2idAsync(password, salt);
+    }
+
+    /// Async PBKDF2 password hashing
+    /// Returns Task that can be awaited for derived key
+    /// For legacy compatibility - prefer argon2idAsync for new applications
+    pub fn pbkdf2Sha256Async(allocator: std.mem.Allocator, runtime: anytype, password: []const u8, salt: []const u8, iterations: u32, output_len: usize) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
+        const async_kdf = init(allocator, runtime) catch unreachable;
+        return async_kdf.pbkdf2Sha256Async(password, salt, iterations, output_len);
+    }
+
+    /// Async HKDF-Expand-Label for TLS 1.3 key derivation
+    /// Returns Task that can be awaited for derived key
+    /// Useful for parallel key derivation in TLS handshakes
+    pub fn hkdfExpandLabelAsync(allocator: std.mem.Allocator, runtime: anytype, prk: []const u8, label: []const u8, context: []const u8, length: u16) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
+        const async_kdf = init(allocator, runtime) catch unreachable;
+        return async_kdf.hkdfExpandLabelAsync(prk, label, context, length);
+    }
+
+    /// Async password stretching using Argon2id
+    /// Convenience wrapper for argon2idAsync with sensible defaults
+    pub fn stretchPasswordAsync(allocator: std.mem.Allocator, runtime: anytype, password: []const u8, salt: []const u8) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
+        return argon2idAsync(allocator, runtime, password, salt);
+    }
+
+    /// Async legacy password stretching using PBKDF2
+    /// For compatibility with older systems - prefer stretchPasswordAsync for new code
+    pub fn legacyStretchPasswordAsync(allocator: std.mem.Allocator, runtime: anytype, password: []const u8, salt: []const u8, key_length: usize) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
+        const iterations = 600_000; // Reasonable iteration count for 2025
+        return pbkdf2Sha256Async(allocator, runtime, password, salt, iterations, key_length);
+    }
+
+    /// Async key derivation for applications
+    /// Convenience wrapper for hkdfExpandLabelAsync
+    pub fn deriveKeyAsync(allocator: std.mem.Allocator, runtime: anytype, master_secret: []const u8, label: []const u8, length: u16) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
+        return hkdfExpandLabelAsync(allocator, runtime, master_secret, label, "", length);
+    }
+};
+
 test "hkdf sha256 basic" {
     const allocator = std.testing.allocator;
 

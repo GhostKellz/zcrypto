@@ -319,6 +319,73 @@ pub const secp256r1 = struct {
     }
 };
 
+// =============================================================================
+// ASYNC CONVENIENCE FUNCTIONS
+// =============================================================================
+
+/// Async convenience functions that use the async_crypto module
+/// Import async_crypto to use these functions in async contexts
+pub const Async = struct {
+    /// Get async asymmetric crypto handler
+    /// Usage: const async_asym = zcrypto.asym.Async.init(allocator, runtime);
+    pub fn init(allocator: std.mem.Allocator, runtime: anytype) !@import("async_crypto.zig").AsyncAsymmetric {
+        return @import("async_crypto.zig").AsyncAsymmetric.init(allocator, runtime);
+    }
+
+    /// Async Ed25519 key generation
+    /// Returns Task that can be awaited for Ed25519KeyPair
+    pub fn generateEd25519Async(allocator: std.mem.Allocator, runtime: anytype) @import("async_crypto.zig").Task(Ed25519KeyPair) {
+        const async_asym = init(allocator, runtime) catch unreachable;
+        return async_asym.generateEd25519KeypairAsync();
+    }
+
+    /// Async Ed25519 signing
+    /// Returns Task that can be awaited for signature result
+    pub fn ed25519SignAsync(allocator: std.mem.Allocator, runtime: anytype, private_key: [ED25519_PRIVATE_KEY_SIZE]u8, message: []const u8) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
+        const async_asym = init(allocator, runtime) catch unreachable;
+        const ed25519_private_key = @import("async_crypto.zig").AsymCrypto.Ed25519.PrivateKey{ .bytes = private_key };
+        return async_asym.ed25519SignAsync(ed25519_private_key, message);
+    }
+
+    /// Async secp256k1 key generation
+    /// Returns Task that can be awaited for Secp256k1KeyPair
+    pub fn generateSecp256k1Async(allocator: std.mem.Allocator, runtime: anytype) @import("async_crypto.zig").Task(Secp256k1KeyPair) {
+        const async_asym = init(allocator, runtime) catch unreachable;
+        return async_asym.generateSecp256k1KeypairAsync();
+    }
+
+    /// Async X25519 key exchange
+    /// Returns Task that can be awaited for shared secret
+    pub fn x25519KeyExchangeAsync(allocator: std.mem.Allocator, runtime: anytype, our_private: [CURVE25519_PRIVATE_KEY_SIZE]u8, their_public: [CURVE25519_PUBLIC_KEY_SIZE]u8) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
+        const async_asym = init(allocator, runtime) catch unreachable;
+        const x25519_private = @import("async_crypto.zig").AsymCrypto.X25519.PrivateKey{ .bytes = our_private };
+        const x25519_public = @import("async_crypto.zig").AsymCrypto.X25519.PublicKey{ .bytes = their_public };
+        return async_asym.x25519KeyExchangeAsync(x25519_private, x25519_public);
+    }
+
+    /// Async Ed25519 batch signature verification
+    /// Verifies multiple signatures in parallel for improved performance
+    pub fn ed25519BatchVerifyAsync(allocator: std.mem.Allocator, runtime: anytype, verifications: []const Ed25519VerifyData) @import("async_crypto.zig").Task([]bool) {
+        const async_asym = init(allocator, runtime) catch unreachable;
+        return async_asym.ed25519BatchVerifyAsync(verifications);
+    }
+};
+
+/// Data structure for batch Ed25519 verification
+pub const Ed25519VerifyData = struct {
+    public_key: [ED25519_PUBLIC_KEY_SIZE]u8,
+    message: []const u8,
+    signature: [ED25519_SIGNATURE_SIZE]u8,
+
+    pub fn fromKeypair(keypair: Ed25519KeyPair, message: []const u8, signature: [ED25519_SIGNATURE_SIZE]u8) Ed25519VerifyData {
+        return Ed25519VerifyData{
+            .public_key = keypair.public_key,
+            .message = message,
+            .signature = signature,
+        };
+    }
+};
+
 test "ed25519 keypair generation and signing" {
     const keypair = generateEd25519();
     const message = "Hello, zcrypto signatures!";

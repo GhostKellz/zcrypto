@@ -1,174 +1,200 @@
-# 🚀 ZCrypto v0.7.0 Roadmap - Ecosystem Integration
+# 🚀 ZCrypto v0.8.0 Roadmap - TokioZ Async Optimization & Hardware Acceleration
 
-**Strategic improvements to complement zquic v0.7.0, ghostmesh VPN, ZVM, and ghostchain**
-
----
-
-## 🎯 **TOP 10 STRATEGIC IMPROVEMENTS**
-
-### **1. Zero-Copy Crypto API (`src/zero_copy.zig`)** 
-**Priority: CRITICAL for zquic performance**
-- ✅ Current: Basic in-place operations
-- 🚀 **Upgrade**: Advanced zero-copy packet processing API
-- **Impact**: Direct integration with zquic's zero-copy packet processing
-- **Features**: 
-  - Packet buffer pools with crypto contexts
-  - Direct memory mapping for hardware acceleration
-  - Vectorized batch operations without memory allocation
-  - Ring buffer crypto for continuous packet streams
-
-### **2. BBR-Optimized Crypto Profiling (`src/bbr_crypto.zig`)**
-**Priority: HIGH for zquic BBR congestion control**
-- 🆕 **New Module**: Crypto performance profiling for BBR
-- **Purpose**: Help BBR make crypto-aware bandwidth decisions
-- **Features**:
-  - Real-time crypto latency measurement
-  - Encryption/decryption throughput tracking
-  - Hardware acceleration availability reporting
-  - Crypto workload prediction for congestion control
-
-### **3. VPN-Optimized Crypto Suite (`src/vpn_crypto.zig`)**
-**Priority: HIGH for ghostmesh VPN**
-- 🆕 **New Module**: VPN-specific crypto operations
-- **Features**:
-  - Tunnel establishment with post-quantum security
-  - Per-connection key rotation for long-lived VPN tunnels
-  - Multi-hop encryption for mesh VPN routing
-  - VPN header protection and traffic obfuscation
-  - Bandwidth-efficient crypto for mobile VPN clients
-
-### **4. WASM Crypto Interface (`src/wasm_crypto.zig`)**
-**Priority: HIGH for ZVM WASM runtime**
-- 🆕 **New Module**: WebAssembly-compatible crypto API
-- **Features**:
-  - WASM-safe memory management (no direct pointers)
-  - Sandboxed crypto operations for untrusted WASM
-  - Streaming crypto API for large WASM data processing
-  - WASM-optimized algorithms (smaller code size)
-  - Gas-metered crypto operations for ZVM billing
-
-### **5. Blockchain Crypto Primitives (`src/blockchain_crypto.zig`)**
-**Priority: HIGH for ghostchain integration**
-- 🆕 **New Module**: Blockchain-specific crypto operations
-- **Features**:
-  - High-performance Merkle tree operations
-  - Batch signature verification for transaction blocks
-  - Consensus-optimized hash functions
-  - Quantum-safe blockchain signatures (ML-DSA)
-  - Zero-knowledge proof primitives for privacy
-
-### **6. Advanced Connection Pooling Crypto (`src/pool_crypto.zig`)**
-**Priority: MEDIUM for zquic connection pooling**
-- 🆕 **New Module**: Crypto context pooling and reuse
-- **Features**:
-  - Pre-computed crypto contexts for connection pools
-  - Crypto state sharing between pooled connections
-  - Session resumption with cached crypto materials
-  - Bulk key derivation for connection batches
-  - Memory-efficient crypto context compression
-
-### **7. Cross-Language FFI Standardization (`src/ffi_v2.zig`)**
-**Priority: MEDIUM for ecosystem integration**
-- ✅ Current: Basic C FFI
-- 🚀 **Upgrade**: Advanced multi-language FFI
-- **Features**:
-  - Rust-native bindings (no unsafe blocks needed)
-  - Go bindings for cloud integrations
-  - Python bindings with NumPy integration
-  - JavaScript/WASM bindings for web applications
-  - Standardized error codes across all languages
-
-### **8. Formal Verification Expansion (`src/formal_v2.zig`)**
-**Priority: MEDIUM for enterprise security**
-- ✅ Current: Basic verification framework
-- 🚀 **Upgrade**: Production-grade formal verification
-- **Features**:
-  - Automated security property verification
-  - Side-channel resistance proofs
-  - Memory safety verification for all modules
-  - Post-quantum security level certification
-  - Compliance certification helpers (FIPS, CC)
-
-### **9. Advanced Performance Analysis (`src/perf_v2.zig`)**
-**Priority: MEDIUM for optimization**
-- ✅ Current: Basic performance tracking
-- 🚀 **Upgrade**: Advanced performance optimization suite
-- **Features**:
-  - Real-time crypto bottleneck detection
-  - Automatic algorithm selection based on workload
-  - Performance regression testing framework
-  - Crypto flame graphs and profiling
-  - Hardware utilization optimization
-
-### **10. Quantum-Safe Migration Tools (`src/pq_migration.zig`)**
-**Priority: LOW (future-proofing)**
-- 🆕 **New Module**: Post-quantum migration utilities
-- **Features**:
-  - Gradual migration from classical to PQ crypto
-  - Hybrid security during transition periods
-  - Compatibility testing with existing systems
-  - Migration planning and timeline tools
-  - Risk assessment for quantum threats
+**Complete the TokioZ v1.0.1 integration with full SIMD, hardware acceleration, and async optimizations**
 
 ---
 
-## 🔗 **ECOSYSTEM INTEGRATION MATRIX**
+## 🎯 **CRITICAL ASYNC CRYPTO IMPROVEMENTS**
 
-| Feature | zquic v0.7.0 | ghostmesh VPN | ZVM | ghostchain |
-|---------|--------------|---------------|-----|------------|
-| Zero-Copy Crypto | ✅ Critical | ✅ High | ⚠️ Medium | ⚠️ Medium |
-| BBR Crypto Profiling | ✅ Critical | ⚠️ Medium | ❌ Low | ❌ Low |
-| VPN Crypto Suite | ⚠️ Medium | ✅ Critical | ❌ Low | ❌ Low |
-| WASM Interface | ❌ Low | ❌ Low | ✅ Critical | ⚠️ Medium |
-| Blockchain Primitives | ❌ Low | ❌ Low | ⚠️ Medium | ✅ Critical |
-| Connection Pooling | ✅ High | ✅ High | ⚠️ Medium | ⚠️ Medium |
-| FFI Standardization | ✅ High | ✅ High | ✅ High | ✅ High |
-| Formal Verification | ⚠️ Medium | ✅ High | ✅ High | ✅ Critical |
-| Performance Analysis | ✅ High | ✅ High | ✅ High | ⚠️ Medium |
-| PQ Migration | ⚠️ Medium | ⚠️ Medium | ⚠️ Medium | ✅ High |
+### **1. Fix SIMD Batch Processing Memory Management (`src/async_crypto.zig`)**
+**Priority: CRITICAL - Currently disabled due to memory leaks**
+- ❌ **Current**: SIMD batch processing disabled (`if (false and ...)`)
+- 🚀 **Target**: Proper SIMD batch processing with correct memory management
+- **Issues to fix**:
+  - Fix allocator mismatch between `simulatedBatchEncryption` and cleanup code
+  - Implement proper ownership transfer for SIMD results
+  - Fix loop iteration when processing 8 packets at a time
+  - Add proper cleanup for both success and error cases
+- **Implementation**:
+  ```zig
+  // Convert for loop to while loop for proper SIMD batch iteration
+  // Ensure consistent allocator usage throughout batch processing
+  // Add proper error handling with cleanup for partial failures
+  ```
 
-**Legend**: ✅ Critical/High Priority | ⚠️ Medium Priority | ❌ Low Priority
+### **2. Real Hardware SIMD Implementation (`src/simd_crypto.zig`)**
+**Priority: HIGH - Replace simulation with actual hardware acceleration**
+- ❌ **Current**: `simulatedBatchEncryption()` - fake SIMD processing
+- 🚀 **Target**: Real SIMD encryption using hardware instructions
+- **Features**:
+  - AES-NI instruction set integration for Intel/AMD
+  - ARM NEON crypto extensions for ARM processors  
+  - AVX2/AVX-512 vectorized operations for bulk encryption
+  - ChaCha20 SIMD implementation for ARM and x86
+  - Automatic fallback to scalar operations when SIMD unavailable
+- **API Design**:
+  ```zig
+  pub const SimdCrypto = struct {
+      pub fn batchEncryptAES256GCM(packets: [][]u8, keys: [][]const u8, nonces: [][]const u8) ![]EncryptResult;
+      pub fn batchEncryptChaCha20Poly1305(packets: [][]u8, keys: [][]const u8, nonces: [][]const u8) ![]EncryptResult;
+      pub fn detectSimdCapabilities() SimdCapabilities;
+  };
+  ```
+
+### **3. Advanced Hardware Acceleration (`src/hardware_v2.zig`)**
+**Priority: HIGH - Expand beyond basic AES-NI detection**
+- ✅ **Current**: Basic hardware detection in `hardware.zig`
+- 🚀 **Target**: Full hardware crypto acceleration suite
+- **Features**:
+  - Intel QAT (QuickAssist Technology) integration for enterprise
+  - ARM TrustZone crypto acceleration
+  - NVIDIA GPU crypto acceleration via CUDA
+  - Intel CET (Control-flow Enforcement Technology) for ROP protection
+  - Hardware random number generator integration (RDRAND, RDSEED)
+- **Performance Targets**:
+  - 10Gbps+ throughput for AES-256-GCM on modern CPUs
+  - Sub-microsecond latency for small packet encryption
+  - 50% reduction in CPU usage compared to software-only crypto
+
+### **4. TokioZ Async Runtime Optimization (`src/async_crypto.zig`)**
+**Priority: HIGH - Optimize async integration with TokioZ v1.0.1**
+- ✅ **Current**: Basic TokioZ integration working
+- 🚀 **Target**: Production-grade async crypto runtime
+- **Missing Features**:
+  - Real timeout support (currently disabled with placeholder)
+  - Proper task cancellation and cleanup
+  - Async task priority management for crypto operations
+  - Integration with TokioZ's I/O reactor for network crypto
+  - Async crypto context pooling and reuse
+- **API Improvements**:
+  ```zig
+  // Add real timeout support
+  pub fn encryptWithTimeout(data: []u8, timeout_ms: u64) !Task(EncryptResult);
+  
+  // Add cancellation support  
+  pub fn cancelCryptoTask(task_id: u32) void;
+  
+  // Add priority crypto operations
+  pub fn encryptUrgent(data: []u8) Task(EncryptResult);
+  ```
+
+### **5. Memory Pool Management (`src/crypto_pools.zig`)**
+**Priority: HIGH - Eliminate dynamic allocation in hot paths**
+- ❌ **Current**: Heavy use of `allocator.alloc()` and `allocator.dupe()` in crypto operations
+- 🚀 **Target**: Pre-allocated memory pools for zero-allocation crypto
+- **Features**:
+  - Ring buffer pools for packet encryption/decryption
+  - Pre-allocated task context pools
+  - SIMD result buffer pools
+  - Memory-mapped crypto contexts for hardware acceleration
+  - Lock-free memory pools for multi-threaded async operations
+- **Performance Impact**:
+  - Eliminate 90%+ of allocations in crypto hot paths
+  - Reduce crypto latency by 30-50% by avoiding malloc overhead
+  - Enable deterministic latency for real-time applications
 
 ---
 
-## 📈 **IMPLEMENTATION PHASES**
+## 🔧 **ASYNC CRYPTO PIPELINE IMPROVEMENTS**
 
-### **Phase 1: zquic v0.7.0 Support (Immediate)**
-1. Zero-Copy Crypto API
-2. BBR Crypto Profiling  
-3. Connection Pooling Crypto
+### **6. Streaming Crypto Demo Fix (`examples/tokioz_crypto_example.zig`)**
+**Priority: MEDIUM - Complete the streaming demo that was simplified**
+- ❌ **Current**: Streaming demo disabled due to QUIC packet format issues
+- 🚀 **Target**: Working streaming async crypto demo
+- **Issues to fix**:
+  - Proper QUIC packet buffer allocation with encryption overhead
+  - Fix `sealInPlace()` payload length calculation 
+  - Add proper error handling for malformed packets
+  - Demonstrate real streaming packet processing pipeline
 
-### **Phase 2: Ecosystem Expansion (Next Sprint)**
-4. VPN Crypto Suite (ghostmesh)
-5. WASM Interface (ZVM)
-6. Blockchain Primitives (ghostchain)
+### **7. Crypto Pipeline Statistics (`src/pipeline_metrics.zig`)**
+**Priority: MEDIUM - Add detailed performance monitoring**
+- ✅ **Current**: Basic pipeline statistics (packets processed, latency)
+- 🚀 **Target**: Comprehensive crypto performance analytics
+- **Features**:
+  - Per-algorithm performance breakdowns
+  - Hardware acceleration utilization metrics
+  - SIMD efficiency tracking
+  - Memory allocation profiling
+  - Real-time performance dashboards for debugging
 
-### **Phase 3: Production Hardening (Future)**
-7. FFI Standardization
-8. Formal Verification Expansion
-9. Performance Analysis v2
-
-### **Phase 4: Future-Proofing (Long-term)**
-10. Quantum-Safe Migration Tools
+### **8. Async Error Recovery (`src/async_errors.zig`)**
+**Priority: MEDIUM - Robust error handling for production**
+- ⚠️ **Current**: Basic error handling with `AsyncCryptoResult`
+- 🚀 **Target**: Production-grade async error recovery
+- **Features**:
+  - Automatic retry with exponential backoff for transient failures
+  - Circuit breaker pattern for failing crypto hardware
+  - Graceful degradation (SIMD → scalar fallback)
+  - Error telemetry and alerting integration
+  - Crypto operation audit logging
 
 ---
 
-## 🚀 **SUCCESS METRICS**
+## 🚀 **PERFORMANCE OPTIMIZATION TARGETS**
 
-- **zquic performance**: 50% improvement in packet processing throughput
-- **ghostmesh VPN**: Sub-1ms crypto latency for tunnel establishment
-- **ZVM integration**: WASM crypto operations under 100KB memory usage
-- **ghostchain**: 10,000+ TPS with post-quantum signatures
-- **Cross-language adoption**: 90% reduction in FFI integration time
+### **9. Benchmark Suite (`benches/async_crypto_bench.zig`)**
+**Priority: MEDIUM - Comprehensive performance validation**
+- ❌ **Current**: No dedicated async crypto benchmarks
+- 🚀 **Target**: Full benchmark suite with regression testing
+- **Benchmarks**:
+  - Single packet encryption latency
+  - Batch SIMD throughput comparison
+  - Memory allocation overhead measurement
+  - Hardware acceleration speedup quantification
+  - TokioZ async overhead analysis
+
+### **10. Zero-Copy Integration (`src/zero_copy_async.zig`)**
+**Priority: HIGH - Eliminate unnecessary data copying**
+- ⚠️ **Current**: Multiple `dupe()` calls in async crypto pipeline
+- 🚀 **Target**: Zero-copy async crypto operations
+- **Features**:
+  - In-place encryption with proper buffer management
+  - Memory-mapped packet processing
+  - Scatter-gather I/O for bulk operations
+  - Direct hardware DMA integration where available
 
 ---
 
-## 🎯 **NEXT ACTIONS**
+## 📋 **IMPLEMENTATION PHASES**
 
-1. **Implement Zero-Copy API** to unblock zquic v0.7.0 performance goals
-2. **Add BBR crypto profiling** for intelligent congestion control
-3. **Create VPN crypto suite** for ghostmesh integration
-4. **Design WASM interface** for ZVM runtime compatibility
-5. **Plan blockchain primitives** for ghostchain performance
+### **Phase 1: Fix Critical Issues (Immediate - v0.8.0)**
+1. Fix SIMD batch processing memory management
+2. Add proper TokioZ timeout and cancellation support
+3. Implement memory pool management
+4. Fix streaming crypto demo
 
-**ZCrypto v0.7.0 will be the crypto foundation that powers the entire GhostChain ecosystem!**
+### **Phase 2: Hardware Acceleration (Next Sprint - v0.8.1)**
+5. Replace simulated SIMD with real hardware instructions
+6. Add advanced hardware acceleration (QAT, TrustZone, GPU)
+7. Implement zero-copy async operations
+8. Add comprehensive benchmarking
+
+### **Phase 3: Production Hardening (v0.8.2)**
+9. Add crypto pipeline statistics and monitoring
+10. Implement robust async error recovery
+11. Performance optimization and regression testing
+12. Documentation and integration guides
+
+---
+
+## 🎯 **SUCCESS METRICS**
+
+- **SIMD Performance**: 4-8x speedup for batch encryption vs scalar
+- **Hardware Acceleration**: 10Gbps+ sustained crypto throughput
+- **Memory Efficiency**: <1% dynamic allocations in crypto hot paths  
+- **Async Latency**: Sub-100μs for small packet async encryption
+- **Reliability**: Zero memory leaks under stress testing
+- **Integration**: Seamless zquic async packet processing
+
+---
+
+## 🔥 **NEXT IMMEDIATE ACTIONS**
+
+1. **Fix SIMD memory leaks** - Convert loop structure and fix allocator usage
+2. **Add real hardware SIMD** - Replace `simulatedBatchEncryption` with AES-NI/NEON
+3. **Implement memory pools** - Eliminate allocations in async crypto hot paths
+4. **Add TokioZ timeouts** - Complete the async runtime integration
+5. **Benchmark and validate** - Ensure performance targets are met
+
+**ZCrypto v0.8.0 will deliver production-grade async crypto with full hardware acceleration for zquic and the GhostChain ecosystem!**

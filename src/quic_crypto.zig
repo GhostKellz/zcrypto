@@ -334,15 +334,15 @@ pub const QuicConnection = struct {
             .cipher_suite = cipher_suite,
             .client_secret = client_secret,
             .server_secret = server_secret,
-            .header_protection = QuicCrypto.HeaderProtection.init(cipher_suite, &hp_key),
-            .aead = QuicCrypto.AEAD.init(cipher_suite, &client_key),
+            .header_protection = QuicCrypto.HeaderProtection.init(cipher_suite, hp_key[0..cipher_suite.keySize()]),
+            .aead = QuicCrypto.AEAD.init(cipher_suite, client_key[0..cipher_suite.keySize()]),
         };
     }
 
     pub fn encryptPacket(self: *QuicConnection, packet: []u8, packet_number: u64) !usize {
         // Construct nonce from packet number
         var nonce: [12]u8 = std.mem.zeroes([12]u8);
-        std.mem.writeIntBig(u64, nonce[4..12], packet_number);
+        std.mem.writeInt(u64, nonce[4..12], packet_number, .big);
 
         // Encrypt payload
         var tag: [16]u8 = undefined;
@@ -363,7 +363,7 @@ pub const QuicConnection = struct {
 
         // Construct nonce
         var nonce: [12]u8 = std.mem.zeroes([12]u8);
-        std.mem.writeIntBig(u64, nonce[4..12], packet_number);
+        std.mem.writeInt(u64, nonce[4..12], packet_number, .big);
 
         // Decrypt payload
         const tag = packet[packet.len - 16 ..];

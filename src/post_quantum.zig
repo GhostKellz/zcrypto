@@ -1,6 +1,8 @@
 //! Post-Quantum Cryptography implementation
 //! NIST standardized algorithms: ML-KEM (Kyber) and ML-DSA (Dilithium)
 //! Provides quantum-resistant key exchange and digital signatures
+//! 
+//! Async operations available via async_crypto module for high-performance applications
 
 const std = @import("std");
 const crypto = std.crypto;
@@ -523,6 +525,85 @@ pub const HybridSignature = struct {
         return classical_valid and pq_valid;
     }
 };
+
+// =============================================================================
+// ASYNC CONVENIENCE FUNCTIONS
+// =============================================================================
+
+/// Async convenience functions that use the async_crypto module
+/// Import async_crypto to use these functions in async contexts
+pub const Async = struct {
+    /// Get async post-quantum crypto handler
+    /// Usage: const async_pq = zcrypto.post_quantum.Async.init(allocator, runtime);
+    pub fn init(allocator: std.mem.Allocator, runtime: anytype) !@import("async_crypto.zig").AsyncPostQuantum {
+        return @import("async_crypto.zig").AsyncPostQuantum.init(allocator, runtime);
+    }
+
+    /// Async ML-KEM-768 key generation
+    /// Returns Task that can be awaited for KeyPair
+    pub fn generateMlKem768KeypairAsync(allocator: std.mem.Allocator, runtime: anytype) @import("async_crypto.zig").Task(ML_KEM_768.KeyPair) {
+        const async_pq = init(allocator, runtime) catch unreachable;
+        return async_pq.generateMlKemKeypairAsync();
+    }
+
+    /// Async ML-DSA-65 signature generation
+    /// Returns Task that can be awaited for signature bytes
+    pub fn mlDsa65SignAsync(allocator: std.mem.Allocator, runtime: anytype, private_key: ML_DSA_65.PrivateKey, message: []const u8) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
+        const async_pq = init(allocator, runtime) catch unreachable;
+        return async_pq.mlDsaSignAsync(private_key, message);
+    }
+
+    /// Async ML-DSA-65 signature verification
+    /// Returns Task that can be awaited for bool result
+    pub fn mlDsa65VerifyAsync(allocator: std.mem.Allocator, runtime: anytype, public_key: ML_DSA_65.PublicKey, message: []const u8, signature: []const u8) @import("async_crypto.zig").Task(bool) {
+        const async_pq = init(allocator, runtime) catch unreachable;
+        return async_pq.mlDsaVerifyAsync(public_key, message, signature);
+    }
+
+    /// Async hybrid key exchange
+    /// Combines X25519 + ML-KEM-768 asynchronously
+    pub fn hybridKeyExchangeAsync(allocator: std.mem.Allocator, runtime: anytype, our_private: HybridKeyExchange.HybridKeyPair, their_classical_public: [32]u8, their_pq_public: [ML_KEM_768.PUBLIC_KEY_SIZE]u8) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
+        const task_data = allocator.create(HybridKexData) catch unreachable;
+        task_data.* = .{
+            .our_private = our_private,
+            .their_classical_public = their_classical_public,
+            .their_pq_public = their_pq_public,
+            .allocator = allocator,
+        };
+        return runtime.spawn(hybridKexWorker, task_data);
+    }
+};
+
+const HybridKexData = struct {
+    our_private: HybridKeyExchange.HybridKeyPair,
+    their_classical_public: [32]u8,
+    their_pq_public: [ML_KEM_768.PUBLIC_KEY_SIZE]u8,
+    allocator: std.mem.Allocator,
+
+    pub fn deinit(self: *HybridKexData) void {
+        self.allocator.destroy(self);
+    }
+};
+
+fn hybridKexWorker(task_data: *HybridKexData) @import("async_crypto.zig").AsyncCryptoResult {
+    const start_time = std.time.nanoTimestamp();
+    defer task_data.deinit();
+
+    const shared_secret = HybridKeyExchange.keyExchange(task_data.our_private, task_data.their_classical_public, task_data.their_pq_public) catch |err| {
+        const end_time = std.time.nanoTimestamp();
+        const error_msg = std.fmt.allocPrint(task_data.allocator, "Hybrid key exchange failed: {}", .{err}) catch "Hybrid key exchange failed";
+        return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, @intCast(end_time - start_time));
+    };
+
+    const result_data = task_data.allocator.dupe(u8, &shared_secret.combined_secret) catch {
+        const end_time = std.time.nanoTimestamp();
+        const error_msg = task_data.allocator.dupe(u8, "Memory allocation failed") catch "Memory allocation failed";
+        return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, @intCast(end_time - start_time));
+    };
+
+    const end_time = std.time.nanoTimestamp();
+    return @import("async_crypto.zig").AsyncCryptoResult.success_result(result_data, @intCast(end_time - start_time));
+}
 
 // Tests
 test "ML-KEM-768 key exchange" {

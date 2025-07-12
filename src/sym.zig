@@ -399,3 +399,60 @@ test "simplified chacha20 api" {
     
     try std.testing.expectEqualSlices(u8, plaintext, decrypted);
 }
+
+// =============================================================================
+// ASYNC CONVENIENCE FUNCTIONS
+// =============================================================================
+
+/// Async convenience functions that use the async_crypto module
+/// Import async_crypto to use these functions in async contexts  
+pub const Async = struct {
+    /// Get async symmetric crypto handler
+    /// Usage: const async_sym = zcrypto.sym.Async.init(allocator, runtime);
+    pub fn init(allocator: std.mem.Allocator, runtime: anytype) !@import("async_crypto.zig").AsyncSymmetric {
+        return @import("async_crypto.zig").AsyncSymmetric.init(allocator, runtime);
+    }
+
+    /// Async AES-256-GCM encryption
+    /// Returns Task that can be awaited for encrypted result
+    pub fn encryptAes256GcmAsync(allocator: std.mem.Allocator, runtime: anytype, key: [AES_256_KEY_SIZE]u8, nonce: [GCM_NONCE_SIZE]u8, plaintext: []const u8, aad: []const u8) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
+        const async_sym = init(allocator, runtime) catch unreachable;
+        return async_sym.aes256GcmEncryptAsync(key, nonce, plaintext, aad);
+    }
+
+    /// Async AES-128-GCM encryption  
+    /// Returns Task that can be awaited for encrypted result
+    pub fn encryptAes128GcmAsync(allocator: std.mem.Allocator, runtime: anytype, key: [AES_128_KEY_SIZE]u8, nonce: [GCM_NONCE_SIZE]u8, plaintext: []const u8, aad: []const u8) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
+        const async_sym = init(allocator, runtime) catch unreachable;
+        var key_256: [32]u8 = [_]u8{0} ** 32;
+        @memcpy(key_256[0..16], &key);
+        return async_sym.aes256GcmEncryptAsync(key_256, nonce, plaintext, aad);
+    }
+
+    /// Async ChaCha20-Poly1305 encryption
+    /// Returns Task that can be awaited for encrypted result  
+    pub fn encryptChaCha20Poly1305Async(allocator: std.mem.Allocator, runtime: anytype, key: [CHACHA20_KEY_SIZE]u8, nonce: [CHACHA20_NONCE_SIZE]u8, plaintext: []const u8, aad: []const u8) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
+        const async_sym = init(allocator, runtime) catch unreachable;
+        return async_sym.chacha20Poly1305EncryptAsync(key, nonce, plaintext, aad);
+    }
+
+    /// Async batch symmetric encryption
+    /// Encrypts multiple plaintexts in parallel for high throughput
+    /// Uses hardware acceleration when available
+    pub fn batchEncryptAsync(allocator: std.mem.Allocator, runtime: anytype, algorithm: @import("async_crypto.zig").SymmetricAlgorithm, key: []const u8, plaintexts: [][]const u8, nonces: [][]const u8, aads: [][]const u8) @import("async_crypto.zig").Task([]@import("async_crypto.zig").AsyncCryptoResult) {
+        const async_sym = init(allocator, runtime) catch unreachable;
+        return async_sym.batchEncryptAsync(algorithm, key, plaintexts, nonces, aads);
+    }
+
+    /// Async AES-256 batch encryption
+    /// Convenience wrapper for batch AES-256-GCM operations
+    pub fn batchEncryptAes256Async(allocator: std.mem.Allocator, runtime: anytype, key: [AES_256_KEY_SIZE]u8, plaintexts: [][]const u8, nonces: [][]const u8, aads: [][]const u8) @import("async_crypto.zig").Task([]@import("async_crypto.zig").AsyncCryptoResult) {
+        return batchEncryptAsync(allocator, runtime, .aes_256_gcm, &key, plaintexts, nonces, aads);
+    }
+
+    /// Async ChaCha20 batch encryption
+    /// Convenience wrapper for batch ChaCha20-Poly1305 operations
+    pub fn batchEncryptChaCha20Async(allocator: std.mem.Allocator, runtime: anytype, key: [CHACHA20_KEY_SIZE]u8, plaintexts: [][]const u8, nonces: [][]const u8, aads: [][]const u8) @import("async_crypto.zig").Task([]@import("async_crypto.zig").AsyncCryptoResult) {
+        return batchEncryptAsync(allocator, runtime, .chacha20_poly1305, &key, plaintexts, nonces, aads);
+    }
+};

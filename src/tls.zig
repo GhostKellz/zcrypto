@@ -534,3 +534,180 @@ test "packet number computation" {
     const result3 = computePacketNumber(0xff, 0x00, 8);
     try std.testing.expectEqual(@as(u64, 0x100), result3);
 }
+
+// =============================================================================
+// ASYNC CONVENIENCE FUNCTIONS  
+// =============================================================================
+
+/// Async convenience functions that use the async_crypto module
+/// Import async_crypto to use these functions in async contexts
+pub const Async = struct {
+    /// Get async KDF crypto handler for TLS operations
+    /// Usage: const async_tls = zcrypto.tls.Async.init(allocator, runtime);
+    pub fn init(allocator: std.mem.Allocator, runtime: anytype) !@import("async_crypto.zig").AsyncKdf {
+        return @import("async_crypto.zig").AsyncKdf.init(allocator, runtime);
+    }
+
+    /// Async key derivation from TLS 1.3/QUIC secrets
+    /// Returns Task that can be awaited for TrafficKeys
+    /// Performs multiple HKDF-Expand-Label operations in parallel
+    pub fn deriveKeysAsync(allocator: std.mem.Allocator, runtime: anytype, secrets: Secrets, is_client: bool) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
+        const task_data = allocator.create(TlsKeyDerivationData) catch unreachable;
+        task_data.* = .{
+            .secrets = secrets,
+            .is_client = is_client,
+            .allocator = allocator,
+        };
+        return runtime.spawn(tlsKeyDerivationWorker, task_data);
+    }
+
+    /// Async HKDF-Expand-Label operation for TLS 1.3
+    /// Returns Task that can be awaited for derived key material
+    pub fn hkdfExpandLabelAsync(allocator: std.mem.Allocator, runtime: anytype, secret: []const u8, label: []const u8, context: []const u8, length: u16) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
+        const async_kdf = init(allocator, runtime) catch unreachable;
+        return async_kdf.hkdfExpandLabelAsync(secret, label, context, length);
+    }
+
+    /// Async TLS 1.3 key schedule computation
+    /// Derives all handshake secrets asynchronously for improved TLS performance
+    pub fn deriveHandshakeSecretsAsync(allocator: std.mem.Allocator, runtime: anytype, handshake_secret: [32]u8) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
+        const task_data = allocator.create(HandshakeSecretsData) catch unreachable;
+        task_data.* = .{
+            .handshake_secret = handshake_secret,
+            .allocator = allocator,
+        };
+        return runtime.spawn(handshakeSecretsWorker, task_data);
+    }
+
+    /// Async application traffic key derivation
+    /// Derives application data keys for TLS 1.3 connections
+    pub fn deriveApplicationSecretsAsync(allocator: std.mem.Allocator, runtime: anytype, master_secret: [32]u8) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
+        const task_data = allocator.create(ApplicationSecretsData) catch unreachable;
+        task_data.* = .{
+            .master_secret = master_secret,
+            .allocator = allocator,
+        };
+        return runtime.spawn(applicationSecretsWorker, task_data);
+    }
+};
+
+const TlsKeyDerivationData = struct {
+    secrets: Secrets,
+    is_client: bool,
+    allocator: std.mem.Allocator,
+
+    pub fn deinit(self: *TlsKeyDerivationData) void {
+        self.allocator.destroy(self);
+    }
+};
+
+const HandshakeSecretsData = struct {
+    handshake_secret: [32]u8,
+    allocator: std.mem.Allocator,
+
+    pub fn deinit(self: *HandshakeSecretsData) void {
+        self.allocator.destroy(self);
+    }
+};
+
+const ApplicationSecretsData = struct {
+    master_secret: [32]u8,
+    allocator: std.mem.Allocator,
+
+    pub fn deinit(self: *ApplicationSecretsData) void {
+        self.allocator.destroy(self);
+    }
+};
+
+fn tlsKeyDerivationWorker(task_data: *TlsKeyDerivationData) @import("async_crypto.zig").AsyncCryptoResult {
+    const start_time = std.time.nanoTimestamp();
+    defer task_data.deinit();
+
+    const traffic_keys = task_data.secrets.deriveKeys(task_data.allocator, task_data.is_client) catch |err| {
+        const end_time = std.time.nanoTimestamp();
+        const error_msg = std.fmt.allocPrint(task_data.allocator, "TLS key derivation failed: {}", .{err}) catch "TLS key derivation failed";
+        return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, @intCast(end_time - start_time));
+    };
+
+    // Serialize traffic keys to bytes for result
+    const key_data = task_data.allocator.alloc(u8, 16 + 12 + 16) catch {
+        traffic_keys.deinit();
+        const end_time = std.time.nanoTimestamp();
+        const error_msg = task_data.allocator.dupe(u8, "Memory allocation failed") catch "Memory allocation failed";
+        return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, @intCast(end_time - start_time));
+    };
+
+    @memcpy(key_data[0..16], &traffic_keys.key);
+    @memcpy(key_data[16..28], &traffic_keys.iv);
+    @memcpy(key_data[28..44], &traffic_keys.hp);
+    traffic_keys.deinit();
+
+    const end_time = std.time.nanoTimestamp();
+    return @import("async_crypto.zig").AsyncCryptoResult.success_result(key_data, @intCast(end_time - start_time));
+}
+
+fn handshakeSecretsWorker(task_data: *HandshakeSecretsData) @import("async_crypto.zig").AsyncCryptoResult {
+    const start_time = std.time.nanoTimestamp();
+    defer task_data.deinit();
+
+    // Derive client and server handshake secrets
+    const client_secret = kdf.hkdfExpandLabel(task_data.allocator, &task_data.handshake_secret, "c hs traffic", "", 32) catch |err| {
+        const end_time = std.time.nanoTimestamp();
+        const error_msg = std.fmt.allocPrint(task_data.allocator, "Client handshake secret derivation failed: {}", .{err}) catch "Client handshake secret derivation failed";
+        return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, @intCast(end_time - start_time));
+    };
+    defer task_data.allocator.free(client_secret);
+
+    const server_secret = kdf.hkdfExpandLabel(task_data.allocator, &task_data.handshake_secret, "s hs traffic", "", 32) catch |err| {
+        const end_time = std.time.nanoTimestamp();
+        const error_msg = std.fmt.allocPrint(task_data.allocator, "Server handshake secret derivation failed: {}", .{err}) catch "Server handshake secret derivation failed";
+        return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, @intCast(end_time - start_time));
+    };
+    defer task_data.allocator.free(server_secret);
+
+    // Combine secrets for result
+    const combined_secrets = task_data.allocator.alloc(u8, 64) catch {
+        const end_time = std.time.nanoTimestamp();
+        const error_msg = task_data.allocator.dupe(u8, "Memory allocation failed") catch "Memory allocation failed";
+        return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, @intCast(end_time - start_time));
+    };
+
+    @memcpy(combined_secrets[0..32], client_secret);
+    @memcpy(combined_secrets[32..64], server_secret);
+
+    const end_time = std.time.nanoTimestamp();
+    return @import("async_crypto.zig").AsyncCryptoResult.success_result(combined_secrets, @intCast(end_time - start_time));
+}
+
+fn applicationSecretsWorker(task_data: *ApplicationSecretsData) @import("async_crypto.zig").AsyncCryptoResult {
+    const start_time = std.time.nanoTimestamp();
+    defer task_data.deinit();
+
+    // Derive client and server application secrets
+    const client_secret = kdf.hkdfExpandLabel(task_data.allocator, &task_data.master_secret, "c ap traffic", "", 32) catch |err| {
+        const end_time = std.time.nanoTimestamp();
+        const error_msg = std.fmt.allocPrint(task_data.allocator, "Client application secret derivation failed: {}", .{err}) catch "Client application secret derivation failed";
+        return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, @intCast(end_time - start_time));
+    };
+    defer task_data.allocator.free(client_secret);
+
+    const server_secret = kdf.hkdfExpandLabel(task_data.allocator, &task_data.master_secret, "s ap traffic", "", 32) catch |err| {
+        const end_time = std.time.nanoTimestamp();
+        const error_msg = std.fmt.allocPrint(task_data.allocator, "Server application secret derivation failed: {}", .{err}) catch "Server application secret derivation failed";
+        return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, @intCast(end_time - start_time));
+    };
+    defer task_data.allocator.free(server_secret);
+
+    // Combine secrets for result
+    const combined_secrets = task_data.allocator.alloc(u8, 64) catch {
+        const end_time = std.time.nanoTimestamp();
+        const error_msg = task_data.allocator.dupe(u8, "Memory allocation failed") catch "Memory allocation failed";
+        return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, @intCast(end_time - start_time));
+    };
+
+    @memcpy(combined_secrets[0..32], client_secret);
+    @memcpy(combined_secrets[32..64], server_secret);
+
+    const end_time = std.time.nanoTimestamp();
+    return @import("async_crypto.zig").AsyncCryptoResult.success_result(combined_secrets, @intCast(end_time - start_time));
+}

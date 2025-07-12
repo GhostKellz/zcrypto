@@ -9,8 +9,8 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    std.debug.print("🔐 ZCrypto v0.5.0 Advanced Features Demo\n");
-    std.debug.print("=======================================\n\n");
+    std.debug.print("🔐 ZCrypto v0.5.0 Advanced Features Demo\n", .{});
+    std.debug.print("=======================================\n\n", .{});
 
     // 1. Hardware Acceleration Detection
     try demoHardwareAcceleration();
@@ -27,12 +27,12 @@ pub fn main() !void {
     // 5. Hybrid Cryptography
     try demoHybridCryptography(allocator);
 
-    std.debug.print("🎉 All demos completed successfully!\n");
+    std.debug.print("🎉 All demos completed successfully!\n", .{});
 }
 
 fn demoHardwareAcceleration() !void {
-    std.debug.print("🏎️  Hardware Acceleration Detection\n");
-    std.debug.print("-----------------------------------\n");
+    std.debug.print("🏎️  Hardware Acceleration Detection\n", .{});
+    std.debug.print("-----------------------------------\n", .{});
 
     const features = zcrypto.hardware.HardwareAcceleration.detect();
 
@@ -49,22 +49,22 @@ fn demoHardwareAcceleration() !void {
     var result: [8]u8 = undefined;
 
     zcrypto.hardware.SIMD.vectorizedXor(&a, &b, &result);
-    std.debug.print("Vectorized XOR result: ");
+    std.debug.print("Vectorized XOR result: ", .{});
     for (result) |byte| {
-        std.debug.print("{:02X} ", .{byte});
+        std.debug.print("{X:0>2} ", .{byte});
     }
-    std.debug.print("\n\n");
+    std.debug.print("\n\n", .{});
 }
 
 fn demoQuicCrypto(allocator: std.mem.Allocator) !void {
-    std.debug.print("⚡ QUIC Cryptographic Operations\n");
-    std.debug.print("--------------------------------\n");
+    std.debug.print("⚡ QUIC Cryptographic Operations\n", .{});
+    std.debug.print("--------------------------------\n", .{});
 
     // Initialize QUIC connection crypto
     const connection_id = [_]u8{ 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0 };
     var quic_conn = try zcrypto.quic_crypto.QuicConnection.initFromConnectionId(allocator, &connection_id, .chacha20_poly1305);
 
-    std.debug.print("✅ QUIC connection initialized with ChaCha20-Poly1305\n");
+    std.debug.print("✅ QUIC connection initialized with ChaCha20-Poly1305\n", .{});
 
     // Demo packet encryption
     var packet = [_]u8{0xC0} ++ [_]u8{ 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x51, 0x55, 0x49, 0x43 }; // "Hello QUIC"
@@ -78,51 +78,51 @@ fn demoQuicCrypto(allocator: std.mem.Allocator) !void {
     var derived_key: [16]u8 = undefined;
     zcrypto.quic_crypto.QuicCrypto.HKDF.expandLabel(&secret, "quic key", "", &derived_key);
 
-    std.debug.print("✅ Derived QUIC key: ");
+    std.debug.print("✅ Derived QUIC key: ", .{});
     for (derived_key[0..8]) |byte| {
-        std.debug.print("{:02X}", .{byte});
+        std.debug.print("{X:0>2}", .{byte});
     }
-    std.debug.print("...\n\n");
+    std.debug.print("...\n\n", .{});
 }
 
 fn demoPostQuantumCrypto(allocator: std.mem.Allocator) !void {
-    std.debug.print("🔮 Post-Quantum Cryptography\n");
-    std.debug.print("-----------------------------\n");
+    std.debug.print("🔮 Post-Quantum Cryptography\n", .{});
+    std.debug.print("-----------------------------\n", .{});
 
     // ML-KEM-768 (Kyber) key exchange
-    std.debug.print("🔑 ML-KEM-768 Key Exchange:\n");
+    std.debug.print("🔑 ML-KEM-768 Key Exchange:\n", .{});
     const kem_keypair = try zcrypto.kyber.generateKeypair();
     const encap_result = try zcrypto.kyber.encapsulate(kem_keypair.public_key);
     const decap_secret = try zcrypto.kyber.decapsulate(kem_keypair.private_key, encap_result.ciphertext);
 
     std.debug.print("   Public key size:    {} bytes\n", .{zcrypto.kyber.PUBLIC_KEY_SIZE});
     std.debug.print("   Ciphertext size:    {} bytes\n", .{zcrypto.kyber.CIPHERTEXT_SIZE});
-    std.debug.print("   Shared secret:      ");
+    std.debug.print("   Shared secret:      ", .{});
     for (decap_secret[0..8]) |byte| {
-        std.debug.print("{:02X}", .{byte});
+        std.debug.print("{X:0>2}", .{byte});
     }
-    std.debug.print("...\n");
+    std.debug.print("...\n", .{});
 
     // ML-DSA-65 (Dilithium) signatures
-    std.debug.print("✍️  ML-DSA-65 Digital Signatures:\n");
+    std.debug.print("✍️  ML-DSA-65 Digital Signatures:\n", .{});
     const sig_keypair = try zcrypto.dilithium.generateKeypair();
     const message = "Post-quantum signature test";
     const signature = try zcrypto.dilithium.sign(sig_keypair.private_key, message);
     const valid = try zcrypto.dilithium.verify(sig_keypair.public_key, message, signature);
 
     std.debug.print("   Signature size:     {} bytes\n", .{zcrypto.dilithium.SIGNATURE_SIZE});
-    std.debug.print("   Verification:       {}\n", .{if (valid) "✅ Valid" else "❌ Invalid"});
+    std.debug.print("   Verification:       {s}\n", .{if (valid) "✅ Valid" else "❌ Invalid"});
 
     _ = allocator; // For future use
-    std.debug.print("\n");
+    std.debug.print("\n", .{});
 }
 
 fn demoEnhancedKeyExchange(allocator: std.mem.Allocator) !void {
-    std.debug.print("🔄 Enhanced Key Exchange\n");
-    std.debug.print("------------------------\n");
+    std.debug.print("🔄 Enhanced Key Exchange\n", .{});
+    std.debug.print("------------------------\n", .{});
 
     // X25519 key exchange
-    std.debug.print("🌟 X25519 Elliptic Curve Diffie-Hellman:\n");
+    std.debug.print("🌟 X25519 Elliptic Curve Diffie-Hellman:\n", .{});
     const alice_x25519 = try zcrypto.x25519.generateKeypair();
     const bob_x25519 = try zcrypto.x25519.generateKeypair();
 
@@ -130,15 +130,15 @@ fn demoEnhancedKeyExchange(allocator: std.mem.Allocator) !void {
     const bob_shared = try zcrypto.x25519.computeSharedSecret(bob_x25519.private_key, alice_x25519.public_key);
 
     const secrets_match = std.mem.eql(u8, &alice_shared, &bob_shared);
-    std.debug.print("   Shared secrets match: {}\n", .{if (secrets_match) "✅ Yes" else "❌ No"});
-    std.debug.print("   Secret (Alice):       ");
+    std.debug.print("   Shared secrets match: {s}\n", .{if (secrets_match) "✅ Yes" else "❌ No"});
+    std.debug.print("   Secret (Alice):       ", .{});
     for (alice_shared[0..8]) |byte| {
-        std.debug.print("{:02X}", .{byte});
+        std.debug.print("{X:0>2}", .{byte});
     }
-    std.debug.print("...\n");
+    std.debug.print("...\n", .{});
 
     // Ed25519 signatures with batch verification
-    std.debug.print("📝 Ed25519 Batch Signatures:\n");
+    std.debug.print("📝 Ed25519 Batch Signatures:\n", .{});
     const ed_keypair = try zcrypto.ed25519.generateKeypair();
     const messages = [_][]const u8{ "message 1", "message 2", "message 3" };
 
@@ -151,19 +151,19 @@ fn demoEnhancedKeyExchange(allocator: std.mem.Allocator) !void {
     const results = try zcrypto.ed25519.verifyBatch(&public_keys, &messages, &signatures);
     defer allocator.free(results);
 
-    std.debug.print("   Batch verification:   ");
+    std.debug.print("   Batch verification:   ", .{});
     for (results) |result| {
-        std.debug.print("{} ", .{if (result) "✅" else "❌"});
+        std.debug.print("{s} ", .{if (result) "✅" else "❌"});
     }
-    std.debug.print("\n\n");
+    std.debug.print("\n\n", .{});
 }
 
 fn demoHybridCryptography(allocator: std.mem.Allocator) !void {
-    std.debug.print("🌐 Hybrid Cryptography (Classical + Post-Quantum)\n");
-    std.debug.print("-------------------------------------------------\n");
+    std.debug.print("🌐 Hybrid Cryptography (Classical + Post-Quantum)\n", .{});
+    std.debug.print("-------------------------------------------------\n", .{});
 
     // Hybrid key exchange for QUIC
-    std.debug.print("🔗 Hybrid QUIC Key Exchange:\n");
+    std.debug.print("🔗 Hybrid QUIC Key Exchange:\n", .{});
     const alice_hybrid = try zcrypto.kex.QuicKeyExchange.generateKeypair(allocator, .hybrid_x25519_kyber768);
     const bob_hybrid = try zcrypto.kex.QuicKeyExchange.generateKeypair(allocator, .hybrid_x25519_kyber768);
 
@@ -175,14 +175,14 @@ fn demoHybridCryptography(allocator: std.mem.Allocator) !void {
 
     std.debug.print("   Public key size:      {} bytes\n", .{alice_public_data.len});
     std.debug.print("   Combined secret size: {} bytes\n", .{bob_shared.secret.len});
-    std.debug.print("   Hybrid secret:        ");
+    std.debug.print("   Hybrid secret:        ", .{});
     for (bob_shared.secret[0..8]) |byte| {
-        std.debug.print("{:02X}", .{byte});
+        std.debug.print("{X:0>2}", .{byte});
     }
-    std.debug.print("...\n");
+    std.debug.print("...\n", .{});
 
     // Hybrid signatures
-    std.debug.print("✍️  Hybrid Digital Signatures:\n");
+    std.debug.print("✍️  Hybrid Digital Signatures:\n", .{});
     const hybrid_sig_keypair = try zcrypto.post_quantum.HybridSignature.generateKeypair(allocator);
     const hybrid_message = "Hybrid classical + post-quantum signature";
 
@@ -192,9 +192,9 @@ fn demoHybridCryptography(allocator: std.mem.Allocator) !void {
     const hybrid_valid = try zcrypto.post_quantum.HybridSignature.verify(hybrid_sig_keypair, hybrid_message, hybrid_signature);
 
     std.debug.print("   Signature size:       {} bytes\n", .{hybrid_signature.len});
-    std.debug.print("   Verification:         {}\n", .{if (hybrid_valid) "✅ Valid" else "❌ Invalid"});
+    std.debug.print("   Verification:         {s}\n", .{if (hybrid_valid) "✅ Valid" else "❌ Invalid"});
 
-    std.debug.print("\n");
+    std.debug.print("\n", .{});
 }
 
 // Simple benchmark function
