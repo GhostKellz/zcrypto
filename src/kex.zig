@@ -281,12 +281,11 @@ pub const Ed25519 = struct {
     }
 
     /// Batch signature verification
-    pub fn verifyBatch(public_keys: []const [PUBLIC_KEY_SIZE]u8, messages: []const []const u8, signatures: []const [SIGNATURE_SIZE]u8) ![]bool {
+    pub fn verifyBatch(allocator: std.mem.Allocator, public_keys: []const [PUBLIC_KEY_SIZE]u8, messages: []const []const u8, signatures: []const [SIGNATURE_SIZE]u8) ![]bool {
         if (public_keys.len != messages.len or messages.len != signatures.len) {
             return error.InvalidInput;
         }
 
-        const allocator = std.heap.page_allocator;
         const results = try allocator.alloc(bool, public_keys.len);
 
         for (public_keys, messages, signatures, results) |public_key, message, signature, *result| {
@@ -493,7 +492,7 @@ pub const QuicKeyExchange = struct {
 
 // Tests
 test "X25519 key exchange" {
-    // TODO: Fix X25519 shared secret mismatch  
+    // TODO: Fix X25519 shared secret mismatch
     // const alice_keypair = try X25519.generateKeypair();
     // const bob_keypair = try X25519.generateKeypair();
     // const alice_shared = try X25519.computeSharedSecret(alice_keypair.private_key, bob_keypair.public_key);
@@ -550,7 +549,7 @@ test "Ed25519 batch verification" {
         }
     }
 
-    const results = try Ed25519.verifyBatch(&public_keys, &messages, &signatures);
+    const results = try Ed25519.verifyBatch(allocator, &public_keys, &messages, &signatures);
     defer allocator.free(results);
 
     for (results) |result| {

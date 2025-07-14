@@ -148,7 +148,7 @@ fn demoEnhancedKeyExchange(allocator: std.mem.Allocator) !void {
     }
 
     const public_keys = [_][32]u8{ed_keypair.public_key} ** 3;
-    const results = try zcrypto.ed25519.verifyBatch(&public_keys, &messages, &signatures);
+    const results = try zcrypto.ed25519.verifyBatch(allocator, &public_keys, &messages, &signatures);
     defer allocator.free(results);
 
     std.debug.print("   Batch verification:   ", .{});

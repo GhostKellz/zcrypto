@@ -334,8 +334,8 @@ pub const QuicConnection = struct {
             .cipher_suite = cipher_suite,
             .client_secret = client_secret,
             .server_secret = server_secret,
-            .header_protection = QuicCrypto.HeaderProtection.init(cipher_suite, hp_key[0..cipher_suite.keySize()]),
-            .aead = QuicCrypto.AEAD.init(cipher_suite, client_key[0..cipher_suite.keySize()]),
+            .header_protection = QuicCrypto.HeaderProtection.init(cipher_suite, &hp_key),
+            .aead = QuicCrypto.AEAD.init(cipher_suite, &client_key),
         };
     }
 

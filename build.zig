@@ -4,16 +4,16 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // TokioZ dependency for async crypto operations (optional)
-    const tokioZ_dep = b.lazyDependency("tokioZ", .{
+    // zsync dependency for async crypto operations
+    const zsync_dep = b.lazyDependency("zsync", .{
         .target = target,
         .optimize = optimize,
     });
 
     // zcrypto module for library consumers
-    const zcrypto_imports: []const std.Build.Module.Import = if (tokioZ_dep) |tokioZ| blk: {
+    const zcrypto_imports: []const std.Build.Module.Import = if (zsync_dep) |zsync| blk: {
         break :blk &.{
-            .{ .name = "tokioZ", .module = tokioZ.module("TokioZ") },
+            .{ .name = "zsync", .module = zsync.module("zsync") },
         };
     } else &.{};
     
@@ -37,29 +37,6 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(exe);
 
-    // TokioZ crypto example executable (only if tokioZ is available)
-    if (tokioZ_dep) |tokioZ| {
-        const tokioz_example = b.addExecutable(.{
-            .name = "tokioz-crypto-example",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("examples/tokioz_crypto_example.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "zcrypto", .module = zcrypto_mod },
-                    .{ .name = "tokioZ", .module = tokioZ.module("TokioZ") },
-                },
-            }),
-        });
-        b.installArtifact(tokioz_example);
-
-        // TokioZ example run step
-        const run_tokioz_step = b.step("run-tokioz", "Run the TokioZ crypto example");
-        const run_tokioz_cmd = b.addRunArtifact(tokioz_example);
-        run_tokioz_cmd.step.dependOn(b.getInstallStep());
-        if (b.args) |args| run_tokioz_cmd.addArgs(args);
-        run_tokioz_step.dependOn(&run_tokioz_cmd.step);
-    }
 
     // Advanced features example executable
     const advanced_example = b.addExecutable(.{

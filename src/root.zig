@@ -97,7 +97,7 @@ test {
     _ = formal;
     _ = hsm;
     _ = perf_analysis;
-    
+
     // New v0.7.0 modules
     _ = zero_copy;
     _ = bbr_crypto;
