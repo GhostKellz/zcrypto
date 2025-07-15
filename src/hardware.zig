@@ -192,6 +192,88 @@ pub const SIMD = struct {
     }
 };
 
+/// Linux /dev/crypto interface
+pub const DevCrypto = struct {
+    session: ?std.fs.File = null,
+    
+    pub fn init() !DevCrypto {
+        // Try to open /dev/crypto
+        const crypto_dev = std.fs.openFileAbsolute("/dev/crypto", .{ .mode = .read_write }) catch |err| switch (err) {
+            error.FileNotFound, error.AccessDenied => return DevCrypto{ .session = null },
+            else => return err,
+        };
+        
+        return DevCrypto{ .session = crypto_dev };
+    }
+    
+    pub fn deinit(self: *DevCrypto) void {
+        if (self.session) |*file| {
+            file.close();
+            self.session = null;
+        }
+    }
+    
+    pub fn isAvailable(self: DevCrypto) bool {
+        return self.session != null;
+    }
+    
+    /// Perform AES encryption using /dev/crypto
+    pub fn aesEncrypt(self: *DevCrypto, key: []const u8, plaintext: []const u8, ciphertext: []u8) !void {
+        if (self.session == null) {
+            return error.DeviceNotAvailable;
+        }
+        
+        // Mock implementation - real implementation would use ioctl calls
+        _ = key;
+        _ = plaintext;
+        _ = ciphertext;
+        
+        // In reality, this would:
+        // 1. Create crypto session with CIOCGSESSION ioctl
+        // 2. Setup crypto operation with CIOCCRYPT ioctl
+        // 3. Execute operation and get results
+        return error.NotImplemented;
+    }
+};
+
+/// OpenSSL engine integration
+pub const OpenSSLEngine = struct {
+    engine_handle: ?*anyopaque = null,
+    
+    pub fn init(engine_name: []const u8) !OpenSSLEngine {
+        _ = engine_name;
+        // Try to load OpenSSL engine
+        // In real implementation, this would use dlopen/dlsym
+        return OpenSSLEngine{ .engine_handle = null };
+    }
+    
+    pub fn deinit(self: *OpenSSLEngine) void {
+        if (self.engine_handle) |handle| {
+            _ = handle;
+            // In real implementation, would call ENGINE_free()
+            self.engine_handle = null;
+        }
+    }
+    
+    pub fn isAvailable(self: OpenSSLEngine) bool {
+        return self.engine_handle != null;
+    }
+    
+    /// Use OpenSSL engine for crypto operations
+    pub fn engineCrypto(self: *OpenSSLEngine, operation: []const u8, input: []const u8, output: []u8) !void {
+        if (self.engine_handle == null) {
+            return error.EngineNotLoaded;
+        }
+        
+        _ = operation;
+        _ = input;
+        _ = output;
+        
+        // In reality, this would call OpenSSL engine functions
+        return error.NotImplemented;
+    }
+};
+
 /// Hardware-optimized cryptographic operations
 pub const HardwareCrypto = struct {
     /// Hardware-accelerated AES-GCM encryption
@@ -373,6 +455,28 @@ test "vectorized memcmp" {
 
     try testing.expect(SIMD.vectorizedMemcmp(&a, &b));
     try testing.expect(!SIMD.vectorizedMemcmp(&a, &c));
+}
+
+test "/dev/crypto availability" {
+    var dev_crypto = DevCrypto.init() catch |err| switch (err) {
+        error.FileNotFound, error.AccessDenied => {
+            // Expected on systems without /dev/crypto
+            return;
+        },
+        else => return err,
+    };
+    defer dev_crypto.deinit();
+    
+    // Test that we can detect availability
+    _ = dev_crypto.isAvailable();
+}
+
+test "OpenSSL engine loading" {
+    var engine = try OpenSSLEngine.init("aesni");
+    defer engine.deinit();
+    
+    // Engine likely won't be available in test environment
+    try testing.expect(!engine.isAvailable());
 }
 
 test "hardware crypto fallback" {

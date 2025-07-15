@@ -41,6 +41,8 @@ pub const post_quantum = @import("post_quantum.zig");
 pub const kex = @import("kex.zig");
 pub const async_crypto = @import("async_crypto.zig");
 pub const zkp = @import("zkp.zig");
+pub const bls = @import("bls.zig");
+pub const schnorr = @import("schnorr.zig");
 
 // Performance and ecosystem integration (v0.7.0)
 pub const zero_copy = @import("zero_copy.zig");
