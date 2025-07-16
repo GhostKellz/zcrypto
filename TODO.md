@@ -76,17 +76,34 @@ grep -r "tokio" src/ examples/      # Should return no results
 
 ## Files to update
 - ✅ `build.zig.zon` - Already has zsync dependency
-- 🔄 `build.zig` - Replace tokioZ with zsync (lines 7-58, 4 locations)
-- 🔄 `src/async_crypto.zig` - Complete rewrite (514 lines of placeholder → zsync code)
-- 🔄 `examples/tokioz_crypto_example.zig` - Rename to `zsync_crypto_example.zig` (383 lines)
-- 🔄 `INTEGRATION.md` - Fix 4 tokioZ references to zsync
-- 🔄 `examples/async_features.zig` - Update header comments if any tokioZ references
+- ✅ `build.zig` - Replace tokioZ with zsync (completed)
+- ✅ `src/async_crypto.zig` - Complete rewrite (zsync implementation done)
+- ✅ `examples/zsync_crypto_example.zig` - Created with zsync integration
+- ✅ `INTEGRATION.md` - Fix 4 tokioZ references to zsync (completed)
+- ✅ `examples/async_features.zig` - Update header comments (completed)
 
 ## Success criteria
-- All async crypto uses zsync
-- No tokioZ code or docs remain
-- All tests/examples pass with zsync
-- Documentation reflects new async runtime
+- ✅ All async crypto uses zsync
+- ✅ No tokioZ code or docs remain
+- 🔄 All tests/examples pass with zsync (pending zsync v0.3.1 API fixes)
+- ✅ Documentation reflects new async runtime
+
+## 🚀 Waiting for zsync v0.3.1 Features
+
+**Claude's Recommendations for zsync v0.3.1:**
+1. **Zero-Copy Async Operations** - Critical for performance across all async use cases
+2. **Hardware-Accelerated Async** - SIMD/AVX operations for better performance
+3. **Async Performance Metrics** - Essential for validating zsync's performance claims
+4. **Real-time Async Streams** - Core async pattern for networking and data processing
+
+These features will unlock the full potential of zcrypto's async operations and enable the advanced features planned for zcrypto v0.9.0.
+
+## 📋 Next Steps After zsync v0.3.1
+Once zsync v0.3.1 is released with the recommended features, zcrypto can implement:
+- Zero-copy encryption/decryption operations
+- Hardware-accelerated crypto with async SIMD
+- Real-time crypto stream processing
+- Performance monitoring for async crypto operations
 
 ---
 

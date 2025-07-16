@@ -16,7 +16,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "zsync", .module = zsync.module("zsync") },
         };
     } else &.{};
-    
+
     const zcrypto_mod = b.addModule("zcrypto", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
@@ -37,6 +37,29 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(exe);
 
+    // zsync crypto example executable
+    if (zsync_dep) |zsync| {
+        const zsync_example = b.addExecutable(.{
+            .name = "zsync-crypto-example",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("examples/zsync_crypto_example.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "zcrypto", .module = zcrypto_mod },
+                    .{ .name = "zsync", .module = zsync.module("zsync") },
+                },
+            }),
+        });
+        b.installArtifact(zsync_example);
+
+        // zsync example run step
+        const run_zsync_step = b.step("run-zsync", "Run the zsync crypto example");
+        const run_zsync_cmd = b.addRunArtifact(zsync_example);
+        run_zsync_cmd.step.dependOn(b.getInstallStep());
+        if (b.args) |args| run_zsync_cmd.addArgs(args);
+        run_zsync_step.dependOn(&run_zsync_cmd.step);
+    }
 
     // Advanced features example executable
     const advanced_example = b.addExecutable(.{

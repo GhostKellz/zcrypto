@@ -40,7 +40,7 @@ pub fn main() !void {
         allocator, connection_id, .aes_256_gcm
     );
     
-    // Async crypto with tokioZ
+    // Async crypto with zsync
     const encrypted = try zcrypto.async_crypto.encryptAsync(data, key);
 }
 ```
@@ -351,7 +351,7 @@ context_pool.releaseContext(session_id);
 - **Hardware acceleration** when available
 
 ### 🔧 Async Ready
-- **tokioZ integration** for Zig async
+- **zsync integration** for Zig async
 - **Non-blocking operations** for all languages
 - **Stream processing** for large data
 
@@ -402,8 +402,8 @@ zig build generate-headers
 **Issue**: Build fails
 **Fix**: Update Zig to `0.15.0-dev.822+` or later
 
-**Issue**: Missing tokioZ
-**Fix**: `zig fetch --save https://github.com/ghostkellz/tokioZ/archive/main.tar.gz`
+**Issue**: Missing zsync
+**Fix**: `zig fetch --save https://github.com/mitchellh/zig-zsync/archive/main.tar.gz`
 
 **Issue**: Performance issues
 **Fix**: Use `-Doptimize=ReleaseFast` and enable hardware acceleration

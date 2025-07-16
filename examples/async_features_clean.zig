@@ -1,5 +1,5 @@
 //! Async Features Demo - Showcasing zcrypto's async capabilities
-//! 
+//!
 //! This example demonstrates the asynchronous cryptographic features
 //! available in zcrypto, including integration with zsync runtime.
 
@@ -25,15 +25,11 @@ fn demoAsyncResults(allocator: std.mem.Allocator) !void {
     std.debug.print("-----------------------\n");
 
     // Create sample async results
-    var test_data = [_]u8{'a', 's', 'y', 'n', 'c', '_', 't', 'e', 's', 't'};
-    const success_result = zcrypto.async_crypto.AsyncCryptoResult.success_result(
-        test_data[0..], 
-        1500000 // 1.5ms processing time
+    var test_data = [_]u8{ 'a', 's', 'y', 'n', 'c', '_', 't', 'e', 's', 't' };
+    const success_result = zcrypto.async_crypto.AsyncCryptoResult.success_result(test_data[0..], 1500000 // 1.5ms processing time
     );
 
-    const error_result = zcrypto.async_crypto.AsyncCryptoResult.error_result(
-        "Simulated async error",
-        750000 // 0.75ms before error
+    const error_result = zcrypto.async_crypto.AsyncCryptoResult.error_result("Simulated async error", 750000 // 0.75ms before error
     );
 
     std.debug.print("Success result:\n");
