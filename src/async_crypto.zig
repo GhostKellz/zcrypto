@@ -89,7 +89,8 @@ pub const AsyncCryptoResult = struct {
 // =============================================================================
 
 test "async crypto with zsync" {
-    const blocking_io = zsync.BlockingIo.init(std.testing.allocator);
+    var blocking_io = zsync.BlockingIo.init(std.testing.allocator);
+    defer blocking_io.deinit();
     const async_crypto = AsyncCrypto.init(blocking_io.io(), std.testing.allocator);
     const test_data = "test data for zsync encryption";
     const test_key = [_]u8{0xAB} ** 32;
@@ -106,7 +107,8 @@ test "async crypto with zsync" {
 }
 
 test "batch async encryption" {
-    const blocking_io = zsync.BlockingIo.init(std.testing.allocator);
+    var blocking_io = zsync.BlockingIo.init(std.testing.allocator);
+    defer blocking_io.deinit();
     const async_crypto = AsyncCrypto.init(blocking_io.io(), std.testing.allocator);
     const test_data = [_][]const u8{ "data1", "data2", "data3" };
     const test_key = [_]u8{0xCD} ** 32;

@@ -75,19 +75,19 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(advanced_example);
 
-    // Benchmark executable (commented out for now)
-    // const bench = b.addExecutable(.{
-    //     .name = "zcrypto-bench",
-    //     .root_module = b.createModule(.{
-    //         .root_source_file = b.path("src/bench.zig"),
-    //         .target = target,
-    //         .optimize = .ReleaseFast,
-    //         .imports = &.{
-    //             .{ .name = "zcrypto", .module = zcrypto_mod },
-    //         },
-    //     }),
-    // });
-    // b.installArtifact(bench);
+    // Benchmark executable
+    const bench = b.addExecutable(.{
+        .name = "zcrypto-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/bench.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "zcrypto", .module = zcrypto_mod },
+            },
+        }),
+    });
+    b.installArtifact(bench);
 
     // Run steps
     const run_step = b.step("run", "Run the demo");
@@ -103,12 +103,12 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| run_advanced_cmd.addArgs(args);
     run_advanced_step.dependOn(&run_advanced_cmd.step);
 
-    // Benchmark step (disabled for now)
-    // const bench_step = b.step("bench", "Run performance benchmarks");
-    // const bench_cmd = b.addRunArtifact(bench);
-    // bench_cmd.step.dependOn(b.getInstallStep());
-    // if (b.args) |args| bench_cmd.addArgs(args);
-    // bench_step.dependOn(&bench_cmd.step);
+    // Benchmark step
+    const bench_step = b.step("bench", "Run performance benchmarks");
+    const bench_cmd = b.addRunArtifact(bench);
+    bench_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| bench_cmd.addArgs(args);
+    bench_step.dependOn(&bench_cmd.step);
 
     // Test steps
     const mod_tests = b.addTest(.{

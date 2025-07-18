@@ -35,12 +35,7 @@ pub const X25519 = struct {
         // Generate random private key
         crypto.random.bytes(&keypair.private_key);
 
-        // Clamp private key according to RFC 7748
-        keypair.private_key[0] &= 248;
-        keypair.private_key[31] &= 127;
-        keypair.private_key[31] |= 64;
-
-        // Derive public key from private key
+        // Derive public key from private key using real X25519
         keypair.public_key = try derivePublicKey(keypair.private_key);
 
         return keypair;
@@ -48,29 +43,15 @@ pub const X25519 = struct {
 
     /// Derive public key from private key
     pub fn derivePublicKey(private_key: [PRIVATE_KEY_SIZE]u8) ![PUBLIC_KEY_SIZE]u8 {
-        var public_key: [PUBLIC_KEY_SIZE]u8 = undefined;
-
-        // This is a stub - real implementation would use Montgomery ladder
-        // For now, use a simple hash-based derivation
-        var hasher = crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(&private_key);
-        hasher.update("x25519-base-point");
-        hasher.final(&public_key);
-
-        return public_key;
+        // Use real X25519 implementation from Zig's std.crypto
+        return crypto.dh.X25519.recoverPublicKey(private_key) catch error.InvalidKey;
     }
 
     /// Compute shared secret from our private key and peer's public key
     pub fn computeSharedSecret(private_key: [PRIVATE_KEY_SIZE]u8, peer_public_key: [PUBLIC_KEY_SIZE]u8) ![SHARED_SECRET_SIZE]u8 {
-        var shared_secret: [SHARED_SECRET_SIZE]u8 = undefined;
-
-        // Stub implementation - real X25519 would use Montgomery ladder
-        var hasher = crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(&private_key);
-        hasher.update(&peer_public_key);
-        hasher.update("x25519-ecdh");
-        hasher.final(&shared_secret);
-
+        // Use real X25519 implementation from Zig's std.crypto
+        const shared_secret = crypto.dh.X25519.scalarmult(private_key, peer_public_key) catch return error.InvalidKey;
+        
         // Check for weak shared secret (all zeros)
         var all_zeros = true;
         for (shared_secret) |byte| {
@@ -176,7 +157,7 @@ pub const X448 = struct {
 /// Enhanced Ed25519 signatures with batch verification and contexts
 pub const Ed25519 = struct {
     pub const PUBLIC_KEY_SIZE = 32;
-    pub const PRIVATE_KEY_SIZE = 32;
+    pub const PRIVATE_KEY_SIZE = 64; // Ed25519 uses 64-byte secret keys
     pub const SIGNATURE_SIZE = 64;
 
     pub const KeyPair = struct {
@@ -185,85 +166,54 @@ pub const Ed25519 = struct {
     };
 
     pub fn generateKeypair() !KeyPair {
-        var keypair = KeyPair{
-            .public_key = undefined,
-            .private_key = undefined,
+        // Generate using real Ed25519 from Zig's std.crypto
+        const key_pair = crypto.sign.Ed25519.KeyPair.generate();
+        
+        return KeyPair{
+            .public_key = key_pair.public_key.bytes,
+            .private_key = key_pair.secret_key.bytes,
         };
-
-        crypto.random.bytes(&keypair.private_key);
-        keypair.public_key = try derivePublicKey(keypair.private_key);
-
-        return keypair;
     }
 
     pub fn derivePublicKey(private_key: [PRIVATE_KEY_SIZE]u8) ![PUBLIC_KEY_SIZE]u8 {
-        var public_key: [PUBLIC_KEY_SIZE]u8 = undefined;
-
-        // Stub implementation - real Ed25519 would use Edwards curve operations
-        var hasher = crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(&private_key);
-        hasher.update("ed25519-base-point");
-        hasher.final(&public_key);
-
-        return public_key;
+        // Use real Ed25519 implementation from Zig's std.crypto
+        const secret_key = crypto.sign.Ed25519.SecretKey.fromBytes(private_key) catch return error.InvalidKey;
+        const key_pair = crypto.sign.Ed25519.KeyPair.fromSecretKey(secret_key) catch return error.InvalidKey;
+        return key_pair.public_key.bytes;
     }
 
     pub fn sign(private_key: [PRIVATE_KEY_SIZE]u8, message: []const u8) ![SIGNATURE_SIZE]u8 {
-        var signature: [SIGNATURE_SIZE]u8 = undefined;
-
-        // Stub implementation
-        var hasher = crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(&private_key);
-        hasher.update(message);
-        var hash: [32]u8 = undefined;
-        hasher.final(&hash);
-
-        @memcpy(signature[0..32], &hash);
-        @memcpy(signature[32..64], &hash);
-
-        return signature;
+        // Use real Ed25519 implementation from Zig's std.crypto
+        const secret_key = crypto.sign.Ed25519.SecretKey.fromBytes(private_key) catch return error.InvalidKey;
+        const key_pair = crypto.sign.Ed25519.KeyPair.fromSecretKey(secret_key) catch return error.InvalidKey;
+        const signature = key_pair.sign(message, null) catch return error.InvalidSignature;
+        return signature.toBytes();
     }
 
     pub fn verify(public_key: [PUBLIC_KEY_SIZE]u8, message: []const u8, signature: [SIGNATURE_SIZE]u8) !bool {
-        // Stub implementation
-        var hasher = crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(&public_key);
-        hasher.update(message);
-        hasher.update(&signature);
-        var hash: [32]u8 = undefined;
-        hasher.final(&hash);
-
-        return hash[0] != 0;
+        // Use real Ed25519 implementation from Zig's std.crypto
+        const pub_key = crypto.sign.Ed25519.PublicKey.fromBytes(public_key) catch return false;
+        const sig = crypto.sign.Ed25519.Signature.fromBytes(signature);
+        sig.verify(message, pub_key) catch return false;
+        return true;
     }
 
     /// Sign with context (Ed25519ctx)
     pub fn signWithContext(private_key: [PRIVATE_KEY_SIZE]u8, message: []const u8, context: []const u8) ![SIGNATURE_SIZE]u8 {
-        var signature: [SIGNATURE_SIZE]u8 = undefined;
-
-        var hasher = crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(&private_key);
-        hasher.update(context);
-        hasher.update(message);
-        var hash: [32]u8 = undefined;
-        hasher.final(&hash);
-
-        @memcpy(signature[0..32], &hash);
-        @memcpy(signature[32..64], &hash);
-
-        return signature;
+        // Use real Ed25519 implementation with context
+        const secret_key = crypto.sign.Ed25519.SecretKey.fromBytes(private_key) catch return error.InvalidKey;
+        const key_pair = crypto.sign.Ed25519.KeyPair.fromSecretKey(secret_key) catch return error.InvalidKey;
+        const signature = key_pair.sign(message, context) catch return error.InvalidSignature;
+        return signature.toBytes();
     }
 
     /// Verify with context (Ed25519ctx)
     pub fn verifyWithContext(public_key: [PUBLIC_KEY_SIZE]u8, message: []const u8, signature: [SIGNATURE_SIZE]u8, context: []const u8) !bool {
-        var hasher = crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(&public_key);
-        hasher.update(context);
-        hasher.update(message);
-        hasher.update(&signature);
-        var hash: [32]u8 = undefined;
-        hasher.final(&hash);
-
-        return hash[0] != 0;
+        // Use real Ed25519 implementation with context
+        const pub_key = crypto.sign.Ed25519.PublicKey.fromBytes(public_key) catch return false;
+        const sig = crypto.sign.Ed25519.Signature.fromBytes(signature);
+        sig.verify(message, pub_key, context) catch return false;
+        return true;
     }
 
     /// Batch signature generation
@@ -492,13 +442,12 @@ pub const QuicKeyExchange = struct {
 
 // Tests
 test "X25519 key exchange" {
-    // TODO: Fix X25519 shared secret mismatch
-    // const alice_keypair = try X25519.generateKeypair();
-    // const bob_keypair = try X25519.generateKeypair();
-    // const alice_shared = try X25519.computeSharedSecret(alice_keypair.private_key, bob_keypair.public_key);
-    // const bob_shared = try X25519.computeSharedSecret(bob_keypair.private_key, alice_keypair.public_key);
-    // try testing.expectEqualSlices(u8, &alice_shared, &bob_shared);
-    try testing.expect(true); // Placeholder for now
+    // Now that we have real X25519 implementation, test it properly
+    const alice_keypair = try X25519.generateKeypair();
+    const bob_keypair = try X25519.generateKeypair();
+    const alice_shared = try X25519.computeSharedSecret(alice_keypair.private_key, bob_keypair.public_key);
+    const bob_shared = try X25519.computeSharedSecret(bob_keypair.private_key, alice_keypair.public_key);
+    try testing.expectEqualSlices(u8, &alice_shared, &bob_shared);
 }
 
 test "Ed25519 signature" {
@@ -531,7 +480,7 @@ test "Ed25519 batch verification" {
 
     const num_sigs = 5;
     var keypairs: [num_sigs]Ed25519.KeyPair = undefined;
-    var private_keys: [num_sigs][32]u8 = undefined;
+    var private_keys: [num_sigs][64]u8 = undefined;
     var public_keys: [num_sigs][32]u8 = undefined;
     var messages: [num_sigs][]const u8 = undefined;
     var signatures: [num_sigs][64]u8 = undefined;

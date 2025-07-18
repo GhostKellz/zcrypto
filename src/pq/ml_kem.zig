@@ -431,12 +431,24 @@ pub const ML_KEM_768 = struct {
         }
     };
 
-    /// Expand seed using SHAKE-128
+    /// Expand seed using SHAKE-128 (simplified SHA-256 based implementation)
     fn expandSeed(output: []u8, seed: []const u8) void {
-        // TODO: Implement SHAKE-128 expansion
-        // For now, use a placeholder
-        @memcpy(output[0..32], seed);
-        @memset(output[32..], 0);
+        // In a full implementation, this would use SHAKE-128
+        // For now, use iterative SHA-256 hashing
+        var current_seed: [32]u8 = undefined;
+        @memcpy(&current_seed, seed[0..32]);
+        
+        var offset: usize = 0;
+        while (offset < output.len) {
+            var hash_result: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(&current_seed, &hash_result, .{});
+            const copy_len = @min(32, output.len - offset);
+            @memcpy(output[offset..offset + copy_len], hash_result[0..copy_len]);
+            
+            // Update seed for next iteration
+            current_seed[0] = @truncate(current_seed[0] +% 1);
+            offset += copy_len;
+        }
     }
 
     /// Generate matrix A from seed rho
@@ -450,41 +462,76 @@ pub const ML_KEM_768 = struct {
 
     /// Sample uniform polynomial from seed
     fn sampleUniform(seed: []const u8, i: u8, j: u8) Poly {
-        _ = seed;
-        // TODO: Implement uniform sampling using SHAKE-128
-        // This is a placeholder implementation
         var poly = Poly.zero();
-
-        // Simple deterministic generation for testing
-        const offset = (@as(u32, i) * K + j) * Params.N;
-        for (0..Params.N) |k| {
-            poly.coeffs[k] = @intCast((offset + k) % Params.Q);
+        
+        // Create extended seed with coordinates
+        var extended_seed: [34]u8 = undefined;
+        @memcpy(extended_seed[0..32], seed[0..32]);
+        extended_seed[32] = i;
+        extended_seed[33] = j;
+        
+        // Generate random bytes using hash expansion
+        var random_bytes: [768]u8 = undefined; // 3 * 256 bytes for uniform sampling
+        expandSeed(&random_bytes, &extended_seed);
+        
+        // Sample uniform values mod Q
+        var byte_idx: usize = 0;
+        var coeff_idx: usize = 0;
+        
+        while (coeff_idx < Params.N and byte_idx + 2 < random_bytes.len) {
+            const val = (@as(u32, random_bytes[byte_idx]) | 
+                       (@as(u32, random_bytes[byte_idx + 1]) << 8)) & 0x0FFF;
+            
+            if (val < Params.Q) {
+                poly.coeffs[coeff_idx] = @intCast(val);
+                coeff_idx += 1;
+            }
+            byte_idx += 2;
         }
-
+        
         return poly;
     }
 
     /// Sample secret vector using CBD
     fn sampleSecretVector(vector: *[K]Poly, sigma: []const u8, offset: usize) void {
         for (0..K) |i| {
-            // TODO: Implement proper CBD sampling with PRF
-            // This is a placeholder implementation
-            var noise_bytes: [64]u8 = undefined;
-            @memcpy(noise_bytes[0..32], sigma);
-            noise_bytes[32] = @intCast(offset + i);
-            @memset(noise_bytes[33..], 0);
-
-            vector[i] = sampleCBD(ETA1, &noise_bytes);
+            // Create PRF input: sigma || offset || i
+            var prf_input: [34]u8 = undefined;
+            @memcpy(prf_input[0..32], sigma);
+            prf_input[32] = @truncate(offset + i);
+            prf_input[33] = @truncate((offset + i) >> 8);
+            
+            // Generate pseudorandom bytes for CBD sampling
+            var cbd_bytes: [64]u8 = undefined;
+            expandSeed(&cbd_bytes, &prf_input);
+            
+            vector[i] = sampleCBD(ETA1, &cbd_bytes);
         }
     }
 
     /// Pack public key into byte array
     fn packPublicKey(output: []u8, t: *const [K]Poly, rho: []const u8) void {
-        _ = t;
-        // TODO: Implement proper public key packing
-        // This is a placeholder implementation
-        @memset(output, 0);
+        // Pack rho seed (32 bytes)
         @memcpy(output[0..32], rho);
+        
+        // Pack t polynomials (compressed)
+        var offset: usize = 32;
+        for (0..K) |i| {
+            // Pack each polynomial coefficient as 12 bits (3 bytes per 2 coefficients)
+            var coeff_idx: usize = 0;
+            while (coeff_idx < Params.N and offset + 2 < output.len) {
+                const c0 = t[i].coeffs[coeff_idx] % Params.Q;
+                const c1 = if (coeff_idx + 1 < Params.N) t[i].coeffs[coeff_idx + 1] % Params.Q else 0;
+                
+                // Pack 12 bits each into 3 bytes
+                output[offset] = @truncate(c0 & 0xFF);
+                output[offset + 1] = @truncate(((c0 >> 8) & 0x0F) | ((c1 & 0x0F) << 4));
+                output[offset + 2] = @truncate((c1 >> 4) & 0xFF);
+                
+                coeff_idx += 2;
+                offset += 3;
+            }
+        }
     }
 
     /// Pack private key into byte array

@@ -174,24 +174,27 @@ pub const Signal = struct {
         // Derive message key
         const message_key = try session.deriveMessageKey();
 
-        // Encrypt using AES-256-CBC + HMAC-SHA256
-        const ciphertext = try allocator.alloc(u8, plaintext.len + 16 + 32); // plaintext + IV + HMAC
-
-        // Generate random IV
-        var iv: [16]u8 = undefined;
-        crypto.random.bytes(&iv);
-        @memcpy(ciphertext[0..16], &iv);
-
-        // Encrypt (stub implementation)
-        @memcpy(ciphertext[16 .. 16 + plaintext.len], plaintext);
-        for (ciphertext[16 .. 16 + plaintext.len], 0..) |*byte, i| {
-            byte.* ^= message_key[i % 32];
+        // Encrypt using ChaCha20-Poly1305
+        const ChaCha20Poly1305 = crypto.aead.chacha_poly.ChaCha20Poly1305;
+        const cipher = ChaCha20Poly1305.init(message_key);
+        
+        const ciphertext = try allocator.alloc(u8, plaintext.len + 12 + 16); // plaintext + nonce + tag
+        
+        // Generate random nonce
+        var nonce: [12]u8 = undefined;
+        crypto.random.bytes(&nonce);
+        @memcpy(ciphertext[0..12], &nonce);
+        
+        // Encrypt with associated data (empty)
+        const encrypted_len = cipher.encrypt(ciphertext[12..], plaintext, "", nonce) catch {
+            allocator.free(ciphertext);
+            return ProtocolError.MessageEncryptionFailed;
+        };
+        
+        if (encrypted_len != plaintext.len + 16) {
+            allocator.free(ciphertext);
+            return ProtocolError.MessageEncryptionFailed;
         }
-
-        // Compute HMAC
-        var hmac: [32]u8 = undefined;
-        crypto.auth.hmac.sha2.HmacSha256.create(&hmac, ciphertext[0 .. 16 + plaintext.len], &message_key);
-        @memcpy(ciphertext[16 + plaintext.len ..], &hmac);
 
         session.message_number += 1;
         _ = try session.deriveNextChainKey();
@@ -200,27 +203,26 @@ pub const Signal = struct {
     }
 
     pub fn decryptMessage(allocator: std.mem.Allocator, session: *SessionState, ciphertext: []const u8) ![]u8 {
-        if (ciphertext.len < 48) return ProtocolError.MessageDecryptionFailed; // 16 IV + 32 HMAC minimum
+        if (ciphertext.len < 28) return ProtocolError.MessageDecryptionFailed; // 12 nonce + 16 tag minimum
 
         const message_key = try session.deriveMessageKey();
 
-        // Verify HMAC
-        const hmac_offset = ciphertext.len - 32;
-        var expected_hmac: [32]u8 = undefined;
-        crypto.auth.hmac.sha2.HmacSha256.create(&expected_hmac, ciphertext[0..hmac_offset], &message_key);
-
-        if (!std.mem.eql(u8, &expected_hmac, ciphertext[hmac_offset..])) {
-            return ProtocolError.MessageDecryptionFailed;
-        }
-
-        // Decrypt
-        const plaintext_len = hmac_offset - 16;
+        // Decrypt using ChaCha20-Poly1305
+        if (ciphertext.len < 28) return ProtocolError.MessageDecryptionFailed; // 12 nonce + 16 tag minimum
+        
+        const ChaCha20Poly1305 = crypto.aead.chacha_poly.ChaCha20Poly1305;
+        const cipher = ChaCha20Poly1305.init(message_key);
+        
+        const nonce = ciphertext[0..12];
+        const encrypted_data = ciphertext[12..];
+        const plaintext_len = encrypted_data.len - 16;
         const plaintext = try allocator.alloc(u8, plaintext_len);
-        @memcpy(plaintext, ciphertext[16..hmac_offset]);
-
-        for (plaintext, 0..) |*byte, i| {
-            byte.* ^= message_key[i % 32];
-        }
+        
+        // Decrypt with associated data (empty)
+        cipher.decrypt(plaintext, encrypted_data, "", nonce.*) catch {
+            allocator.free(plaintext);
+            return ProtocolError.MessageDecryptionFailed;
+        };
 
         session.message_number += 1;
         _ = try session.deriveNextChainKey();
@@ -341,16 +343,18 @@ pub const Noise = struct {
                 var nonce: [12]u8 = std.mem.zeroes([12]u8);
                 std.mem.writeIntLittle(u64, nonce[4..12], self.n);
 
-                // Encrypt using ChaCha20-Poly1305 (stub)
-                @memcpy(ciphertext[0..plaintext.len], plaintext);
-                for (ciphertext[0..plaintext.len], 0..) |*byte, i| {
-                    byte.* ^= key[i % 32];
+                // Encrypt using ChaCha20-Poly1305
+                const ChaCha20Poly1305 = crypto.aead.chacha_poly.ChaCha20Poly1305;
+                const cipher = ChaCha20Poly1305.init(key);
+                
+                // Encrypt with associated data (empty for Noise)
+                const encrypted_len = cipher.encrypt(ciphertext, plaintext, "", nonce) catch {
+                    return ProtocolError.MessageEncryptionFailed;
+                };
+                
+                if (encrypted_len != plaintext.len + TAGLEN) {
+                    return ProtocolError.MessageEncryptionFailed;
                 }
-
-                // Add authentication tag (stub)
-                var tag: [16]u8 = undefined;
-                crypto.auth.hmac.sha2.HmacSha256.create(&tag, ciphertext[0..plaintext.len], &key);
-                @memcpy(ciphertext[plaintext.len..], tag[0..TAGLEN]);
 
                 self.mixHash(ciphertext);
                 self.n += 1;
@@ -370,20 +374,19 @@ pub const Noise = struct {
                 const plaintext_len = ciphertext.len - TAGLEN;
                 const plaintext = try allocator.alloc(u8, plaintext_len);
 
-                // Verify tag (stub)
-                var expected_tag: [16]u8 = undefined;
-                crypto.auth.hmac.sha2.HmacSha256.create(&expected_tag, ciphertext[0..plaintext_len], &key);
-
-                if (!std.mem.eql(u8, expected_tag[0..TAGLEN], ciphertext[plaintext_len..])) {
+                // Decrypt using ChaCha20-Poly1305
+                const ChaCha20Poly1305 = crypto.aead.chacha_poly.ChaCha20Poly1305;
+                const cipher = ChaCha20Poly1305.init(key);
+                
+                // Convert nonce to bytes
+                var nonce: [12]u8 = std.mem.zeroes([12]u8);
+                std.mem.writeIntLittle(u64, nonce[4..12], self.n);
+                
+                // Decrypt with associated data (empty for Noise)
+                cipher.decrypt(plaintext, ciphertext, "", nonce) catch {
                     allocator.free(plaintext);
                     return ProtocolError.MessageDecryptionFailed;
-                }
-
-                // Decrypt
-                @memcpy(plaintext, ciphertext[0..plaintext_len]);
-                for (plaintext, 0..) |*byte, i| {
-                    byte.* ^= key[i % 32];
-                }
+                };
 
                 self.mixHash(ciphertext);
                 self.n += 1;

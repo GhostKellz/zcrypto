@@ -67,6 +67,11 @@ pub const quic = @import("quic.zig");
 // FFI exports for Rust integration
 pub const ffi = @import("ffi.zig");
 
+// GhostMesh protocol modules
+pub const gossip = @import("protocols/gossip.zig");
+pub const dht = @import("protocols/dht.zig");
+pub const key_rotation = @import("key_rotation.zig");
+
 // Convenience exports for common algorithms
 pub const kyber = post_quantum.ML_KEM_768;
 pub const dilithium = post_quantum.ML_DSA_65;
@@ -74,7 +79,7 @@ pub const x25519 = kex.X25519;
 pub const ed25519 = kex.Ed25519;
 
 // Version information
-pub const version = "0.7.0";
+pub const version = "0.8.4";
 
 test {
     // Import all module tests
@@ -107,4 +112,9 @@ test {
     _ = wasm_crypto;
     _ = blockchain_crypto;
     _ = pool_crypto;
+    
+    // GhostMesh integration modules (v0.8.4)
+    _ = gossip;
+    _ = dht;
+    _ = key_rotation;
 }

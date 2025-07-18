@@ -84,5 +84,5 @@ pub fn main() !void {
     std.debug.print("  Completed TLS 1.3 key schedule derivation\n", .{});
     
     std.debug.print("\n✅ All cryptographic operations completed successfully!\n", .{});
-    std.debug.print("🚀 Ready for integration with zquic and tokioZ!\n", .{});
+    std.debug.print("🚀 Ready for integration with zquic and zsync!\n", .{});
 }

@@ -8,6 +8,16 @@ const zcrypto = @import("zcrypto");
 const ITERATIONS = 10000;
 const LARGE_DATA_SIZE = 1024 * 1024; // 1MB
 
+// Global test data
+var large_data_buffer: [LARGE_DATA_SIZE]u8 = undefined;
+var test_keypair: ?@import("zcrypto").asym.Ed25519KeyPair = null;
+var test_signature: [64]u8 = undefined;
+var test_message: []const u8 = undefined;
+var test_aes_key: [16]u8 = undefined;
+var test_nonce: [12]u8 = undefined;
+var test_plaintext: []u8 = undefined;
+var test_allocator: std.mem.Allocator = undefined;
+
 fn benchmark(comptime name: []const u8, iterations: u32, func: anytype) !void {
     const start_time = std.time.nanoTimestamp();
 
@@ -28,11 +38,11 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    std.debug.print("🏁 zcrypto Performance Benchmarks\n");
+    std.debug.print("🏁 zcrypto Performance Benchmarks\n", .{});
     std.debug.print("Iterations: {d}\n\n", .{ITERATIONS});
 
     // Hash benchmarks
-    std.debug.print("📝 Hash Functions:\n");
+    std.debug.print("📝 Hash Functions:\n", .{});
 
     const test_data = "The quick brown fox jumps over the lazy dog";
 
@@ -55,34 +65,32 @@ pub fn main() !void {
     }.run);
 
     // Large data hashing
-    const large_data = try allocator.alloc(u8, LARGE_DATA_SIZE);
-    defer allocator.free(large_data);
-    zcrypto.rand.fill(large_data);
+    zcrypto.rand.fill(&large_data_buffer);
 
-    std.debug.print("\n📊 Large Data Hashing (1MB):\n");
+    std.debug.print("\n📊 Large Data Hashing (1MB):\n", .{});
 
     try benchmark("SHA-256 (1MB)", 100, struct {
         fn run() !void {
-            _ = zcrypto.hash.sha256(large_data);
+            _ = zcrypto.hash.sha256(&large_data_buffer);
         }
     }.run);
 
     // Signature benchmarks
-    std.debug.print("\n✍️  Digital Signatures:\n");
+    std.debug.print("\n✍️  Digital Signatures:\n", .{});
 
-    const keypair = zcrypto.asym.ed25519.generate();
-    const message = "Benchmark message for signing";
+    test_keypair = zcrypto.asym.ed25519.generate();
+    test_message = "Benchmark message for signing";
+    test_signature = try test_keypair.?.sign(test_message);
 
     try benchmark("Ed25519 Sign", ITERATIONS, struct {
         fn run() !void {
-            _ = keypair.sign(message);
+            _ = test_keypair.?.sign(test_message) catch unreachable;
         }
     }.run);
 
-    const signature = keypair.sign(message);
     try benchmark("Ed25519 Verify", ITERATIONS, struct {
         fn run() !void {
-            _ = keypair.verify(message, signature);
+            _ = test_keypair.?.verify(test_message, test_signature);
         }
     }.run);
 
@@ -102,30 +110,31 @@ pub fn main() !void {
     }.run);
 
     // Symmetric encryption benchmarks
-    std.debug.print("\n🔒 Symmetric Encryption:\n");
+    std.debug.print("\n🔒 Symmetric Encryption:\n", .{});
 
-    const key = zcrypto.rand.randomArray(16);
-    const nonce = zcrypto.rand.randomArray(12);
-    const plaintext_data = try allocator.alloc(u8, 1024); // 1KB
-    defer allocator.free(plaintext_data);
-    zcrypto.rand.fill(plaintext_data);
+    test_aes_key = zcrypto.rand.randomArray(16);
+    test_nonce = zcrypto.rand.randomArray(12);
+    test_plaintext = try allocator.alloc(u8, 1024); // 1KB
+    defer allocator.free(test_plaintext);
+    zcrypto.rand.fill(test_plaintext);
+    test_allocator = allocator;
 
     try benchmark("AES-128-GCM Encrypt (1KB)", ITERATIONS / 10, struct {
         fn run() !void {
-            const ciphertext = zcrypto.sym.encryptAes128Gcm(allocator, key, nonce, plaintext_data, "") catch unreachable;
+            const ciphertext = zcrypto.sym.encryptAes128Gcm(test_allocator, test_aes_key, test_nonce, test_plaintext, "") catch unreachable;
             ciphertext.deinit();
         }
     }.run);
 
     try benchmark("ChaCha20-Poly1305 Encrypt (1KB)", ITERATIONS / 10, struct {
         fn run() !void {
-            const ciphertext = zcrypto.sym.encryptChaCha20Poly1305(allocator, zcrypto.rand.randomArray(32), nonce, plaintext_data, "") catch unreachable;
+            const ciphertext = zcrypto.sym.encryptChaCha20Poly1305(test_allocator, zcrypto.rand.randomArray(32), test_nonce, test_plaintext, "") catch unreachable;
             ciphertext.deinit();
         }
     }.run);
 
     // Random generation benchmarks
-    std.debug.print("\n🎲 Random Generation:\n");
+    std.debug.print("\n🎲 Random Generation:\n", .{});
 
     try benchmark("Random 32 bytes", ITERATIONS * 10, struct {
         fn run() !void {
@@ -135,18 +144,18 @@ pub fn main() !void {
     }.run);
 
     // Key derivation benchmarks
-    std.debug.print("\n🔑 Key Derivation:\n");
+    std.debug.print("\n🔑 Key Derivation:\n", .{});
 
     const master_secret = "master-secret-for-benchmarking";
     try benchmark("HKDF (32 bytes)", ITERATIONS, struct {
         fn run() !void {
-            const derived = zcrypto.kdf.deriveKey(allocator, master_secret, "bench-label", 32) catch unreachable;
-            allocator.free(derived);
+            const derived = zcrypto.kdf.deriveKey(test_allocator, master_secret, "bench-label", 32) catch unreachable;
+            test_allocator.free(derived);
         }
     }.run);
 
     // QUIC/TLS benchmarks
-    std.debug.print("\n🌐 QUIC/TLS Operations:\n");
+    std.debug.print("\n🌐 QUIC/TLS Operations:\n", .{});
 
     const cid = [_]u8{ 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0 };
     try benchmark("QUIC Initial Secrets", ITERATIONS, struct {
@@ -155,5 +164,5 @@ pub fn main() !void {
         }
     }.run);
 
-    std.debug.print("\n🏆 Benchmark completed!\n");
+    std.debug.print("\n🏆 Benchmark completed!\n", .{});
 }
