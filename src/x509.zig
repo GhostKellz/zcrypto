@@ -43,8 +43,8 @@ pub const ObjectId = struct {
     pub fn toString(self: ObjectId, allocator: std.mem.Allocator) ![]u8 {
         if (self.bytes.len == 0) return try allocator.dupe(u8, "");
         
-        var result = std.ArrayList(u8).init(allocator);
-        defer result.deinit();
+        var result = std.ArrayList(u8).empty;
+        defer result.deinit(allocator);
         
         // First two components are encoded in first byte
         const first_byte = self.bytes[0];
@@ -66,7 +66,7 @@ pub const ObjectId = struct {
             try result.writer().print(".{}", .{value});
         }
         
-        return result.toOwnedSlice();
+        return result.toOwnedSlice(allocator);
     }
 };
 
@@ -188,7 +188,7 @@ pub const Certificate = struct {
         const public_key_info = try parsePublicKeyInfo(allocator, &tbs_parser);
         
         // extensions [3] EXPLICIT Extensions OPTIONAL
-        var extensions = std.ArrayList(Extension).init(allocator);
+        var extensions = std.ArrayList(Extension).empty;
         if (tbs_parser.peekTag() == @intFromEnum(DerTag.context_specific_3)) {
             const ext_explicit = try tbs_parser.parseContextSpecific(3);
             var ext_parser = DerParser.init(ext_explicit);
@@ -210,7 +210,7 @@ pub const Certificate = struct {
             .validity = validity,
             .subject = subject,
             .public_key_info = public_key_info,
-            .extensions = try extensions.toOwnedSlice(),
+            .extensions = try extensions.toOwnedSlice(allocator),
             .signature = signature,
             .raw_der = try allocator.dupe(u8, der),
             .allocator = allocator,
@@ -573,7 +573,7 @@ fn parseExtensions(allocator: std.mem.Allocator, extensions: *std.ArrayList(Exte
         // extnValue OCTET STRING
         const value = try allocator.dupe(u8, try ext_parser.parseOctetString());
         
-        try extensions.append(Extension{
+        try extensions.append(allocator, Extension{
             .oid = oid,
             .critical = critical,
             .value = value,
@@ -583,7 +583,7 @@ fn parseExtensions(allocator: std.mem.Allocator, extensions: *std.ArrayList(Exte
 
 fn parseSubjectAltNames(allocator: std.mem.Allocator, der: []const u8) ![][]const u8 {
     var parser = DerParser.init(der);
-    var names = std.ArrayList([]const u8).init(allocator);
+    var names = std.ArrayList([]const u8).empty;
     
     const san_seq = try parser.parseSequence();
     var san_parser = DerParser.init(san_seq);
@@ -596,7 +596,7 @@ fn parseSubjectAltNames(allocator: std.mem.Allocator, der: []const u8) ![][]cons
                 try san_parser.advance(1); // Skip tag
                 const length = try san_parser.parseLength();
                 const dns_name = san_parser.data[san_parser.pos..san_parser.pos + length];
-                try names.append(try allocator.dupe(u8, dns_name));
+                try names.append(allocator, try allocator.dupe(u8, dns_name));
                 try san_parser.advance(length);
             } else {
                 // Skip other name types
@@ -609,7 +609,7 @@ fn parseSubjectAltNames(allocator: std.mem.Allocator, der: []const u8) ![][]cons
         }
     }
     
-    return names.toOwnedSlice();
+    return names.toOwnedSlice(allocator);
 }
 
 fn daysSinceEpoch(year: u16, month: u8, day: u8) i32 {

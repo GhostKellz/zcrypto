@@ -40,7 +40,7 @@ pub const Ed25519KeyPair = struct {
 
     /// Zero out the private key (call when done)
     pub fn zeroize(self: *Ed25519KeyPair) void {
-        std.crypto.utils.secureZero(u8, &self.private_key);
+        std.crypto.secureZero(u8, &self.private_key);
     }
 };
 
@@ -56,7 +56,7 @@ pub const Curve25519KeyPair = struct {
 
     /// Zero out the private key (call when done)
     pub fn zeroize(self: *Curve25519KeyPair) void {
-        std.crypto.utils.secureZero(u8, &self.private_key);
+        std.crypto.secureZero(u8, &self.private_key);
     }
 };
 
@@ -201,7 +201,7 @@ pub const Secp256k1KeyPair = struct {
 
     /// Zero out the private key
     pub fn zeroize(self: *Secp256k1KeyPair) void {
-        std.crypto.utils.secureZero(u8, &self.private_key);
+        std.crypto.secureZero(u8, &self.private_key);
     }
 };
 
@@ -222,7 +222,7 @@ pub const Secp256r1KeyPair = struct {
 
     /// Zero out the private key
     pub fn zeroize(self: *Secp256r1KeyPair) void {
-        std.crypto.utils.secureZero(u8, &self.private_key);
+        std.crypto.secureZero(u8, &self.private_key);
     }
 };
 

@@ -15,7 +15,7 @@ pub fn main() !void {
     std.log.info("=== zcrypto zsync Integration Demo ===", .{});
 
     // Initialize zsync with BlockingIo for simplicity
-    var io = zsync.BlockingIo.init(allocator);
+    var io = zsync.BlockingIo.init(allocator, 4096);
 
     try runAsyncCryptoExamples(io.io(), allocator);
 }

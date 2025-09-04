@@ -620,7 +620,7 @@ pub export fn zcrypto_get_features(features: [*]u32) callconv(.C) CryptoResult {
 /// @return CryptoResult with success status
 pub export fn zcrypto_secure_zero(ptr: [*]u8, len: u32) callconv(.C) CryptoResult {
     const slice = ptr[0..len];
-    std.crypto.utils.secureZero(u8, slice);
+    std.crypto.secureZero(u8, slice);
     return CryptoResult.SUCCESS;
 }
 

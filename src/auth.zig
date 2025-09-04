@@ -27,19 +27,19 @@ pub const hmac = struct {
 /// Verify HMAC-SHA256 authentication tag in constant time
 pub fn verifyHmacSha256(message: []const u8, key: []const u8, expected_tag: [32]u8) bool {
     const computed_tag = hmac.sha256(message, key);
-    return std.crypto.utils.timingSafeEql([32]u8, computed_tag, expected_tag);
+    return std.crypto.timing_safe.eql([32]u8, computed_tag, expected_tag);
 }
 
 /// Verify HMAC-SHA512 authentication tag in constant time
 pub fn verifyHmacSha512(message: []const u8, key: []const u8, expected_tag: [64]u8) bool {
     const computed_tag = hmac.sha512(message, key);
-    return std.crypto.utils.timingSafeEql([64]u8, computed_tag, expected_tag);
+    return std.crypto.timing_safe.eql([64]u8, computed_tag, expected_tag);
 }
 
 /// Verify HMAC-Blake2s authentication tag in constant time
 pub fn verifyHmacBlake2s(message: []const u8, key: []const u8, expected_tag: [32]u8) bool {
     const computed_tag = hmac.blake2s(message, key);
-    return std.crypto.utils.timingSafeEql([32]u8, computed_tag, expected_tag);
+    return std.crypto.timing_safe.eql([32]u8, computed_tag, expected_tag);
 }
 
 /// Streaming HMAC-SHA256 for large messages

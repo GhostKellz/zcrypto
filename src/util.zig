@@ -31,7 +31,7 @@ pub fn constantTimeEqualArray(comptime T: type, a: T, b: T) bool {
 
 /// Securely zero out memory
 pub fn secureZero(buf: []u8) void {
-    std.crypto.utils.secureZero(u8, buf);
+    std.crypto.secureZero(u8, buf);
 }
 
 /// PKCS#7 padding

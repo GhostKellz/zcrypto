@@ -174,9 +174,9 @@ pub const Key = union(KeyType) {
         switch (self.*) {
             .Ed25519 => |*key| key.zeroize(),
             .X25519 => |*key| key.zeroize(),
-            .ChaCha20Poly1305 => |*key| std.crypto.utils.secureZero(u8, key),
-            .AES256GCM => |*key| std.crypto.utils.secureZero(u8, key),
-            .HMAC => |*key| std.crypto.utils.secureZero(u8, key),
+            .ChaCha20Poly1305 => |*key| std.crypto.secureZero(u8, key),
+            .AES256GCM => |*key| std.crypto.secureZero(u8, key),
+            .HMAC => |*key| std.crypto.secureZero(u8, key),
             .Custom => |data| {
                 // Can't safely zero custom data without knowing its structure
                 _ = data;
