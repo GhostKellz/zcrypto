@@ -334,8 +334,8 @@ pub const KeyManager = struct {
     pub fn cleanupExpiredKeys(self: *KeyManager) !void {
         const current_time = @as(u64, @intCast(std.time.timestamp()));
         
-        var keys_to_remove = std.ArrayList([16]u8).init(self.allocator);
-        defer keys_to_remove.deinit();
+        var keys_to_remove = std.ArrayList([16]u8).init();
+        defer keys_to_remove.deinit(self.allocator);
         
         // Find expired keys
         var iterator = self.keys.iterator();
@@ -347,7 +347,7 @@ pub const KeyManager = struct {
             if (!key_entry.metadata.is_active and key_entry.metadata.isExpired()) {
                 const time_since_expiry = current_time - key_entry.metadata.expires_at;
                 if (time_since_expiry > self.policy.key_overlap_period) {
-                    try keys_to_remove.append(key_id);
+                    try keys_to_remove.append(self.allocator, key_id);
                 }
             }
         }

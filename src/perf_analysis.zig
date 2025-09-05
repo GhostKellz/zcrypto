@@ -66,18 +66,18 @@ pub const StatisticalAnalyzer = struct {
 
     pub fn init(allocator: std.mem.Allocator) StatisticalAnalyzer {
         return StatisticalAnalyzer{
-            .samples = std.ArrayList(u64).init(allocator),
+            .samples = .{},
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *StatisticalAnalyzer) void {
-        self.samples.deinit();
+        self.samples.deinit(self.allocator);
     }
 
     /// Add a sample to the analyzer
     pub fn addSample(self: *StatisticalAnalyzer, value: u64) !void {
-        try self.samples.append(value);
+        try self.samples.append(self.allocator, value);
     }
 
     /// Calculate comprehensive statistics
@@ -136,7 +136,7 @@ pub const StatisticalAnalyzer = struct {
     /// Detect performance anomalies
     pub fn detectAnomalies(self: *StatisticalAnalyzer, threshold_std_devs: f64) ![]u64 {
         const stats = try self.analyze();
-        var anomalies = std.ArrayList(u64).init(self.allocator);
+        var anomalies: std.ArrayList(u64) = .{};
 
         const lower_bound = stats.mean - (threshold_std_devs * stats.std_deviation);
         const upper_bound = stats.mean + (threshold_std_devs * stats.std_deviation);
@@ -144,7 +144,7 @@ pub const StatisticalAnalyzer = struct {
         for (self.samples.items) |sample| {
             const sample_f = @as(f64, @floatFromInt(sample));
             if (sample_f < lower_bound or sample_f > upper_bound) {
-                try anomalies.append(sample);
+                try anomalies.append(self.allocator, sample);
             }
         }
 
@@ -193,7 +193,7 @@ pub const MemoryLeakDetector = struct {
     pub fn init(allocator: std.mem.Allocator) MemoryLeakDetector {
         return MemoryLeakDetector{
             .allocations = std.HashMap(usize, AllocationRecord, std.hash_map.AutoContext(usize), 80).init(allocator),
-            .allocation_timeline = std.ArrayList(AllocationEvent).init(allocator),
+            .allocation_timeline = .{},
             .total_allocated = 0,
             .total_freed = 0,
             .peak_usage = 0,
@@ -204,7 +204,7 @@ pub const MemoryLeakDetector = struct {
 
     pub fn deinit(self: *MemoryLeakDetector) void {
         self.allocations.deinit();
-        self.allocation_timeline.deinit();
+        self.allocation_timeline.deinit(self.allocator);
     }
 
     /// Record memory allocation
@@ -219,7 +219,7 @@ pub const MemoryLeakDetector = struct {
         };
 
         try self.allocations.put(address, record);
-        try self.allocation_timeline.append(AllocationEvent{
+        try self.allocation_timeline.append(self.allocator, AllocationEvent{
             .timestamp = timestamp,
             .event_type = .allocate,
             .address = address,
@@ -239,7 +239,7 @@ pub const MemoryLeakDetector = struct {
         if (self.allocations.get(address)) |record| {
             const timestamp = std.time.nanoTimestamp();
 
-            try self.allocation_timeline.append(AllocationEvent{
+            try self.allocation_timeline.append(self.allocator, AllocationEvent{
                 .timestamp = timestamp,
                 .event_type = .deallocate,
                 .address = address,
@@ -254,7 +254,7 @@ pub const MemoryLeakDetector = struct {
 
     /// Generate comprehensive leak report
     pub fn generateLeakReport(self: *MemoryLeakDetector) !LeakReport {
-        var leak_details = std.ArrayList(LeakDetail).init(self.allocator);
+        var leak_details: std.ArrayList(LeakDetail) = .{};
         var total_leaked: u64 = 0;
 
         var iterator = self.allocations.iterator();
@@ -265,7 +265,7 @@ pub const MemoryLeakDetector = struct {
                 .age_ns = std.time.nanoTimestamp() - entry.value_ptr.timestamp,
                 .call_site = entry.value_ptr.call_site,
             };
-            try leak_details.append(leak);
+            try leak_details.append(self.allocator, leak);
             total_leaked += entry.value_ptr.size;
         }
 
@@ -282,7 +282,7 @@ pub const MemoryLeakDetector = struct {
             .peak_usage_bytes = self.peak_usage,
             .current_usage_bytes = self.current_usage,
             .allocation_count = @intCast(self.allocation_timeline.items.len),
-            .leak_details = try leak_details.toOwnedSlice(),
+            .leak_details = try leak_details.toOwnedSlice(self.allocator),
         };
     }
 

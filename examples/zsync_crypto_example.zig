@@ -57,5 +57,22 @@ fn runAsyncCryptoExamples(io: zsync.Io, allocator: std.mem.Allocator) !void {
     const hash_result = try async_crypto.hashAsync(test_data);
     std.log.info("Hash: {any}", .{hash_result});
 
-    std.log.info("=== zsync Demo Complete ===", .{});
+    // New v0.5.3 features: Batch hashing
+    std.log.info("Testing batch hashing...", .{});
+    const hash_data = [_][]const u8{
+        "hash test 1",
+        "hash test 2", 
+        "hash test 3",
+    };
+    const batch_hashes = try async_crypto.hashBatchAsync(&hash_data);
+    defer allocator.free(batch_hashes);
+    std.log.info("Batch hashed {} items", .{batch_hashes.len});
+
+    // New v0.5.3 features: Encryption with timeout
+    std.log.info("Testing encryption with timeout...", .{});
+    const timeout_encrypted = try async_crypto.encryptAsyncWithTimeout(test_data, &key, 5000);
+    defer allocator.free(timeout_encrypted);
+    std.log.info("Timeout encryption: {} bytes", .{timeout_encrypted.len});
+
+    std.log.info("=== zsync v0.5.3 Demo Complete ===", .{});
 }

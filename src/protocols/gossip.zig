@@ -271,16 +271,16 @@ pub const BatchVerifier = struct {
     /// Initialize batch verifier
     pub fn init(allocator: std.mem.Allocator) BatchVerifier {
         return BatchVerifier{
-            .messages = std.ArrayList(SignedMessage).init(allocator),
-            .public_keys = std.ArrayList([32]u8).init(allocator),
+            .messages = .{},
+            .public_keys = .{},
             .allocator = allocator,
         };
     }
     
     /// Add message to batch
     pub fn addMessage(self: *BatchVerifier, message: SignedMessage, public_key: [32]u8) !void {
-        try self.messages.append(message);
-        try self.public_keys.append(public_key);
+        try self.messages.append(self.allocator, message);
+        try self.public_keys.append(self.allocator, public_key);
     }
     
     /// Verify all messages in batch
@@ -317,8 +317,8 @@ pub const BatchVerifier = struct {
     
     /// Clean up resources
     pub fn deinit(self: *BatchVerifier) void {
-        self.messages.deinit();
-        self.public_keys.deinit();
+        self.messages.deinit(self.allocator);
+        self.public_keys.deinit(self.allocator);
     }
 };
 

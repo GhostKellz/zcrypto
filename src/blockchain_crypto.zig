@@ -30,21 +30,21 @@ pub const MerkleTree = struct {
     pub fn init(allocator: Allocator) MerkleTree {
         return MerkleTree{
             .allocator = allocator,
-            .leaves = std.ArrayList([32]u8).init(allocator),
-            .tree = std.ArrayList([32]u8).init(allocator),
+            .leaves = .{},
+            .tree = .{},
         };
     }
 
     pub fn deinit(self: *MerkleTree) void {
-        self.leaves.deinit();
-        self.tree.deinit();
+        self.leaves.deinit(self.allocator);
+        self.tree.deinit(self.allocator);
     }
 
     /// Add a leaf to the tree
     pub fn addLeaf(self: *MerkleTree, data: []const u8) !void {
         var hash: [32]u8 = undefined;
         crypto.hash.sha2.Sha256.hash(data, &hash, .{});
-        try self.leaves.append(hash);
+        try self.leaves.append(self.allocator, hash);
     }
 
     /// Build the complete Merkle tree
@@ -54,7 +54,7 @@ pub const MerkleTree = struct {
         self.tree.clearRetainingCapacity();
 
         // Copy leaves to tree (bottom level)
-        try self.tree.appendSlice(self.leaves.items);
+        try self.tree.appendSlice(self.allocator, self.leaves.items);
 
         var level_size = self.leaves.items.len;
         var level_start: usize = 0;
@@ -63,7 +63,7 @@ pub const MerkleTree = struct {
             const next_level_size = (level_size + 1) / 2;
             const next_level_start = self.tree.items.len;
 
-            try self.tree.resize(self.tree.items.len + next_level_size);
+            try self.tree.resize(self.allocator, self.tree.items.len + next_level_size);
 
             var i: usize = 0;
             while (i < next_level_size) : (i += 1) {
@@ -105,7 +105,7 @@ pub const MerkleTree = struct {
 
             if (sibling_index < level_size) {
                 const sibling_hash = self.tree.items[level_start + sibling_index];
-                try proof.addStep(sibling_hash, is_left);
+                try proof.addStep(allocator, sibling_hash, is_left);
             }
 
             current_index /= 2;
@@ -127,17 +127,18 @@ pub const MerkleProof = struct {
     };
 
     pub fn init(allocator: Allocator) MerkleProof {
+        _ = allocator; // Parameter kept for consistency but not used
         return MerkleProof{
-            .steps = std.ArrayList(ProofStep).init(allocator),
+            .steps = .{},
         };
     }
 
-    pub fn deinit(self: *MerkleProof) void {
-        self.steps.deinit();
+    pub fn deinit(self: *MerkleProof, allocator: std.mem.Allocator) void {
+        self.steps.deinit(allocator);
     }
 
-    fn addStep(self: *MerkleProof, hash: [32]u8, is_left: bool) !void {
-        try self.steps.append(ProofStep{
+    fn addStep(self: *MerkleProof, allocator: std.mem.Allocator, hash: [32]u8, is_left: bool) !void {
+        try self.steps.append(allocator, ProofStep{
             .hash = hash,
             .is_left = is_left,
         });
@@ -179,7 +180,7 @@ pub const BatchVerifier = struct {
     pub fn init(allocator: Allocator) BatchVerifier {
         return BatchVerifier{
             .allocator = allocator,
-            .signatures = std.ArrayList(SignatureData).init(allocator),
+            .signatures = .{},
         };
     }
 
@@ -187,13 +188,13 @@ pub const BatchVerifier = struct {
         for (self.signatures.items) |sig_data| {
             self.allocator.free(sig_data.message);
         }
-        self.signatures.deinit();
+        self.signatures.deinit(self.allocator);
     }
 
     /// Add a signature to the batch
     pub fn addSignature(self: *BatchVerifier, message: []const u8, signature: [64]u8, public_key: [32]u8) !void {
         const message_copy = try self.allocator.dupe(u8, message);
-        try self.signatures.append(SignatureData{
+        try self.signatures.append(self.allocator, SignatureData{
             .message = message_copy,
             .signature = signature,
             .public_key = public_key,
@@ -441,7 +442,7 @@ test "merkle proof generation and verification" {
 
     const root = tree.getRoot().?;
     var proof = try tree.generateProof(0, testing.allocator);
-    defer proof.deinit();
+    defer proof.deinit(testing.allocator);
 
     var leaf_hash: [32]u8 = undefined;
     crypto.hash.sha2.Sha256.hash("transaction1", &leaf_hash, .{});

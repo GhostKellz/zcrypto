@@ -256,13 +256,13 @@ pub const CryptoPool = struct {
 
     /// Clean up expired contexts
     fn cleanupExpired(self: *CryptoPool) !void {
-        var to_remove = std.ArrayList(u64).init(self.allocator);
-        defer to_remove.deinit();
+        var to_remove: std.ArrayList(u64) = .{};
+        defer to_remove.deinit(self.allocator);
 
         var iterator = self.contexts.iterator();
         while (iterator.next()) |entry| {
             if (entry.value_ptr.hasExpired(self.ttl_seconds) and entry.value_ptr.reference_count == 0) {
-                try to_remove.append(entry.key_ptr.*);
+                try to_remove.append(self.allocator, entry.key_ptr.*);
             }
         }
 

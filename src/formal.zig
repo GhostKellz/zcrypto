@@ -80,8 +80,8 @@ pub const ConstantTimeVerifier = struct {
     pub fn verify(comptime T: type, comptime func: anytype, inputs: []const T) !VerificationResult {
         const start_time = std.time.nanoTimestamp();
 
-        var all_execution_times = std.ArrayList(u64).init(std.testing.allocator);
-        defer all_execution_times.deinit();
+        var all_execution_times: std.ArrayList(u64) = .{};
+        defer all_execution_times.deinit(std.testing.allocator);
 
         // Multiple rounds of measurement for statistical reliability
         const num_rounds = 10;
@@ -100,7 +100,7 @@ pub const ConstantTimeVerifier = struct {
                 const func_start = std.time.nanoTimestamp();
                 _ = func(input);
                 const func_end = std.time.nanoTimestamp();
-                try all_execution_times.append(@intCast(func_end - func_start));
+                try all_execution_times.append(std.testing.allocator, @intCast(func_end - func_start));
             }
         }
 
@@ -166,27 +166,29 @@ pub const ConstantTimeVerifier = struct {
 pub const MemorySafetyVerifier = struct {
     allocations: std.ArrayList([]u8),
     deallocations: std.ArrayList([]u8),
+    allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) MemorySafetyVerifier {
         return MemorySafetyVerifier{
-            .allocations = std.ArrayList([]u8).init(allocator),
-            .deallocations = std.ArrayList([]u8).init(allocator),
+            .allocations = .{},
+            .deallocations = .{},
+            .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *MemorySafetyVerifier) void {
-        self.allocations.deinit();
-        self.deallocations.deinit();
+        self.allocations.deinit(self.allocator);
+        self.deallocations.deinit(self.allocator);
     }
 
     /// Track memory allocation
     pub fn trackAllocation(self: *MemorySafetyVerifier, memory: []u8) !void {
-        try self.allocations.append(memory);
+        try self.allocations.append(self.allocator, memory);
     }
 
     /// Track memory deallocation
     pub fn trackDeallocation(self: *MemorySafetyVerifier, memory: []u8) !void {
-        try self.deallocations.append(memory);
+        try self.deallocations.append(self.allocator, memory);
     }
 
     /// Verify memory safety (no leaks, no double-free)
@@ -238,8 +240,8 @@ pub const SideChannelVerifier = struct {
         const start_time = std.time.nanoTimestamp();
 
         // Measure cache behavior using performance counters (simplified)
-        var cache_misses = std.ArrayList(u64).init(std.testing.allocator);
-        defer cache_misses.deinit();
+        var cache_misses: std.ArrayList(u64) = .{};
+        defer cache_misses.deinit(std.testing.allocator);
 
         for (test_inputs) |input| {
             // Flush cache before measurement
@@ -253,7 +255,7 @@ pub const SideChannelVerifier = struct {
             _ = func(input);
             const cache_end = std.time.nanoTimestamp();
 
-            try cache_misses.append(@intCast(cache_end - cache_start));
+            try cache_misses.append(std.testing.allocator, @intCast(cache_end - cache_start));
         }
 
         // Analyze cache timing variation

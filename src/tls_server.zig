@@ -450,8 +450,8 @@ pub const TlsConnection = struct {
     }
 
     fn sendServerHello(self: *TlsConnection) !void {
-        var buffer = std.ArrayList(u8).init(self.allocator);
-        defer buffer.deinit();
+        var buffer = std.ArrayList(u8).init();
+        defer buffer.deinit(self.allocator);
 
         // Generate server key share for X25519
         self.server_key_share = asym.x25519.generate();
@@ -474,8 +474,8 @@ pub const TlsConnection = struct {
         try buffer.writer().writeByte(0);
 
         // Extensions
-        var extensions = std.ArrayList(u8).init(self.allocator);
-        defer extensions.deinit();
+        var extensions = std.ArrayList(u8).init();
+        defer extensions.deinit(self.allocator);
 
         // Supported versions (TLS 1.3)
         try extensions.writer().writeInt(u16, @intFromEnum(tls_client.ExtensionType.supported_versions), .big);
@@ -497,8 +497,8 @@ pub const TlsConnection = struct {
     }
 
     fn sendEncryptedExtensions(self: *TlsConnection) !void {
-        var buffer = std.ArrayList(u8).init(self.allocator);
-        defer buffer.deinit();
+        var buffer = std.ArrayList(u8).init();
+        defer buffer.deinit(self.allocator);
 
         // Extensions length (populated below)
         const len_pos = buffer.items.len;
@@ -523,8 +523,8 @@ pub const TlsConnection = struct {
     }
 
     fn sendCertificate(self: *TlsConnection) !void {
-        var buffer = std.ArrayList(u8).init(self.allocator);
-        defer buffer.deinit();
+        var buffer = std.ArrayList(u8).init();
+        defer buffer.deinit(self.allocator);
 
         // Certificate request context (empty for server certificates)
         try buffer.writer().writeByte(0);
@@ -559,8 +559,8 @@ pub const TlsConnection = struct {
 
     fn sendCertificateVerify(self: *TlsConnection) !void {
         // TODO: Implement proper signature
-        var buffer = std.ArrayList(u8).init(self.allocator);
-        defer buffer.deinit();
+        var buffer = std.ArrayList(u8).init();
+        defer buffer.deinit(self.allocator);
 
         // Signature algorithm (Ed25519)
         try buffer.writer().writeInt(u16, 0x0807, .big);
@@ -609,8 +609,8 @@ pub const TlsConnection = struct {
     }
 
     fn sendNewSessionTicket(self: *TlsConnection) !void {
-        var buffer = std.ArrayList(u8).init(self.allocator);
-        defer buffer.deinit();
+        var buffer = std.ArrayList(u8).init();
+        defer buffer.deinit(self.allocator);
 
         // Ticket lifetime (7 days in seconds)
         try buffer.writer().writeInt(u32, 604800, .big);
@@ -845,8 +845,8 @@ pub const TlsConnection = struct {
     };
 
     fn writeRecord(self: *TlsConnection, record_type: tls_client.RecordType, data: []const u8) !void {
-        var buffer = std.ArrayList(u8).init(self.allocator);
-        defer buffer.deinit();
+        var buffer = std.ArrayList(u8).init();
+        defer buffer.deinit(self.allocator);
 
         // Record header
         try buffer.writer().writeByte(@intFromEnum(record_type));
@@ -876,8 +876,8 @@ pub const TlsConnection = struct {
     }
 
     fn writeHandshakeMessage(self: *TlsConnection, msg_type: tls_client.HandshakeType, data: []const u8) !void {
-        var buffer = std.ArrayList(u8).init(self.allocator);
-        defer buffer.deinit();
+        var buffer = std.ArrayList(u8).init();
+        defer buffer.deinit(self.allocator);
 
         try buffer.writer().writeByte(@intFromEnum(msg_type));
         try buffer.writer().writeInt(u24, @intCast(data.len), .big);

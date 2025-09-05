@@ -133,7 +133,7 @@ pub const KBucket = struct {
     /// Initialize k-bucket
     pub fn init(allocator: std.mem.Allocator) KBucket {
         return KBucket{
-            .entries = std.ArrayList(RoutingEntry).init(allocator),
+            .entries = .{},
             .allocator = allocator,
         };
     }
@@ -153,7 +153,7 @@ pub const KBucket = struct {
         
         // Add new entry if bucket has space
         if (self.entries.items.len < BUCKET_SIZE) {
-            try self.entries.append(RoutingEntry{
+            try self.entries.append(self.allocator, RoutingEntry{
                 .node = node,
                 .last_seen = current_time,
                 .ping_count = 0,
@@ -228,7 +228,7 @@ pub const KBucket = struct {
     
     /// Clean up resources
     pub fn deinit(self: *KBucket) void {
-        self.entries.deinit();
+        self.entries.deinit(self.allocator);
     }
 };
 
@@ -273,13 +273,13 @@ pub const RoutingTable = struct {
     
     /// Find closest nodes to target
     pub fn findClosestNodes(self: *RoutingTable, target: NodeId, count: usize, allocator: std.mem.Allocator) ![]DHTNode {
-        var all_nodes = std.ArrayList(DHTNode).init(allocator);
-        defer all_nodes.deinit();
+        var all_nodes: std.ArrayList(DHTNode) = .{};
+        defer all_nodes.deinit(allocator);
         
         // Collect nodes from all buckets
         for (self.buckets) |bucket| {
             for (bucket.entries.items) |entry| {
-                try all_nodes.append(entry.node);
+                try all_nodes.append(allocator, entry.node);
             }
         }
         
@@ -342,7 +342,7 @@ pub const DHTLookup = struct {
     pub fn init(allocator: std.mem.Allocator, target: NodeId) DHTLookup {
         return DHTLookup{
             .target = target,
-            .closest_nodes = std.ArrayList(DHTNode).init(allocator),
+            .closest_nodes = .{},
             .queried_nodes = std.HashMap(NodeId, void, std.hash_map.AutoContext(NodeId), std.hash_map.default_max_load_percentage).init(allocator),
             .allocator = allocator,
         };
@@ -351,7 +351,7 @@ pub const DHTLookup = struct {
     /// Add nodes to lookup
     pub fn addNodes(self: *DHTLookup, nodes: []const DHTNode) !void {
         for (nodes) |node| {
-            try self.closest_nodes.append(node);
+            try self.closest_nodes.append(self.allocator, node);
         }
         
         // Sort by distance to target
@@ -411,7 +411,7 @@ pub const DHTLookup = struct {
     
     /// Clean up resources
     pub fn deinit(self: *DHTLookup) void {
-        self.closest_nodes.deinit();
+        self.closest_nodes.deinit(self.allocator);
         self.queried_nodes.deinit();
     }
 };

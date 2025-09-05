@@ -244,7 +244,7 @@ test "BBR crypto profiler basic operations" {
 
     // Simulate encryption timing
     const start_time = std.time.nanoTimestamp();
-    std.time.sleep(1000); // 1μs
+    std.Thread.sleep(1000); // 1μs
     const end_time = std.time.nanoTimestamp();
 
     profiler.recordEncryption(@intCast(start_time), @intCast(end_time), 1024);
