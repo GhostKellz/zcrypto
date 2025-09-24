@@ -17,10 +17,16 @@
 
 ## 🛡️ Core Principles
 
+⚠️ **EXPERIMENTAL LIBRARY - FOR LAB/PERSONAL USE** ⚠️
+This is an experimental library under active development. It is
+intended for research, learning, and personal projects. The API is subject
+to change!
+
 * **Memory-safe by design:** Leveraging Zig's explicit control and compile-time safety features.
 * **Modular architecture:** Enable only the features you need with build-time flags.
 * **Audit-friendly:** Easy to read, easy to verify. Minimal dependencies.
 * **Cross-platform:** Works seamlessly on Linux, macOS, Windows, and embedded targets.
+* **Complements Zig std.crypto:** Zig now offers crypto functionality in its standard library; this library provides additional blockchain-specific and experimental features.
 
 ---
 
