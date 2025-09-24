@@ -43,15 +43,11 @@ pub const ObjectId = struct {
     pub fn toString(self: ObjectId, allocator: std.mem.Allocator) ![]u8 {
         if (self.bytes.len == 0) return try allocator.dupe(u8, "");
         
-        var result = std.ArrayList(u8).empty;
-        defer result.deinit(allocator);
-        
-        // First two components are encoded in first byte
-        const first_byte = self.bytes[0];
-        const first = first_byte / 40;
-        const second = first_byte % 40;
-        
-        try result.writer().print("{}.{}", .{ first, second });
+        var buffer: [256]u8 = undefined;
+        var result = try std.fmt.bufPrint(&buffer, "{}.{}", .{ 
+            self.bytes[0] / 40, 
+            self.bytes[0] % 40 
+        });
         
         // Remaining components
         var i: usize = 1;
@@ -63,10 +59,11 @@ pub const ObjectId = struct {
                 i += 1;
                 if ((byte & 0x80) == 0) break;
             }
-            try result.writer().print(".{}", .{value});
+            const component = try std.fmt.bufPrint(buffer[result.len..], ".{}", .{value});
+            result = buffer[0..result.len + component.len];
         }
         
-        return result.toOwnedSlice(allocator);
+        return allocator.dupe(u8, result);
     }
 };
 

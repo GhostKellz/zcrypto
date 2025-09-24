@@ -3,6 +3,7 @@
 //! Designed for high-performance, memory-safe cryptographic operations
 //! with a focus on TLS 1.3, QUIC, and modern public-key cryptography.
 const std = @import("std");
+const build_options = @import("build_options");
 
 /// Standardized crypto errors for consistent error handling
 pub const CryptoError = error{
@@ -12,9 +13,6 @@ pub const CryptoError = error{
     InvalidSignature,
     InvalidHmacKey,
     InvalidKeyFormat,
-    SignatureVerificationFailed,
-    KeyDerivationFailed,
-    InsufficientEntropy,
     InvalidKeySize,
     InvalidNonceSize,
     InvalidTagSize,
@@ -23,7 +21,7 @@ pub const CryptoError = error{
     InvalidInput,
 };
 
-// Re-export all modules for clean API
+// Core cryptographic modules (always available)
 pub const hash = @import("hash.zig");
 pub const auth = @import("auth.zig");
 pub const sym = @import("sym.zig");
@@ -33,56 +31,38 @@ pub const rand = @import("rand.zig");
 pub const util = @import("util.zig");
 pub const bip = @import("bip.zig");
 pub const batch = @import("batch.zig");
-
-// Advanced cryptographic modules
-pub const quic_crypto = @import("quic_crypto.zig");
-pub const hardware = @import("hardware.zig");
-pub const post_quantum = @import("post_quantum.zig");
 pub const kex = @import("kex.zig");
-pub const async_crypto = @import("async_crypto.zig");
-pub const zkp = @import("zkp.zig");
-pub const bls = @import("bls.zig");
-pub const schnorr = @import("schnorr.zig");
 
-// Performance and ecosystem integration (v0.7.0)
-pub const zero_copy = @import("zero_copy.zig");
-pub const bbr_crypto = @import("bbr_crypto.zig");
-pub const vpn_crypto = @import("vpn_crypto.zig");
-pub const wasm_crypto = @import("wasm_crypto.zig");
-pub const blockchain_crypto = @import("blockchain_crypto.zig");
-pub const pool_crypto = @import("pool_crypto.zig");
-
-// Enterprise and security features
-pub const formal = @import("formal.zig");
-pub const hsm = @import("hsm.zig");
-pub const perf_analysis = @import("perf_analysis.zig");
-
-// Post-quantum cryptography module (legacy compatibility)
-pub const pq = @import("pq.zig");
-
-// TLS/QUIC specific modules
-pub const tls = @import("tls.zig");
-pub const quic = @import("quic.zig");
-
-// FFI exports for Rust integration
-pub const ffi = @import("ffi.zig");
-
-// GhostMesh protocol modules
-pub const gossip = @import("protocols/gossip.zig");
-pub const dht = @import("protocols/dht.zig");
+// Always available modules
+pub const quic_crypto = @import("quic_crypto.zig");
 pub const key_rotation = @import("key_rotation.zig");
 
+// Feature modules (may be available based on build configuration)
+// Note: These will be available if the corresponding features were enabled during build
+pub const tls = if (build_options.enable_tls) @import("feature_tls.zig") else struct{}{};
+pub const post_quantum = if (build_options.enable_post_quantum) @import("feature_pq.zig") else struct{}{};
+pub const hardware = if (build_options.enable_hardware_accel) @import("feature_hw.zig") else struct{}{};
+pub const blockchain_crypto = if (build_options.enable_blockchain) @import("feature_blockchain.zig") else struct{}{};
+pub const vpn_crypto = if (build_options.enable_vpn) @import("feature_vpn.zig") else struct{}{};
+pub const wasm_crypto = if (build_options.enable_wasm) @import("feature_wasm.zig") else struct{}{};
+pub const formal = if (build_options.enable_enterprise) @import("feature_enterprise.zig") else struct{}{};
+pub const zkp = if (build_options.enable_zkp) @import("feature_zkp.zig") else struct{}{};
+pub const async_crypto = if (build_options.enable_async) @import("feature_async.zig") else struct{};
+
+// Legacy compatibility aliases
+pub const pq = if (build_options.enable_post_quantum) post_quantum else struct{}{};
+
 // Convenience exports for common algorithms
-pub const kyber = post_quantum.ML_KEM_768;
-pub const dilithium = post_quantum.ML_DSA_65;
+pub const kyber = if (build_options.enable_post_quantum) post_quantum.kyber else struct{}{};
+pub const dilithium = if (build_options.enable_post_quantum) post_quantum.dilithium else struct{}{};
 pub const x25519 = kex.X25519;
 pub const ed25519 = kex.Ed25519;
 
 // Version information
-pub const version = "0.8.4";
+pub const version = "0.9.0";
 
 test {
-    // Import all module tests
+    // Import all core module tests
     _ = hash;
     _ = auth;
     _ = sym;
@@ -91,30 +71,19 @@ test {
     _ = rand;
     _ = util;
     _ = bip;
-    _ = pq;
-    _ = tls;
-    _ = quic;
-    _ = ffi;
+    _ = batch;
     _ = quic_crypto;
-    _ = hardware;
-    _ = post_quantum;
-    _ = kex;
-    _ = async_crypto;
-    _ = zkp;
-    _ = formal;
-    _ = hsm;
-    _ = perf_analysis;
-
-    // New v0.7.0 modules
-    _ = zero_copy;
-    _ = bbr_crypto;
-    _ = vpn_crypto;
-    _ = wasm_crypto;
-    _ = blockchain_crypto;
-    _ = pool_crypto;
-    
-    // GhostMesh integration modules (v0.8.4)
-    _ = gossip;
-    _ = dht;
     _ = key_rotation;
+
+    // Feature modules (conditionally available)
+    // Note: These tests will only run if the features were enabled during build
+    if (build_options.enable_tls) _ = tls;
+    if (build_options.enable_post_quantum) _ = post_quantum;
+    if (build_options.enable_hardware_accel) _ = hardware;
+    if (build_options.enable_blockchain) _ = blockchain_crypto;
+    if (build_options.enable_vpn) _ = vpn_crypto;
+    if (build_options.enable_wasm) _ = wasm_crypto;
+    if (build_options.enable_enterprise) _ = formal;
+    if (build_options.enable_zkp) _ = zkp;
+    if (build_options.enable_async) _ = async_crypto;
 }

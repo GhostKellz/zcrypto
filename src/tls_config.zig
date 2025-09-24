@@ -217,6 +217,7 @@ pub const TlsConfig = struct {
         config.certificates = self.allocator.alloc(Certificate, 1) catch unreachable;
         config.certificates.?[0] = cert;
         config.private_key = key;
+        config._owned.certificates = true; // Mark certificates as owned
         return config;
     }
 

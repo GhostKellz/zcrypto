@@ -1,5 +1,7 @@
 /zig-cache/
 /zig-out/
 /.zigcache/
+.zig-cache/
 *.o
 *.exe
+CLAUDE.md
