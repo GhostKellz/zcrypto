@@ -110,7 +110,8 @@ pub const Validity = struct {
     }
     
     pub fn isCurrentlyValid(self: Validity) bool {
-        return self.isValid(std.time.timestamp());
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch return false;
+        return self.isValid(ts.sec);
     }
 };
 

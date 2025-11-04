@@ -19,13 +19,15 @@ var test_plaintext: []u8 = undefined;
 var test_allocator: std.mem.Allocator = undefined;
 
 fn benchmark(comptime name: []const u8, iterations: u32, func: anytype) !void {
-    const start_time = std.time.nanoTimestamp();
+    const start_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+    const start_time = @as(i128, start_ts.sec) * std.time.ns_per_s + start_ts.nsec;
 
     for (0..iterations) |_| {
         try func();
     }
 
-    const end_time = std.time.nanoTimestamp();
+    const end_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+    const end_time = @as(i128, end_ts.sec) * std.time.ns_per_s + end_ts.nsec;
     const duration_ns = @as(f64, @floatFromInt(end_time - start_time));
     const duration_ms = duration_ns / 1_000_000.0;
     const ops_per_sec = @as(f64, @floatFromInt(iterations)) / (duration_ns / 1_000_000_000.0);

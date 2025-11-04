@@ -115,7 +115,8 @@ pub const RoutingEntry = struct {
     
     /// Update last seen timestamp
     pub fn touch(self: *RoutingEntry) void {
-        self.last_seen = @intCast(std.time.timestamp());
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch return;
+        self.last_seen = @intCast(ts.sec);
         self.fail_count = 0;
     }
     
@@ -140,7 +141,8 @@ pub const KBucket = struct {
     
     /// Add or update node in bucket
     pub fn addNode(self: *KBucket, node: DHTNode) !void {
-        const current_time = @as(u64, @intCast(std.time.timestamp()));
+        const ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+        const current_time = @as(u64, @intCast(ts.sec));
         
         // Check if node already exists
         for (self.entries.items) |*entry| {
@@ -214,7 +216,8 @@ pub const KBucket = struct {
     
     /// Clean up expired entries
     pub fn cleanup(self: *KBucket, max_age: u64) void {
-        const current_time = @as(u64, @intCast(std.time.timestamp()));
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch return;
+        const current_time = @as(u64, @intCast(ts.sec));
         
         var i: usize = 0;
         while (i < self.entries.items.len) {
@@ -425,7 +428,8 @@ pub const NodeProof = struct {
     
     /// Create proof for a node
     pub fn create(node: DHTNode, message: []const u8) !NodeProof {
-        const timestamp = @as(u64, @intCast(std.time.timestamp()));
+        const ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+        const timestamp = @as(u64, @intCast(ts.sec));
         
         // Create message to sign
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
@@ -450,7 +454,8 @@ pub const NodeProof = struct {
     
     /// Verify proof
     pub fn verify(self: NodeProof, message: []const u8, max_age: u64) bool {
-        const current_time = @as(u64, @intCast(std.time.timestamp()));
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch return false;
+        const current_time = @as(u64, @intCast(ts.sec));
         
         // Check timestamp
         if (current_time - self.timestamp > max_age) {

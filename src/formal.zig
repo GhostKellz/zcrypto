@@ -78,7 +78,8 @@ pub const VerificationResult = struct {
 pub const ConstantTimeVerifier = struct {
     /// Verify that a function executes in constant time
     pub fn verify(comptime T: type, comptime func: anytype, inputs: []const T) !VerificationResult {
-        const start_time = std.time.nanoTimestamp();
+        const start_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+        const start_time = @as(i128, start_ts.sec) * std.time.ns_per_s + start_ts.nsec;
 
         var all_execution_times: std.ArrayList(u64) = .{};
         defer all_execution_times.deinit(std.testing.allocator);
@@ -97,9 +98,11 @@ pub const ConstantTimeVerifier = struct {
         // Actual measurement phase with multiple rounds
         for (0..num_rounds) |_| {
             for (inputs) |input| {
-                const func_start = std.time.nanoTimestamp();
+                const func_start_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+                const func_start = @as(i128, func_start_ts.sec) * std.time.ns_per_s + func_start_ts.nsec;
                 _ = func(input);
-                const func_end = std.time.nanoTimestamp();
+                const func_end_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+                const func_end = @as(i128, func_end_ts.sec) * std.time.ns_per_s + func_end_ts.nsec;
                 try all_execution_times.append(std.testing.allocator, @intCast(func_end - func_start));
             }
         }
@@ -135,8 +138,9 @@ pub const ConstantTimeVerifier = struct {
         // Multiple statistical measures for robust analysis
         const range_variation = if (median_time > 0) ((max_time - min_time) * 100) / median_time else 0;
         const cv_variation = if (mean_time > 0) (@as(u64, @intFromFloat(std_dev)) * 100) / mean_time else 0; // Coefficient of variation
-        
-        const end_time = std.time.nanoTimestamp();
+
+        const end_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+        const end_time = @as(i128, end_ts.sec) * std.time.ns_per_s + end_ts.nsec;
         const total_time: u64 = @intCast(end_time - start_time);
 
         // Production crypto security: robust statistical analysis
@@ -193,7 +197,8 @@ pub const MemorySafetyVerifier = struct {
 
     /// Verify memory safety (no leaks, no double-free)
     pub fn verify(self: *MemorySafetyVerifier) !VerificationResult {
-        const start_time = std.time.nanoTimestamp();
+        const start_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+        const start_time = @as(i128, start_ts.sec) * std.time.ns_per_s + start_ts.nsec;
 
         // Check for memory leaks
         var leaked_count: usize = 0;
@@ -218,7 +223,8 @@ pub const MemorySafetyVerifier = struct {
             }
         }
 
-        const end_time = std.time.nanoTimestamp();
+        const end_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+        const end_time = @as(i128, end_ts.sec) * std.time.ns_per_s + end_ts.nsec;
         const total_time: u64 = @intCast(end_time - start_time);
 
         if (leaked_count == 0 and double_free_count == 0) {
@@ -237,7 +243,8 @@ pub const MemorySafetyVerifier = struct {
 pub const SideChannelVerifier = struct {
     /// Verify resistance to cache timing attacks
     pub fn verifyCacheTimingResistance(comptime func: anytype, test_inputs: anytype) !VerificationResult {
-        const start_time = std.time.nanoTimestamp();
+        const start_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+        const start_time = @as(i128, start_ts.sec) * std.time.ns_per_s + start_ts.nsec;
 
         // Measure cache behavior using performance counters (simplified)
         var cache_misses: std.ArrayList(u64) = .{};
@@ -251,9 +258,11 @@ pub const SideChannelVerifier = struct {
                 dummy[i] = @intCast(i % 256);
             }
 
-            const cache_start = std.time.nanoTimestamp();
+            const cache_start_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+            const cache_start = @as(i128, cache_start_ts.sec) * std.time.ns_per_s + cache_start_ts.nsec;
             _ = func(input);
-            const cache_end = std.time.nanoTimestamp();
+            const cache_end_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+            const cache_end = @as(i128, cache_end_ts.sec) * std.time.ns_per_s + cache_end_ts.nsec;
 
             try cache_misses.append(std.testing.allocator, @intCast(cache_end - cache_start));
         }
@@ -268,7 +277,8 @@ pub const SideChannelVerifier = struct {
             max_time = @max(max_time, time);
         }
 
-        const end_time = std.time.nanoTimestamp();
+        const end_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+        const end_time = @as(i128, end_ts.sec) * std.time.ns_per_s + end_ts.nsec;
         const total_time: u64 = @intCast(end_time - start_time);
 
         // Side-channel resistance threshold
@@ -291,7 +301,8 @@ pub const SideChannelVerifier = struct {
 pub const PostQuantumVerifier = struct {
     /// Verify that a cryptographic primitive is post-quantum secure
     pub fn verifyPQSecurity(algorithm_name: []const u8, key_size: usize, security_level: u8) !VerificationResult {
-        const start_time = std.time.nanoTimestamp();
+        const start_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+        const start_time = @as(i128, start_ts.sec) * std.time.ns_per_s + start_ts.nsec;
 
         // Use key_size for security analysis
         _ = key_size; // TODO: Incorporate key size into security analysis
@@ -311,7 +322,8 @@ pub const PostQuantumVerifier = struct {
         const min_security_level: u8 = 128; // bits
         const sufficient_security = security_level >= min_security_level;
 
-        const end_time = std.time.nanoTimestamp();
+        const end_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+        const end_time = @as(i128, end_ts.sec) * std.time.ns_per_s + end_ts.nsec;
         const total_time: u64 = @intCast(end_time - start_time);
 
         if (is_pq_safe and sufficient_security) {

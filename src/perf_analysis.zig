@@ -209,7 +209,8 @@ pub const MemoryLeakDetector = struct {
 
     /// Record memory allocation
     pub fn recordAllocation(self: *MemoryLeakDetector, address: usize, size: usize, call_site: ?[]const u8) !void {
-        const timestamp = std.time.nanoTimestamp();
+        const ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+        const timestamp = @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
 
         const record = AllocationRecord{
             .size = size,
@@ -237,7 +238,8 @@ pub const MemoryLeakDetector = struct {
     /// Record memory deallocation
     pub fn recordDeallocation(self: *MemoryLeakDetector, address: usize) !void {
         if (self.allocations.get(address)) |record| {
-            const timestamp = std.time.nanoTimestamp();
+            const ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+            const timestamp = @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
 
             try self.allocation_timeline.append(self.allocator, AllocationEvent{
                 .timestamp = timestamp,
@@ -259,10 +261,12 @@ pub const MemoryLeakDetector = struct {
 
         var iterator = self.allocations.iterator();
         while (iterator.next()) |entry| {
+            const ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+            const now = @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
             const leak = LeakDetail{
                 .address = entry.key_ptr.*,
                 .size = entry.value_ptr.size,
-                .age_ns = std.time.nanoTimestamp() - entry.value_ptr.timestamp,
+                .age_ns = now - entry.value_ptr.timestamp,
                 .call_site = entry.value_ptr.call_site,
             };
             try leak_details.append(self.allocator, leak);

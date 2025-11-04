@@ -185,11 +185,13 @@ pub const BBRCryptoIntegration = struct {
     last_update_time: u64,
 
     pub fn init(profiler: *BBRCryptoProfiler, update_interval_ms: u32) BBRCryptoIntegration {
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const now = @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
         return BBRCryptoIntegration{
             .profiler = profiler,
             .last_metrics = profiler.getMetrics(),
             .metrics_update_interval_ms = update_interval_ms,
-            .last_update_time = @intCast(std.time.nanoTimestamp()),
+            .last_update_time = @intCast(now),
         };
     }
 
@@ -216,7 +218,8 @@ pub const BBRCryptoIntegration = struct {
     }
 
     fn updateMetricsIfNeeded(self: *BBRCryptoIntegration) void {
-        const current_time = std.time.nanoTimestamp();
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch return;
+        const current_time = @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
         const elapsed_ms = @divTrunc((current_time - self.last_update_time), 1_000_000);
 
         if (elapsed_ms >= self.metrics_update_interval_ms) {
@@ -243,9 +246,11 @@ test "BBR crypto profiler basic operations" {
     var profiler = BBRCryptoProfiler.init(hw_features, 100); // 100ms window
 
     // Simulate encryption timing
-    const start_time = std.time.nanoTimestamp();
+    const start_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+    const start_time = @as(i128, start_ts.sec) * std.time.ns_per_s + start_ts.nsec;
     std.Thread.sleep(1000); // 1μs
-    const end_time = std.time.nanoTimestamp();
+    const end_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+    const end_time = @as(i128, end_ts.sec) * std.time.ns_per_s + end_ts.nsec;
 
     profiler.recordEncryption(@intCast(start_time), @intCast(end_time), 1024);
 

@@ -97,7 +97,8 @@ pub const SignedMessage = struct {
     
     /// Check if message is within acceptable timestamp range
     pub fn isTimestampValid(self: SignedMessage) bool {
-        const current_time = std.time.timestamp();
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch return false;
+        const current_time = ts.sec;
         const message_time = @as(i64, @intCast(self.header.timestamp));
         const time_diff = @abs(current_time - message_time);
         return time_diff <= MAX_TIMESTAMP_DRIFT;
@@ -152,7 +153,10 @@ pub const GossipNode = struct {
             .version = 1,
             .message_type = message_type,
             .sequence_number = self.sequence_number,
-            .timestamp = @intCast(std.time.timestamp()),
+            .timestamp = blk: {
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                break :blk @intCast(ts.sec);
+            },
             .ttl = ttl,
             .node_id = self.node_id,
             .payload_length = @intCast(payload.len),
@@ -234,7 +238,8 @@ pub const AntiReplay = struct {
     
     /// Clean up old entries (call periodically)
     pub fn cleanup(self: *AntiReplay, max_age_seconds: u64) void {
-        const current_time = @as(u64, @intCast(std.time.timestamp()));
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch return;
+        const current_time = @as(u64, @intCast(ts.sec));
         
         var iterator = self.seen_messages.iterator();
         while (iterator.next()) |entry| {

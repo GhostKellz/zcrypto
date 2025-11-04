@@ -40,8 +40,14 @@ pub const CryptoContext = struct {
             .decryption_key = [_]u8{0} ** 32,
             .send_counter = 0,
             .recv_counter = 0,
-            .creation_time = std.time.timestamp(),
-            .last_used = std.time.timestamp(),
+            .creation_time = blk: {
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                break :blk ts.sec;
+            },
+            .last_used = blk: {
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                break :blk ts.sec;
+            },
             .reference_count = 0,
             .is_compressed = false,
         };
@@ -70,7 +76,8 @@ pub const CryptoContext = struct {
 
         self.send_counter = 0;
         self.recv_counter = 0;
-        self.creation_time = std.time.timestamp();
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        self.creation_time = ts.sec;
         self.last_used = self.creation_time;
     }
 
@@ -155,12 +162,14 @@ pub const CryptoContext = struct {
 
     /// Update last used timestamp
     pub fn touch(self: *CryptoContext) void {
-        self.last_used = std.time.timestamp();
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch return;
+        self.last_used = ts.sec;
     }
 
     /// Check if context has expired
     pub fn hasExpired(self: CryptoContext, ttl_seconds: i64) bool {
-        const current_time = std.time.timestamp();
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch return true;
+        const current_time = ts.sec;
         return (current_time - self.last_used) > ttl_seconds;
     }
 };
@@ -347,12 +356,13 @@ pub const SessionCache = struct {
             try self.evictOldest();
         }
 
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch return error.TimestampFailed;
         const session_data = SessionData{
             .session_id = session_id,
             .resumption_key = resumption_key,
             .cipher_suite = cipher_suite,
-            .creation_time = std.time.timestamp(),
-            .last_used = std.time.timestamp(),
+            .creation_time = ts.sec,
+            .last_used = ts.sec,
             .use_count = 0,
         };
 
@@ -362,7 +372,8 @@ pub const SessionCache = struct {
     /// Resume a session
     pub fn resumeSession(self: *SessionCache, session_id: u64) ?SessionData {
         if (self.sessions.getPtr(session_id)) |session| {
-            session.last_used = std.time.timestamp();
+            const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch return null;
+            session.last_used = ts.sec;
             session.use_count += 1;
             return session.*;
         }
@@ -370,7 +381,8 @@ pub const SessionCache = struct {
     }
 
     fn evictOldest(self: *SessionCache) !void {
-        var oldest_time: i64 = std.time.timestamp();
+        const ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+        var oldest_time: i64 = ts.sec;
         var oldest_id: ?u64 = null;
 
         var iterator = self.sessions.iterator();

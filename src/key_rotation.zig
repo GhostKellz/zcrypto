@@ -94,7 +94,8 @@ pub const KeyMetadata = struct {
     
     /// Create new key metadata
     pub fn init(key_type: KeyType, policy: RotationPolicy) KeyMetadata {
-        const current_time = @as(u64, @intCast(std.time.timestamp()));
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const current_time = @as(u64, @intCast(ts.sec));
         var id: [16]u8 = undefined;
         rand.fill(&id);
         
@@ -111,13 +112,15 @@ pub const KeyMetadata = struct {
     
     /// Check if key is expired
     pub fn isExpired(self: KeyMetadata) bool {
-        const current_time = @as(u64, @intCast(std.time.timestamp()));
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch return true;
+        const current_time = @as(u64, @intCast(ts.sec));
         return current_time > self.expires_at;
     }
     
     /// Check if key needs rotation
     pub fn needsRotation(self: KeyMetadata, policy: RotationPolicy) bool {
-        const current_time = @as(u64, @intCast(std.time.timestamp()));
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch return true;
+        const current_time = @as(u64, @intCast(ts.sec));
         const age = current_time - self.created_at;
         return age >= policy.max_key_age;
     }
@@ -306,7 +309,8 @@ pub const KeyManager = struct {
     
     /// Check if any keys need rotation
     pub fn checkRotation(self: *KeyManager) !void {
-        const current_time = @as(u64, @intCast(std.time.timestamp()));
+        const ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+        const current_time = @as(u64, @intCast(ts.sec));
         
         // Check if it's time to check rotation
         if (current_time - self.last_rotation_check < self.policy.rotation_check_interval) {
@@ -332,7 +336,8 @@ pub const KeyManager = struct {
     
     /// Clean up expired keys
     pub fn cleanupExpiredKeys(self: *KeyManager) !void {
-        const current_time = @as(u64, @intCast(std.time.timestamp()));
+        const ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+        const current_time = @as(u64, @intCast(ts.sec));
         
         var keys_to_remove = std.ArrayList([16]u8).init();
         defer keys_to_remove.deinit(self.allocator);

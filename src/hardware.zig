@@ -394,13 +394,15 @@ pub const Benchmark = struct {
         const features = HardwareAcceleration.detect();
         const hardware_available = features.aes_ni and features.pclmulqdq;
 
-        const start_time = std.time.nanoTimestamp();
+        const start_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+        const start_time = @as(i128, start_ts.sec) * std.time.ns_per_s + start_ts.nsec;
 
         for (0..iterations) |_| {
             try HardwareCrypto.aesGcmEncryptHw(key, &nonce, plaintext, "", ciphertext, &tag);
         }
 
-        const end_time = std.time.nanoTimestamp();
+        const end_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+        const end_time = @as(i128, end_ts.sec) * std.time.ns_per_s + end_ts.nsec;
         const total_time_ns = @as(u64, @intCast(end_time - start_time));
         const average_latency_ns = total_time_ns / iterations;
         const operations_per_second = (@as(f64, @floatFromInt(iterations)) * 1_000_000_000.0) / @as(f64, @floatFromInt(total_time_ns));
