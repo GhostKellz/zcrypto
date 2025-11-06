@@ -294,8 +294,8 @@ pub const TlsClient = struct {
     // Private helper methods
 
     fn sendClientHello(self: *TlsClient) !void {
-        var buffer = std.ArrayList(u8).init(self.allocator);
-        defer buffer.deinit();
+        var buffer: std.ArrayList(u8) = .{};
+        defer buffer.deinit(self.allocator);
 
         // Generate client key share for X25519
         self.client_key_share = asym.x25519.generate();
@@ -320,8 +320,8 @@ pub const TlsClient = struct {
         try buffer.writer().writeByte(0);
 
         // Extensions
-        var extensions = std.ArrayList(u8).init(self.allocator);
-        defer extensions.deinit();
+        var extensions: std.ArrayList(u8) = .{};
+        defer extensions.deinit(self.allocator);
 
         // Supported versions extension
         try self.writeSupportedVersionsExtension(&extensions);
@@ -693,8 +693,8 @@ pub const TlsClient = struct {
     }
 
     fn writeALPNExtension(self: *TlsClient, buffer: *std.ArrayList(u8), protocols: [][]const u8) !void {
-        var proto_list = std.ArrayList(u8).init(self.allocator);
-        defer proto_list.deinit();
+        var proto_list: std.ArrayList(u8) = .{};
+        defer proto_list.deinit(self.allocator);
 
         for (protocols) |proto| {
             try proto_list.writer().writeByte(@intCast(proto.len));
@@ -734,8 +734,8 @@ pub const TlsClient = struct {
     };
 
     fn writeRecord(self: *TlsClient, record_type: RecordType, data: []const u8) !void {
-        var buffer = std.ArrayList(u8).init(self.allocator);
-        defer buffer.deinit();
+        var buffer: std.ArrayList(u8) = .{};
+        defer buffer.deinit(self.allocator);
 
         // Record header
         try buffer.writer().writeByte(@intFromEnum(record_type));
@@ -773,8 +773,8 @@ pub const TlsClient = struct {
     }
 
     fn writeHandshakeMessage(self: *TlsClient, msg_type: HandshakeType, data: []const u8) !void {
-        var buffer = std.ArrayList(u8).init(self.allocator);
-        defer buffer.deinit();
+        var buffer: std.ArrayList(u8) = .{};
+        defer buffer.deinit(self.allocator);
 
         try buffer.writer().writeByte(@intFromEnum(msg_type));
         try buffer.writer().writeInt(u24, @intCast(data.len), .big);
