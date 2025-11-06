@@ -2,7 +2,6 @@
 
 `zcrypto` is a comprehensive, high-performance **post-quantum ready** cryptography library for [Zig](https://ziglang.org) designed for modern applications including TLS 1.3, QUIC, blockchain, wallets, VPN, and secure networking. It provides production-ready implementations of all major cryptographic primitives plus cutting-edge post-quantum algorithms with clean, consistent APIs.
 
-**🔥 NEW in v0.7.0**: Zero-copy crypto operations, BBR crypto profiling, VPN-optimized crypto suite, WASM crypto interface, blockchain crypto primitives, connection pooling crypto, and enhanced performance analysis.
 
 ---
 
