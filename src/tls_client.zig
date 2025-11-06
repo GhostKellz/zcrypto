@@ -293,6 +293,26 @@ pub const TlsClient = struct {
 
     // Private helper methods
 
+    fn writeU8(buffer: *std.ArrayList(u8), allocator: std.mem.Allocator, val: u8) !void {
+        try buffer.append(allocator, val);
+    }
+
+    fn writeU16(buffer: *std.ArrayList(u8), allocator: std.mem.Allocator, val: u16) !void {
+        var bytes: [2]u8 = undefined;
+        std.mem.writeInt(u16, &bytes, val, .big);
+        try buffer.appendSlice(allocator, &bytes);
+    }
+
+    fn writeU24(buffer: *std.ArrayList(u8), allocator: std.mem.Allocator, val: u24) !void {
+        var bytes: [3]u8 = undefined;
+        std.mem.writeInt(u24, &bytes, val, .big);
+        try buffer.appendSlice(allocator, &bytes);
+    }
+
+    fn writeBytes(buffer: *std.ArrayList(u8), allocator: std.mem.Allocator, bytes: []const u8) !void {
+        try buffer.appendSlice(allocator, bytes);
+    }
+
     fn sendClientHello(self: *TlsClient) !void {
         var buffer: std.ArrayList(u8) = .{};
         defer buffer.deinit(self.allocator);
@@ -301,23 +321,23 @@ pub const TlsClient = struct {
         self.client_key_share = asym.x25519.generate();
 
         // TLS version (legacy)
-        try buffer.writer().writeInt(u16, 0x0303, .big);
+        try writeU16(&buffer, self.allocator, 0x0303);
 
         // Client random
-        try buffer.writer().writeAll(&self.client_random);
+        try writeBytes(&buffer, self.allocator, &self.client_random);
 
         // Session ID length (0 for new connection)
-        try buffer.writer().writeByte(0);
+        try writeU8(&buffer, self.allocator, 0);
 
         // Cipher suites
-        try buffer.writer().writeInt(u16, @intCast(self.config.cipher_suites.len * 2), .big);
+        try writeU16(&buffer, self.allocator, @intCast(self.config.cipher_suites.len * 2));
         for (self.config.cipher_suites) |suite| {
-            try buffer.writer().writeInt(u16, @intFromEnum(suite), .big);
+            try writeU16(&buffer, self.allocator, @intFromEnum(suite));
         }
 
         // Compression methods (null only)
-        try buffer.writer().writeByte(1);
-        try buffer.writer().writeByte(0);
+        try writeU8(&buffer, self.allocator, 1);
+        try writeU8(&buffer, self.allocator, 0);
 
         // Extensions
         var extensions: std.ArrayList(u8) = .{};
@@ -346,8 +366,8 @@ pub const TlsClient = struct {
         try self.writeKeyShareExtension(&extensions);
 
         // Write extensions length and data
-        try buffer.writer().writeInt(u16, @intCast(extensions.items.len), .big);
-        try buffer.writer().writeAll(extensions.items);
+        try writeU16(&buffer, self.allocator, @intCast(extensions.items.len));
+        try writeBytes(&buffer, self.allocator, extensions.items);
 
         // Update transcript
         self.transcript.update(buffer.items);
@@ -659,37 +679,33 @@ pub const TlsClient = struct {
 
     // Extension writers
     fn writeSupportedVersionsExtension(self: *TlsClient, buffer: *std.ArrayList(u8)) !void {
-        _ = self;
-        try buffer.writer().writeInt(u16, @intFromEnum(ExtensionType.supported_versions), .big);
-        try buffer.writer().writeInt(u16, 3, .big); // Extension length
-        try buffer.writer().writeByte(2); // Versions list length
-        try buffer.writer().writeInt(u16, 0x0304, .big); // TLS 1.3
+        try writeU16(buffer, self.allocator, @intFromEnum(ExtensionType.supported_versions));
+        try writeU16(buffer, self.allocator, 3); // Extension length
+        try writeU8(buffer, self.allocator, 2); // Versions list length
+        try writeU16(buffer, self.allocator, 0x0304); // TLS 1.3
     }
 
     fn writeServerNameExtension(self: *TlsClient, buffer: *std.ArrayList(u8), name: []const u8) !void {
-        _ = self;
-        try buffer.writer().writeInt(u16, @intFromEnum(ExtensionType.server_name), .big);
-        try buffer.writer().writeInt(u16, @intCast(name.len + 5), .big);
-        try buffer.writer().writeInt(u16, @intCast(name.len + 3), .big); // Server name list length
-        try buffer.writer().writeByte(0); // Host name type
-        try buffer.writer().writeInt(u16, @intCast(name.len), .big);
-        try buffer.writer().writeAll(name);
+        try writeU16(buffer, self.allocator, @intFromEnum(ExtensionType.server_name));
+        try writeU16(buffer, self.allocator, @intCast(name.len + 5));
+        try writeU16(buffer, self.allocator, @intCast(name.len + 3)); // Server name list length
+        try writeU8(buffer, self.allocator, 0); // Host name type
+        try writeU16(buffer, self.allocator, @intCast(name.len));
+        try writeBytes(buffer, self.allocator, name);
     }
 
     fn writeSupportedGroupsExtension(self: *TlsClient, buffer: *std.ArrayList(u8)) !void {
-        _ = self;
-        try buffer.writer().writeInt(u16, @intFromEnum(ExtensionType.supported_groups), .big);
-        try buffer.writer().writeInt(u16, 4, .big); // Extension length
-        try buffer.writer().writeInt(u16, 2, .big); // Groups list length
-        try buffer.writer().writeInt(u16, 0x001d, .big); // x25519
+        try writeU16(buffer, self.allocator, @intFromEnum(ExtensionType.supported_groups));
+        try writeU16(buffer, self.allocator, 4); // Extension length
+        try writeU16(buffer, self.allocator, 2); // Groups list length
+        try writeU16(buffer, self.allocator, 0x001d); // x25519
     }
 
     fn writeSignatureAlgorithmsExtension(self: *TlsClient, buffer: *std.ArrayList(u8)) !void {
-        _ = self;
-        try buffer.writer().writeInt(u16, @intFromEnum(ExtensionType.signature_algorithms), .big);
-        try buffer.writer().writeInt(u16, 4, .big); // Extension length
-        try buffer.writer().writeInt(u16, 2, .big); // Algorithms list length
-        try buffer.writer().writeInt(u16, 0x0807, .big); // ed25519
+        try writeU16(buffer, self.allocator, @intFromEnum(ExtensionType.signature_algorithms));
+        try writeU16(buffer, self.allocator, 4); // Extension length
+        try writeU16(buffer, self.allocator, 2); // Algorithms list length
+        try writeU16(buffer, self.allocator, 0x0807); // ed25519
     }
 
     fn writeALPNExtension(self: *TlsClient, buffer: *std.ArrayList(u8), protocols: [][]const u8) !void {
@@ -697,26 +713,26 @@ pub const TlsClient = struct {
         defer proto_list.deinit(self.allocator);
 
         for (protocols) |proto| {
-            try proto_list.writer().writeByte(@intCast(proto.len));
-            try proto_list.writer().writeAll(proto);
+            try writeU8(&proto_list, self.allocator, @intCast(proto.len));
+            try writeBytes(&proto_list, self.allocator, proto);
         }
 
-        try buffer.writer().writeInt(u16, @intFromEnum(ExtensionType.application_layer_protocol_negotiation), .big);
-        try buffer.writer().writeInt(u16, @intCast(proto_list.items.len + 2), .big);
-        try buffer.writer().writeInt(u16, @intCast(proto_list.items.len), .big);
-        try buffer.writer().writeAll(proto_list.items);
+        try writeU16(buffer, self.allocator, @intFromEnum(ExtensionType.application_layer_protocol_negotiation));
+        try writeU16(buffer, self.allocator, @intCast(proto_list.items.len + 2));
+        try writeU16(buffer, self.allocator, @intCast(proto_list.items.len));
+        try writeBytes(buffer, self.allocator, proto_list.items);
     }
 
     fn writeKeyShareExtension(self: *TlsClient, buffer: *std.ArrayList(u8)) !void {
-        try buffer.writer().writeInt(u16, @intFromEnum(ExtensionType.key_share), .big);
-        try buffer.writer().writeInt(u16, 36, .big); // Extension length
-        try buffer.writer().writeInt(u16, 34, .big); // Client shares length
-        try buffer.writer().writeInt(u16, 0x001d, .big); // x25519
-        try buffer.writer().writeInt(u16, 32, .big); // Key length
-        
+        try writeU16(buffer, self.allocator, @intFromEnum(ExtensionType.key_share));
+        try writeU16(buffer, self.allocator, 36); // Extension length
+        try writeU16(buffer, self.allocator, 34); // Client shares length
+        try writeU16(buffer, self.allocator, 0x001d); // x25519
+        try writeU16(buffer, self.allocator, 32); // Key length
+
         // Use real public key from generated key share
         if (self.client_key_share) |keypair| {
-            try buffer.writer().writeAll(&keypair.public_key);
+            try writeBytes(buffer, self.allocator, &keypair.public_key);
         } else {
             return error.NoKeyShare;
         }

@@ -24,8 +24,8 @@ pub const BlockchainCryptoError = error{
 /// High-performance Merkle tree implementation
 pub const MerkleTree = struct {
     allocator: Allocator,
-    leaves: std.ArrayList([32]u8),
-    tree: std.ArrayList([32]u8),
+    leaves: std.ArrayListUnmanaged([32]u8),
+    tree: std.ArrayListUnmanaged([32]u8),
 
     pub fn init(allocator: Allocator) MerkleTree {
         return MerkleTree{
@@ -105,7 +105,7 @@ pub const MerkleTree = struct {
 
             if (sibling_index < level_size) {
                 const sibling_hash = self.tree.items[level_start + sibling_index];
-                try proof.addStep(allocator, sibling_hash, is_left);
+                try proof.addStep(sibling_hash, is_left);
             }
 
             current_index /= 2;
@@ -119,7 +119,8 @@ pub const MerkleTree = struct {
 
 /// Merkle proof structure
 pub const MerkleProof = struct {
-    steps: std.ArrayList(ProofStep),
+    allocator: Allocator,
+    steps: std.ArrayListUnmanaged(ProofStep),
 
     const ProofStep = struct {
         hash: [32]u8,
@@ -127,18 +128,18 @@ pub const MerkleProof = struct {
     };
 
     pub fn init(allocator: Allocator) MerkleProof {
-        _ = allocator; // Parameter kept for consistency but not used
         return MerkleProof{
+            .allocator = allocator,
             .steps = .{},
         };
     }
 
-    pub fn deinit(self: *MerkleProof, allocator: std.mem.Allocator) void {
-        self.steps.deinit(allocator);
+    pub fn deinit(self: *MerkleProof) void {
+        self.steps.deinit(self.allocator);
     }
 
-    fn addStep(self: *MerkleProof, allocator: std.mem.Allocator, hash: [32]u8, is_left: bool) !void {
-        try self.steps.append(allocator, ProofStep{
+    fn addStep(self: *MerkleProof, hash: [32]u8, is_left: bool) !void {
+        try self.steps.append(self.allocator, ProofStep{
             .hash = hash,
             .is_left = is_left,
         });
@@ -169,7 +170,7 @@ pub const MerkleProof = struct {
 /// Batch signature verification for transaction blocks
 pub const BatchVerifier = struct {
     allocator: Allocator,
-    signatures: std.ArrayList(SignatureData),
+    signatures: std.ArrayListUnmanaged(SignatureData),
 
     const SignatureData = struct {
         message: []const u8,
@@ -442,7 +443,7 @@ test "merkle proof generation and verification" {
 
     const root = tree.getRoot().?;
     var proof = try tree.generateProof(0, testing.allocator);
-    defer proof.deinit(testing.allocator);
+    defer proof.deinit();
 
     var leaf_hash: [32]u8 = undefined;
     crypto.hash.sha2.Sha256.hash("transaction1", &leaf_hash, .{});
