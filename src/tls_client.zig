@@ -12,6 +12,7 @@ const sym = @import("sym.zig");
 const kdf = @import("kdf.zig");
 const util = @import("util.zig");
 const asym = @import("asym.zig");
+const net = std.Io.net;
 
 /// TLS alert levels
 pub const AlertLevel = enum(u8) {
@@ -85,7 +86,9 @@ pub const TlsClient = struct {
     /// Configuration
     config: tls_config.TlsConfig,
     /// Underlying network stream
-    stream: std.net.Stream,
+    stream: net.Stream,
+    /// Io runtime for async operations
+    io: std.Io,
     /// Current handshake state
     handshake_state: HandshakeState = .initial,
     /// Handshake transcript hash
@@ -148,12 +151,13 @@ pub const TlsClient = struct {
     };
 
     /// Initialize a new TLS client
-    pub fn init(allocator: std.mem.Allocator, stream: std.net.Stream, config: tls_config.TlsConfig) !TlsClient {
+    pub fn init(allocator: std.mem.Allocator, stream: net.Stream, io: std.Io, config: tls_config.TlsConfig) !TlsClient {
         try config.validate();
-        
+
         return TlsClient{
             .config = config,
             .stream = stream,
+            .io = io,
             .transcript = hash.Sha256.init(),
             .client_random = undefined,
             .server_random = undefined,
@@ -250,7 +254,7 @@ pub const TlsClient = struct {
         }
 
         self.handshake_state = .closed;
-        self.stream.close();
+        self.stream.close(self.io);
     }
 
     /// Deinitialize and clean up
@@ -739,12 +743,20 @@ pub const TlsClient = struct {
         try buffer.writer().writeInt(u16, @intCast(data.len), .big);
         try buffer.writer().writeAll(data);
 
-        try self.stream.writeAll(buffer.items);
+        // Write using new Io API
+        var write_buf: [8192]u8 = undefined;
+        var w = self.stream.writer(self.io, &write_buf);
+        try w.interface.writeAll(buffer.items);
+        try w.interface.flush();
     }
 
     fn readRecord(self: *TlsClient) !Record {
         var header: [5]u8 = undefined;
-        _ = try self.stream.read(&header);
+
+        // Read using new Io API
+        var read_buf: [8192]u8 = undefined;
+        var r = self.stream.reader(self.io, &read_buf);
+        try r.interface.readSliceAll(&header);
 
         const record_type = std.meta.intToEnum(RecordType, header[0]) catch {
             return error.UnknownRecordType;
@@ -752,7 +764,7 @@ pub const TlsClient = struct {
         const length = std.mem.readInt(u16, header[3..5], .big);
 
         const data = try self.allocator.alloc(u8, length);
-        _ = try self.stream.read(data);
+        try r.interface.readSliceAll(data);
 
         return Record{
             .record_type = record_type,

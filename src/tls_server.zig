@@ -13,13 +13,16 @@ const sym = @import("sym.zig");
 const kdf = @import("kdf.zig");
 const util = @import("util.zig");
 const asym = @import("asym.zig");
+const net = std.Io.net;
 
 /// TLS server listener
 pub const TlsServer = struct {
     /// Configuration
     config: tls_config.TlsConfig,
     /// Underlying network listener
-    listener: std.net.Server,
+    listener: net.Server,
+    /// Io runtime
+    io_runtime: std.Io.Threaded,
     /// Allocator
     allocator: std.mem.Allocator,
 
@@ -32,25 +35,31 @@ pub const TlsServer = struct {
             return error.MissingServerCertificate;
         }
 
-        const addr = try std.net.Address.parseIp(address, port);
-        const listener = try addr.listen(.{
+        var io_runtime = std.Io.Threaded.init(allocator);
+        const io = io_runtime.io();
+
+        const addr = try net.IpAddress.parse(address, port);
+        const listener = try addr.listen(io, .{
             .reuse_address = true,
         });
 
         return TlsServer{
             .config = config,
             .listener = listener,
+            .io_runtime = io_runtime,
             .allocator = allocator,
         };
     }
 
     /// Accept a new TLS connection
     pub fn accept(self: *TlsServer) !TlsConnection {
-        const connection = try self.listener.accept();
-        
+        const io = self.io_runtime.io();
+        const stream = try self.listener.accept(io);
+
         var tls_conn = TlsConnection{
             .config = self.config,
-            .stream = connection.stream,
+            .stream = stream,
+            .io = io,
             .is_server = true,
             .handshake_state = .initial,
             .transcript = hash.Sha256.init(),
@@ -67,12 +76,14 @@ pub const TlsServer = struct {
 
     /// Close the server
     pub fn close(self: *TlsServer) void {
-        self.listener.deinit();
+        const io = self.io_runtime.io();
+        self.listener.deinit(io);
+        self.io_runtime.deinit();
     }
 
     /// Get the server's address
-    pub fn getAddress(self: TlsServer) !std.net.Address {
-        return self.listener.listen_address;
+    pub fn getAddress(self: TlsServer) !net.IpAddress {
+        return self.listener.local_address;
     }
 };
 
@@ -81,7 +92,9 @@ pub const TlsConnection = struct {
     /// Configuration
     config: tls_config.TlsConfig,
     /// Underlying network stream
-    stream: std.net.Stream,
+    stream: net.Stream,
+    /// Io runtime
+    io: std.Io,
     /// Is this the server side?
     is_server: bool,
     /// Current handshake state
