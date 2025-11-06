@@ -168,7 +168,7 @@ pub const TlsClient = struct {
     /// Perform TLS handshake
     pub fn handshake(self: *TlsClient) !void {
         // Generate client random
-        rand.random(&self.client_random);
+        rand.fillBytes(&self.client_random);
 
         // Send ClientHello
         try self.sendClientHello();

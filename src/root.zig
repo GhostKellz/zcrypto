@@ -59,7 +59,7 @@ pub const x25519 = kex.X25519;
 pub const ed25519 = kex.Ed25519;
 
 // Version information
-pub const version = "0.9.2";
+pub const version = "0.9.3";
 
 test {
     // Import all core module tests
