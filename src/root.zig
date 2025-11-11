@@ -32,6 +32,11 @@ pub const util = @import("util.zig");
 pub const bip = @import("bip.zig");
 pub const batch = @import("batch.zig");
 pub const kex = @import("kex.zig");
+pub const blake3 = @import("blake3.zig");
+pub const merkle = @import("merkle.zig");
+pub const timing = @import("timing.zig");
+pub const arena = @import("arena.zig");
+pub const ghostchain = @import("ghostchain.zig");
 
 // Always available modules
 pub const quic_crypto = @import("quic_crypto.zig");
@@ -59,7 +64,7 @@ pub const x25519 = kex.X25519;
 pub const ed25519 = kex.Ed25519;
 
 // Version information
-pub const version = "0.9.3";
+pub const version = "0.9.5";
 
 test {
     // Import all core module tests
@@ -74,6 +79,11 @@ test {
     _ = batch;
     _ = quic_crypto;
     _ = key_rotation;
+    _ = blake3;
+    _ = merkle;
+    _ = timing;
+    _ = arena;
+    _ = ghostchain;
 
     // Feature modules (conditionally available)
     // Note: These tests will only run if the features were enabled during build
