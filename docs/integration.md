@@ -183,11 +183,11 @@ const encryptedPacket = quicCrypto.encryptPacket(packetData, keys);
 
 ---
 
-## 🚀 **V0.7.0 NEW INTEGRATION PATTERNS**
+## Integration Patterns
 
 ### 🌐 WebAssembly (WASM) Integration
 
-**NEW in v0.7.0**: Sandboxed crypto operations for WASM runtimes with gas metering.
+Sandboxed crypto operations for WASM runtimes with gas metering.
 
 ```zig
 const zcrypto = @import("zcrypto");
@@ -211,7 +211,7 @@ try crypto_ctx.aeadEncrypt(.ChaCha20Poly1305, memory, 0, data.len, 200);
 
 ### 🔒 VPN Integration
 
-**NEW in v0.7.0**: Optimized crypto suite for VPN applications.
+Optimized crypto suite for VPN applications.
 
 ```zig
 const zcrypto = @import("zcrypto");
@@ -242,7 +242,7 @@ if (tunnel.shouldRotateKeys()) {
 
 ### ⚡ Zero-Copy Packet Processing
 
-**NEW in v0.7.0**: High-performance packet crypto for network applications.
+High-performance packet crypto for network applications.
 
 ```zig
 const zcrypto = @import("zcrypto");
@@ -266,7 +266,7 @@ try zero_copy.batchEncrypt(packets, keys, nonces);
 
 ### 📊 BBR Crypto Profiling
 
-**NEW in v0.7.0**: Network-aware crypto performance monitoring.
+Network-aware crypto performance monitoring.
 
 ```zig
 const zcrypto = @import("zcrypto");
@@ -290,7 +290,7 @@ std.log.info("Crypto overhead: {d}ms, Throughput: {d} MB/s",
 
 ### ⛓️ Blockchain Integration
 
-**NEW in v0.7.0**: Bitcoin-compatible crypto primitives.
+Bitcoin-compatible crypto primitives.
 
 ```zig
 const zcrypto = @import("zcrypto");
@@ -317,7 +317,7 @@ const valid = try blockchain_crypto.verifyTransaction(
 
 ### 🔄 Connection Pooling
 
-**NEW in v0.7.0**: Scalable crypto context management.
+Scalable crypto context management.
 
 ```zig
 const zcrypto = @import("zcrypto");
@@ -400,7 +400,7 @@ zig build generate-headers
 ## 🆘 Quick Help
 
 **Issue**: Build fails
-**Fix**: Update Zig to `0.15.0-dev.822+` or later
+**Fix**: Update Zig to `0.16.0-dev` or later
 
 **Issue**: Missing zsync
 **Fix**: `zig fetch --save https://github.com/mitchellh/zig-zsync/archive/main.tar.gz`

@@ -11,7 +11,7 @@
 
 # Zcrypto: A Modern Cryptography Library for Zig
 
-**Zcrypto v0.9.0** is a fast, safe, and modular cryptography library written entirely in Zig. It features optional compilation with 9 feature flags, enabling builds from 3MB (embedded) to 35MB (full-featured) depending on your needs.
+**Zcrypto v0.9.5** is a fast, safe, and modular cryptography library written entirely in Zig. It features optional compilation with 9 feature flags, enabling builds from 3MB (embedded) to 35MB (full-featured) depending on your needs.
 
 ---
 
@@ -30,7 +30,7 @@ to change!
 
 ---
 
-## ⚙️ Modular Features (v0.9.0)
+## ⚙️ Modular Features (v0.9.5)
 
 Zcrypto supports selective compilation with feature flags:
 
@@ -162,7 +162,7 @@ zig build run-example -- tls-client
 
 ## 🚀 Roadmap
 
-### ✅ Completed (v0.9.0)
+### ✅ Completed (v0.9.5)
 * ✅ Modular build system with 9 feature flags
 * ✅ 70-91% binary size reduction for selective builds
 * ✅ Structured documentation in `docs/` directory

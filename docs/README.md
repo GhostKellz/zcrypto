@@ -1,51 +1,51 @@
 # zcrypto Documentation
 
-**zcrypto v0.9.0** - A modern, modular cryptography library for Zig
+**zcrypto v0.9.5** - Post-quantum ready cryptography library for Zig
 
-## 📚 Documentation Structure
+## Quick Navigation
 
-### 🚀 Getting Started
-- **[Installation](getting-started/installation.md)** - How to add zcrypto to your project
-- **[Quick Start](getting-started/quick-start.md)** - Basic usage examples
-- **[Build Configuration](getting-started/build-config.md)** - Feature flags and modular builds
+### Getting Started
+- [Quick Start](getting-started/quick-start.md) - Get started in 5 minutes
+- [Build Configuration](getting-started/build-config.md) - Feature flags and modular builds
 
-### 🔧 API Reference
-- **[Core API](api/core.md)** - Essential cryptographic primitives
-- **[Feature APIs](api/features.md)** - Optional feature modules
-- **[Error Handling](api/errors.md)** - Error types and handling patterns
+### API Reference
+- [Core API](api/core.md) - Hash, symmetric, asymmetric, KDF, random
+- [Full Reference](api/reference.md) - Complete API with post-quantum, protocols, QUIC
 
-### ✨ Features
-- **[Modular Architecture](features/modular.md)** - Build-time feature selection
-- **[Hardware Acceleration](features/hardware.md)** - SIMD and CPU-specific optimizations
-- **[Post-Quantum Crypto](features/post-quantum.md)** - ML-KEM and ML-DSA implementations
-- **[TLS/QUIC Integration](features/tls-quic.md)** - Protocol-specific cryptography
-- **[Async Operations](features/async.md)** - zsync integration for async crypto
+### Features
+- [Feature Overview](features/README.md) - Modular feature system
+- [TLS/QUIC](features/tls.md) - TLS 1.3 and QUIC crypto
 
-### 💡 Examples
-- **[Basic Usage](examples/basic.md)** - Simple encryption/decryption
-- **[Advanced Features](examples/advanced.md)** - Hardware acceleration, PQ crypto
-- **[Integration Examples](examples/integration.md)** - Real-world integration patterns
+### Examples
+- [Basic Usage](examples/basic.md) - Simple encryption/decryption
+- [Examples Overview](examples/README.md) - All code examples
 
-### 🤝 Contributing
-- **[Development Setup](contributing/setup.md)** - Setting up the development environment
-- **[Coding Standards](contributing/standards.md)** - Code style and conventions
-- **[Testing](contributing/testing.md)** - Testing guidelines and practices
+### Contributing
+- [Contributing Guide](contributing/README.md) - Development guidelines
 
-## 📖 Additional Resources
+## Module Overview
 
-- **[README](../README.md)** - Project overview and feature summary
-- **[API.md](../API.md)** - Legacy API documentation
-- **[ZCRYPTO_GUIDE.md](../ZCRYPTO_GUIDE.md)** - Implementation guide
-- **[TODO.md](../TODO.md)** - Roadmap and development status
-- **[ZSYNC_WISHLIST.md](../ZSYNC_WISHLIST.md)** - Future feature wishlist
+| Module | Description |
+|--------|-------------|
+| `zcrypto.hash` | SHA-2/3, Blake2/3, SHAKE, HMAC |
+| `zcrypto.sym` | AES-GCM, ChaCha20-Poly1305 |
+| `zcrypto.asym` | Ed25519, X25519, secp256k1/r1 |
+| `zcrypto.pq` | ML-KEM, ML-DSA (post-quantum) |
+| `zcrypto.kdf` | HKDF, PBKDF2, Argon2 |
+| `zcrypto.protocols` | Signal, Noise, MLS |
+| `zcrypto.zkp` | Groth16, Bulletproofs |
+| `zcrypto.quic` | QUIC crypto (incl. PQ) |
 
-## 🔗 Quick Links
+## Build Sizes
 
-- **GitHub**: [ghostkellz/zcrypto](https://github.com/ghostkellz/zcrypto)
-- **Issues**: [Report bugs or request features](https://github.com/ghostkellz/zcrypto/issues)
-- **Discussions**: [Community discussions](https://github.com/ghostkellz/zcrypto/discussions)
+| Configuration | Size | Use Case |
+|---------------|------|----------|
+| Core only | ~3MB | Embedded/IoT |
+| Core + TLS | ~12MB | Web servers |
+| Core + Blockchain | ~18MB | Blockchain nodes |
+| Full features | ~35MB | Enterprise |
 
----
+## Links
 
-**Last updated**: September 23, 2025
-**Version**: v0.9.0
+- [GitHub](https://github.com/ghostkellz/zcrypto)
+- [Issues](https://github.com/ghostkellz/zcrypto/issues)
