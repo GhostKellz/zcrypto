@@ -5,6 +5,7 @@
 const std = @import("std");
 const crypto = std.crypto;
 const testing = std.testing;
+const rand = @import("rand.zig");
 
 pub const BLSError = error{
     InvalidPrivateKey,
@@ -45,7 +46,7 @@ pub const BLSKeyPair = struct {
 /// Generate a new BLS key pair
 pub fn generateBLS() BLSKeyPair {
     var private_key: [BLS_PRIVATE_KEY_SIZE]u8 = undefined;
-    crypto.random.bytes(&private_key);
+    rand.fill(&private_key);
     
     // Ensure private key is valid (less than curve order)
     // For BLS12-381, order is ~2^255, so MSB reduction is sufficient
@@ -240,7 +241,7 @@ pub const ThresholdBLS = struct {
         
         coeffs[0] = master_key;
         for (coeffs[1..]) |*coeff| {
-            crypto.random.bytes(coeff);
+            rand.fill(coeff);
             coeff[31] &= 0x3F; // Ensure valid scalar
         }
         

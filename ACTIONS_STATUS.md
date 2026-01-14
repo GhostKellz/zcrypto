@@ -67,6 +67,6 @@ While Actions are offline, use the local CI suite:
 ./dev/bench.sh       # Run benchmarks
 ```
 
-## Contact
+## Online Status 
+Back online as of 1-14-2026.
 
-For CI/infrastructure questions, check the repo issues or reach out to maintainers.

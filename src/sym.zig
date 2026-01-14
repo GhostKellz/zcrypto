@@ -4,6 +4,7 @@
 //! All operations are constant-time and memory-safe.
 
 const std = @import("std");
+const rand = @import("rand.zig");
 
 /// AES-128-GCM key size
 pub const AES_128_KEY_SIZE = 16;
@@ -226,7 +227,7 @@ pub fn encryptAesGcm(
 ) ![]u8 {
     // Generate random nonce
     var nonce: [GCM_NONCE_SIZE]u8 = undefined;
-    std.crypto.random.bytes(&nonce);
+    rand.fill(&nonce);
     
     // Encrypt
     const result = try encryptAes256Gcm(allocator, key.*, nonce, plaintext, "");
@@ -277,7 +278,7 @@ pub fn encryptChaCha20(
 ) ![]u8 {
     // Generate random nonce
     var nonce: [CHACHA20_NONCE_SIZE]u8 = undefined;
-    std.crypto.random.bytes(&nonce);
+    rand.fill(&nonce);
     
     // Encrypt using the original function
     const result = try encryptChaCha20Poly1305(allocator, key.*, nonce, plaintext, "");

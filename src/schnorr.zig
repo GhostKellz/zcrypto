@@ -5,6 +5,7 @@
 const std = @import("std");
 const crypto = std.crypto;
 const testing = std.testing;
+const rand = @import("rand.zig");
 
 pub const SchnorrError = error{
     InvalidPrivateKey,
@@ -44,7 +45,7 @@ pub const SchnorrKeyPair = struct {
 /// Generate a new Schnorr key pair
 pub fn generateSchnorr() SchnorrKeyPair {
     var private_key: [SCHNORR_PRIVATE_KEY_SIZE]u8 = undefined;
-    crypto.random.bytes(&private_key);
+    rand.fill(&private_key);
     
     // Ensure private key is valid (1 < key < n)
     // For secp256k1, just ensure non-zero
@@ -97,7 +98,7 @@ fn generateNonce(private_key: [SCHNORR_PRIVATE_KEY_SIZE]u8, message: []const u8,
 pub fn signSchnorr(message: []const u8, private_key: [SCHNORR_PRIVATE_KEY_SIZE]u8) ![SCHNORR_SIGNATURE_SIZE]u8 {
     // Generate deterministic nonce
     var aux_rand: [32]u8 = undefined;
-    crypto.random.bytes(&aux_rand);
+    rand.fill(&aux_rand);
     const k = generateNonce(private_key, message, aux_rand);
     
     // R = k * G
@@ -561,7 +562,7 @@ test "MuSig2 signing" {
     
     // Generate nonces
     var session_id: [32]u8 = undefined;
-    crypto.random.bytes(&session_id);
+    rand.fill(&session_id);
     
     const nonce1 = MuSig2.nonceGen(session_id, keypair1.private_key, message, null);
     const nonce2 = MuSig2.nonceGen(session_id, keypair2.private_key, message, null);
@@ -588,7 +589,7 @@ test "Schnorr adaptor signatures" {
     
     // Generate adaptor point (T = t*G)
     var adaptor_secret: [32]u8 = undefined;
-    crypto.random.bytes(&adaptor_secret);
+    rand.fill(&adaptor_secret);
     
     var adaptor_point: [32]u8 = undefined;
     var hasher = crypto.hash.sha2.Sha256.init(.{});

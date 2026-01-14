@@ -260,7 +260,7 @@ pub const PostQuantumQuic = struct {
         if (entropy.len >= 64) {
             @memcpy(&pq_seed, entropy[32..64]);
         } else {
-            std.crypto.random.bytes(&pq_seed);
+            rand.fill(&pq_seed);
         }
 
         const pq_keypair = pq.ml_kem.ML_KEM_768.KeyPair.generate(pq_seed) catch {
@@ -273,10 +273,10 @@ pub const PostQuantumQuic = struct {
     pub fn processHybridKeyShare(client_classical: []const u8, client_pq: []const u8, server_classical: *[32]u8, server_pq: *[pq.ml_kem.ML_KEM_768.CIPHERTEXT_SIZE]u8, shared_secret: *[64]u8) pq.PQError!void {
         // Generate server X25519 key pair
         var x25519_seed: [32]u8 = undefined;
-        std.crypto.random.bytes(&x25519_seed);
+        rand.fill(&x25519_seed);
 
         var server_x25519_seed: [32]u8 = undefined;
-        std.crypto.random.bytes(&server_x25519_seed);
+        rand.fill(&server_x25519_seed);
         const basepoint = [_]u8{9} ++ [_]u8{0} ** 31;
         const server_x25519_public = std.crypto.dh.X25519.scalarmult(server_x25519_seed, basepoint) catch {
             return pq.PQError.KeyGenFailed;
@@ -293,7 +293,7 @@ pub const PostQuantumQuic = struct {
         const client_pq_key: [pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE]u8 = client_pq[0..pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE].*;
 
         var pq_randomness: [32]u8 = undefined;
-        std.crypto.random.bytes(&pq_randomness);
+        rand.fill(&pq_randomness);
 
         const pq_result = pq.ml_kem.ML_KEM_768.KeyPair.encapsulate(client_pq_key, pq_randomness) catch {
             return pq.PQError.EncapsFailed;

@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const rand = @import("rand.zig");
 
 pub const HardwareAcceleration = struct {
     aes_ni: bool = false, // Intel AES-NI instructions
@@ -194,32 +195,32 @@ pub const SIMD = struct {
 
 /// Linux /dev/crypto interface
 pub const DevCrypto = struct {
-    session: ?std.fs.File = null,
-    
+    fd: ?std.posix.fd_t = null,
+
     pub fn init() !DevCrypto {
-        // Try to open /dev/crypto
-        const crypto_dev = std.fs.openFileAbsolute("/dev/crypto", .{ .mode = .read_write }) catch |err| switch (err) {
-            error.FileNotFound, error.AccessDenied => return DevCrypto{ .session = null },
+        // Try to open /dev/crypto using posix openat
+        const fd = std.posix.openat(std.posix.AT.FDCWD, "/dev/crypto", .{ .ACCMODE = .RDWR }, 0) catch |err| switch (err) {
+            error.FileNotFound, error.AccessDenied => return DevCrypto{ .fd = null },
             else => return err,
         };
-        
-        return DevCrypto{ .session = crypto_dev };
+
+        return DevCrypto{ .fd = fd };
     }
-    
+
     pub fn deinit(self: *DevCrypto) void {
-        if (self.session) |*file| {
-            file.close();
-            self.session = null;
+        if (self.fd) |fd| {
+            std.posix.close(fd);
+            self.fd = null;
         }
     }
-    
+
     pub fn isAvailable(self: DevCrypto) bool {
-        return self.session != null;
+        return self.fd != null;
     }
     
     /// Perform AES encryption using /dev/crypto
     pub fn aesEncrypt(self: *DevCrypto, key: []const u8, plaintext: []const u8, ciphertext: []u8) !void {
-        if (self.session == null) {
+        if (self.fd == null) {
             return error.DeviceNotAvailable;
         }
         
@@ -388,8 +389,8 @@ pub const Benchmark = struct {
         var tag: [16]u8 = undefined;
 
         // Fill with test data
-        std.crypto.random.bytes(key);
-        std.crypto.random.bytes(plaintext);
+        rand.fill(key);
+        rand.fill(plaintext);
 
         const features = HardwareAcceleration.detect();
         const hardware_available = features.aes_ni and features.pclmulqdq;

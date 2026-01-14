@@ -4,6 +4,7 @@
 //! Zero-knowledge proofs with logarithmic proof size
 
 const std = @import("std");
+const rand = @import("../rand.zig");
 
 /// Bulletproofs errors
 pub const BulletproofsError = error{
@@ -81,7 +82,7 @@ pub const Scalar = struct {
     
     pub fn random() Scalar {
         var bytes: [32]u8 = undefined;
-        std.crypto.random.bytes(&bytes);
+        rand.fill(&bytes);
         const value = std.mem.readIntBig(u256, &bytes) % ORDER;
         return Scalar{ .value = value };
     }

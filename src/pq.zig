@@ -9,6 +9,7 @@
 //! and defense-in-depth security against both classical and quantum attacks.
 
 const std = @import("std");
+const rand = @import("rand.zig");
 const root = @import("root.zig");
 
 /// Post-quantum cryptography errors
@@ -96,7 +97,7 @@ pub const ml_dsa = struct {
             pub fn generateRandom(allocator: std.mem.Allocator) PQError!KeyPair {
                 _ = allocator;
                 var seed: [SEED_SIZE]u8 = undefined;
-                std.crypto.random.bytes(&seed);
+                rand.fill(&seed);
                 return generate(seed);
             }
 
@@ -210,7 +211,7 @@ pub const slh_dsa = struct {
             pub fn generateRandom(allocator: std.mem.Allocator) PQError!KeyPair {
                 _ = allocator;
                 var seed: [SEED_SIZE]u8 = undefined;
-                std.crypto.random.bytes(&seed);
+                rand.fill(&seed);
                 return generate(seed);
             }
 
@@ -324,7 +325,7 @@ pub const hybrid = struct {
 
                 // Generate X25519 key pair
                 var classical_seed: [32]u8 = undefined;
-                std.crypto.random.bytes(&classical_seed);
+                rand.fill(&classical_seed);
 
                 keypair.classical_private = classical_seed;
                 // Use X25519 basepoint to generate public key manually
@@ -335,7 +336,7 @@ pub const hybrid = struct {
 
                 // Generate ML-KEM-768 key pair
                 var pq_seed: [32]u8 = undefined;
-                std.crypto.random.bytes(&pq_seed);
+                rand.fill(&pq_seed);
 
                 const ml_kem_keypair = ml_kem.ML_KEM_768.KeyPair.generate(pq_seed) catch {
                     return PQError.KeyGenFailed;
@@ -399,7 +400,7 @@ pub const hybrid = struct {
 
                 // Generate Ed25519 key pair
                 var classical_seed: [32]u8 = undefined;
-                std.crypto.random.bytes(&classical_seed);
+                rand.fill(&classical_seed);
 
                 const ed25519_keypair = std.crypto.sign.Ed25519.KeyPair.create(classical_seed) catch {
                     return PQError.KeyGenFailed;
@@ -409,7 +410,7 @@ pub const hybrid = struct {
 
                 // Generate ML-DSA-65 key pair
                 var pq_seed: [32]u8 = undefined;
-                std.crypto.random.bytes(&pq_seed);
+                rand.fill(&pq_seed);
 
                 const ml_dsa_keypair = ml_dsa.ML_DSA_65.KeyPair.generate(pq_seed) catch {
                     return PQError.KeyGenFailed;
@@ -442,7 +443,7 @@ pub const hybrid = struct {
                 };
 
                 var pq_randomness: [32]u8 = undefined;
-                std.crypto.random.bytes(&pq_randomness);
+                rand.fill(&pq_randomness);
 
                 const pq_sig = ml_dsa_keypair.sign(message, pq_randomness) catch {
                     return PQError.SignFailed;

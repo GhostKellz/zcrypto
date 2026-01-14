@@ -9,6 +9,7 @@
 const std = @import("std");
 const crypto = std.crypto;
 const Allocator = std.mem.Allocator;
+const rand = @import("rand.zig");
 
 /// VPN-specific errors
 pub const VpnCryptoError = error{
@@ -87,7 +88,7 @@ pub const VpnTunnel = struct {
         @memcpy(&self.recv_key, okm[32..64]);
 
         // Generate obfuscation key
-        crypto.random.bytes(&self.obfuscation_key);
+        rand.fill(&self.obfuscation_key);
 
         self.send_counter = 0;
         self.recv_counter = 0;

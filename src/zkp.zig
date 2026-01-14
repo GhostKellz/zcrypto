@@ -5,6 +5,7 @@
 const std = @import("std");
 const crypto = std.crypto;
 const testing = std.testing;
+const rand = @import("rand.zig");
 
 pub const ZKError = error{
     InvalidProof,
@@ -110,17 +111,17 @@ pub const Bulletproofs = struct {
         defer allocator.free(sR);
 
         for (sL) |*s| {
-            crypto.random.bytes(s);
+            rand.fill(s);
         }
         for (sR) |*s| {
-            crypto.random.bytes(s);
+            rand.fill(s);
         }
 
         // Compute commitments (simplified - would use elliptic curve operations)
         var a: [32]u8 = undefined;
         var s: [32]u8 = undefined;
-        crypto.random.bytes(&a);
-        crypto.random.bytes(&s);
+        rand.fill(&a);
+        rand.fill(&s);
 
         // Fiat-Shamir challenge
         var challenge: [32]u8 = undefined;
@@ -133,13 +134,13 @@ pub const Bulletproofs = struct {
         // Continue with polynomial commitments
         var t1: [32]u8 = undefined;
         var t2: [32]u8 = undefined;
-        crypto.random.bytes(&t1);
-        crypto.random.bytes(&t2);
+        rand.fill(&t1);
+        rand.fill(&t2);
 
         var tau_x: [32]u8 = undefined;
         var mu: [32]u8 = undefined;
-        crypto.random.bytes(&tau_x);
-        crypto.random.bytes(&mu);
+        rand.fill(&tau_x);
+        rand.fill(&mu);
 
         // Generate inner product proof (simplified)
         var ipproof = RangeProof.InnerProductProof{
@@ -150,13 +151,13 @@ pub const Bulletproofs = struct {
         };
 
         for (ipproof.l) |*l| {
-            crypto.random.bytes(l);
+            rand.fill(l);
         }
         for (ipproof.r) |*r| {
-            crypto.random.bytes(r);
+            rand.fill(r);
         }
-        crypto.random.bytes(ipproof.a[0..]);
-        crypto.random.bytes(ipproof.b[0..]);
+        rand.fill(ipproof.a[0..]);
+        rand.fill(ipproof.b[0..]);
 
         return RangeProof{
             .a = a,
@@ -280,15 +281,15 @@ pub const Groth16 = struct {
         var gamma: [32]u8 = undefined;
         var delta: [32]u8 = undefined;
 
-        crypto.random.bytes(&alpha);
-        crypto.random.bytes(&beta);
-        crypto.random.bytes(&gamma);
-        crypto.random.bytes(&delta);
+        rand.fill(&alpha);
+        rand.fill(&beta);
+        rand.fill(&gamma);
+        rand.fill(&delta);
 
         // Generate IC commitments
         const ic = try allocator.alloc([32]u8, circuit.num_inputs + 1);
         for (ic) |*commitment| {
-            crypto.random.bytes(commitment);
+            rand.fill(commitment);
         }
 
         // Generate L, R, O queries for proving key
@@ -297,10 +298,10 @@ pub const Groth16 = struct {
         const o = try allocator.alloc([32]u8, circuit.num_inputs + circuit.num_aux);
         const h = try allocator.alloc([32]u8, circuit.num_constraints);
 
-        for (l) |*query| crypto.random.bytes(query);
-        for (r) |*query| crypto.random.bytes(query);
-        for (o) |*query| crypto.random.bytes(query);
-        for (h) |*query| crypto.random.bytes(query);
+        for (l) |*query| rand.fill(query);
+        for (r) |*query| rand.fill(query);
+        for (o) |*query| rand.fill(query);
+        for (h) |*query| rand.fill(query);
 
         const pk = ProvingKey{
             .alpha = alpha,
@@ -336,8 +337,8 @@ pub const Groth16 = struct {
         // Generate random values
         var r: [32]u8 = undefined;
         var s: [32]u8 = undefined;
-        crypto.random.bytes(&r);
-        crypto.random.bytes(&s);
+        rand.fill(&r);
+        rand.fill(&s);
 
         // Compute proof elements (simplified)
         var proof = Proof{
@@ -553,7 +554,7 @@ pub const STARKs = struct {
             } else {
                 // Interpolate or zero-pad
                 for (row.*) |*cell| {
-                    crypto.random.bytes(cell);
+                    rand.fill(cell);
                 }
             }
         }
@@ -616,7 +617,7 @@ pub const STARKs = struct {
 
         // Generate random commitments
         for (commitments) |*commitment| {
-            crypto.random.bytes(commitment);
+            rand.fill(commitment);
         }
 
         // Final polynomial (constant)
@@ -624,7 +625,7 @@ pub const STARKs = struct {
             if (i < polynomial.len) {
                 coeff.* = polynomial[i];
             } else {
-                crypto.random.bytes(coeff);
+                rand.fill(coeff);
             }
         }
 
@@ -634,10 +635,10 @@ pub const STARKs = struct {
             qp.values = try allocator.alloc([32]u8, 2);
 
             for (qp.path) |*node| {
-                crypto.random.bytes(node);
+                rand.fill(node);
             }
             for (qp.values) |*value| {
-                crypto.random.bytes(value);
+                rand.fill(value);
             }
         }
 
@@ -696,13 +697,13 @@ test "Bulletproofs range proof" {
 
     const value: u64 = 42;
     var blinding: [32]u8 = undefined;
-    crypto.random.bytes(&blinding);
+    rand.fill(&blinding);
 
     var proof = try Bulletproofs.proveRange(allocator, value, blinding, 0, 100, &generators);
     defer Bulletproofs.deinitProof(allocator, &proof);
 
     var commitment: [32]u8 = undefined;
-    crypto.random.bytes(&commitment);
+    rand.fill(&commitment);
 
     const valid = try Bulletproofs.verifyRange(commitment, 0, 100, proof, &generators);
     try testing.expect(valid);

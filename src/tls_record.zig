@@ -86,9 +86,16 @@ pub const Alert = struct {
     }
     
     pub fn fromBytes(bytes: [2]u8) !Alert {
+        // Validate enum values before conversion
+        const level: AlertLevel = switch (bytes[0]) {
+            1 => .warning,
+            2 => .fatal,
+            else => return errors.TlsError.InvalidRecordFormat,
+        };
+        const description: AlertDescription = @enumFromInt(bytes[1]);
         return Alert{
-            .level = std.meta.intToEnum(AlertLevel, bytes[0]) catch return errors.TlsError.InvalidRecordFormat,
-            .description = std.meta.intToEnum(AlertDescription, bytes[1]) catch return errors.TlsError.InvalidRecordFormat,
+            .level = level,
+            .description = description,
         };
     }
     
@@ -121,10 +128,15 @@ pub const RecordHeader = struct {
     
     /// Decode header from bytes
     pub fn fromBytes(bytes: [RECORD_HEADER_SIZE]u8) !RecordHeader {
-        const record_type = std.meta.intToEnum(RecordType, bytes[0]) catch {
-            return errors.TlsError.InvalidRecordType;
+        const record_type: RecordType = switch (bytes[0]) {
+            0 => .invalid,
+            20 => .change_cipher_spec,
+            21 => .alert,
+            22 => .handshake,
+            23 => .application_data,
+            else => return errors.TlsError.InvalidRecordType,
         };
-        
+
         return RecordHeader{
             .record_type = record_type,
             .version = util.readU16BigEndian(bytes[1..3]),
@@ -193,8 +205,14 @@ pub const TlsPlaintext = struct {
         }
         
         const content_type_byte = inner[content_end - 1];
-        const content_type = std.meta.intToEnum(ContentType, content_type_byte) catch {
-            return errors.TlsError.InvalidRecordFormat;
+        const content_type: ContentType = switch (content_type_byte) {
+            0 => .invalid,
+            20 => .change_cipher_spec,
+            21 => .alert,
+            22 => .handshake,
+            23 => .application_data,
+            24 => .heartbeat,
+            else => return errors.TlsError.InvalidRecordFormat,
         };
         
         const data = inner[0..content_end - 1];

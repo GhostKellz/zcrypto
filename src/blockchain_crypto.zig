@@ -9,6 +9,7 @@
 const std = @import("std");
 const crypto = std.crypto;
 const Allocator = std.mem.Allocator;
+const rand = @import("rand.zig");
 
 /// Blockchain crypto errors
 pub const BlockchainCryptoError = error{
@@ -283,7 +284,7 @@ pub const PostQuantumSig = struct {
         var public_key: PublicKey = undefined;
 
         // Generate random private key
-        crypto.random.bytes(&private_key.data);
+        rand.fill(&private_key.data);
 
         // Derive public key (simplified)
         crypto.hash.sha2.Sha256.hash(private_key.data[0..32], &public_key.data, .{});
@@ -305,7 +306,7 @@ pub const PostQuantumSig = struct {
 
         @memcpy(signature.data[0..32], &hash);
         @memcpy(signature.data[32..64], private_key.data[0..32]);
-        crypto.random.bytes(signature.data[64..128]);
+        rand.fill(signature.data[64..128]);
 
         return signature;
     }
@@ -344,8 +345,8 @@ pub const ZKProof = struct {
         var proving_key: ProvingKey = undefined;
         var verifying_key: VerifyingKey = undefined;
 
-        crypto.random.bytes(&proving_key.data);
-        crypto.random.bytes(&verifying_key.data);
+        rand.fill(&proving_key.data);
+        rand.fill(&verifying_key.data);
 
         return .{ .proving_key = proving_key, .verifying_key = verifying_key };
     }
@@ -364,7 +365,7 @@ pub const ZKProof = struct {
         hasher.final(&hash);
 
         @memcpy(proof.data[0..32], &hash);
-        crypto.random.bytes(proof.data[32..256]);
+        rand.fill(proof.data[32..256]);
 
         return proof;
     }

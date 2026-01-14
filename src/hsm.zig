@@ -6,9 +6,27 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const rand = @import("rand.zig");
 const testing = std.testing;
 const hash = @import("hash.zig");
 const sym = @import("sym.zig");
+
+/// Check if a file exists using OS-level syscall
+fn fileExists(path: []const u8) bool {
+    if (builtin.os.tag == .linux) {
+        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        if (path.len >= path_buf.len) return false;
+        @memcpy(path_buf[0..path.len], path);
+        path_buf[path.len] = 0;
+        const path_z: [*:0]const u8 = @ptrCast(&path_buf);
+        const rc = std.os.linux.access(path_z, std.os.linux.F_OK);
+        return std.os.linux.errno(rc) == .SUCCESS;
+    }
+    // For non-Linux, use posix openat to check
+    const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY }, 0) catch return false;
+    std.posix.close(fd);
+    return true;
+}
 
 pub const HSMError = error{
     HSMNotAvailable,
@@ -101,8 +119,7 @@ pub const TPMProvider = struct {
             return std.mem.eql(u8, path, "//./tbs");
         } else {
             // On Unix-like systems, check for device file
-            std.fs.cwd().access(path, .{}) catch return false;
-            return true;
+            return fileExists(path);
         }
     }
 
@@ -223,8 +240,7 @@ pub const PKCS11Provider = struct {
 
     fn checkPKCS11Library(path: []const u8) bool {
         // Check if PKCS#11 library exists
-        std.fs.cwd().access(path, .{}) catch return false;
-        return true;
+        return fileExists(path);
     }
 
     /// Generate key pair in HSM
@@ -235,7 +251,7 @@ pub const PKCS11Provider = struct {
 
         // Generate key pair using PKCS#11
         var key_id: u32 = undefined;
-        std.crypto.random.bytes(std.mem.asBytes(&key_id));
+        rand.fill(std.mem.asBytes(&key_id));
 
         const public_key = HSMKeyHandle{
             .id = key_id,
@@ -347,7 +363,7 @@ pub const SecureEnclaveProvider = struct {
         _ = key_size; // TODO: Use key_size parameter
 
         var key_id: u32 = undefined;
-        std.crypto.random.bytes(std.mem.asBytes(&key_id));
+        rand.fill(std.mem.asBytes(&key_id));
 
         return HSMKeyHandle{
             .id = key_id,
@@ -429,7 +445,7 @@ pub const HSMInterface = struct {
         }
 
         // Fallback to system entropy
-        std.crypto.random.bytes(buffer);
+        rand.fill(buffer);
     }
 
     /// Generate key using best available HSM

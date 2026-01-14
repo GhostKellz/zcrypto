@@ -7,6 +7,7 @@ const crypto = std.crypto;
 const testing = std.testing;
 const kex = @import("kex.zig");
 const post_quantum = @import("post_quantum.zig");
+const rand = @import("rand.zig");
 
 pub const ProtocolError = error{
     InvalidState,
@@ -182,7 +183,7 @@ pub const Signal = struct {
         
         // Generate random nonce
         var nonce: [12]u8 = undefined;
-        crypto.random.bytes(&nonce);
+        rand.fill(&nonce);
         @memcpy(ciphertext[0..12], &nonce);
         
         // Encrypt with associated data (empty)

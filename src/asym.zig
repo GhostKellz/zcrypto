@@ -4,6 +4,7 @@
 //! All operations use constant-time implementations.
 
 const std = @import("std");
+const rand = @import("rand.zig");
 
 /// Ed25519 public key size
 pub const ED25519_PUBLIC_KEY_SIZE = 32;
@@ -62,9 +63,15 @@ pub const Curve25519KeyPair = struct {
 
 /// Generate a new Ed25519 keypair
 pub fn generateEd25519() Ed25519KeyPair {
-    // Generate using the standard Zig crypto library approach
-    const key_pair = std.crypto.sign.Ed25519.KeyPair.generate();
-    
+    // Generate random seed and use deterministic key generation
+    var seed: [32]u8 = undefined;
+    rand.fill(&seed);
+    const key_pair = std.crypto.sign.Ed25519.KeyPair.generateDeterministic(seed) catch {
+        // If identity element (extremely rare), regenerate
+        rand.fill(&seed);
+        return generateEd25519();
+    };
+
     return Ed25519KeyPair{
         .public_key = key_pair.public_key.bytes,
         .private_key = key_pair.secret_key.bytes,
@@ -74,7 +81,7 @@ pub fn generateEd25519() Ed25519KeyPair {
 /// Generate a new Curve25519 keypair
 pub fn generateCurve25519() Curve25519KeyPair {
     var private_key: [CURVE25519_PRIVATE_KEY_SIZE]u8 = undefined;
-    std.crypto.random.bytes(&private_key);
+    rand.fill(&private_key);
     const public_key = std.crypto.dh.X25519.recoverPublicKey(private_key) catch return Curve25519KeyPair{ .public_key = [_]u8{0} ** 32, .private_key = private_key };
 
     return Curve25519KeyPair{
@@ -228,7 +235,14 @@ pub const Secp256r1KeyPair = struct {
 
 /// Generate secp256k1 keypair
 pub fn generateSecp256k1() Secp256k1KeyPair {
-    const kp = std.crypto.sign.ecdsa.EcdsaSecp256k1Sha256.KeyPair.generate();
+    // Use deterministic generation with random seed
+    var seed: [32]u8 = undefined;
+    rand.fill(&seed);
+    const kp = std.crypto.sign.ecdsa.EcdsaSecp256k1Sha256.KeyPair.generateDeterministic(seed) catch {
+        // If generation fails, try with a different seed
+        rand.fill(&seed);
+        return generateSecp256k1();
+    };
     const compressed_temp = kp.public_key.toCompressedSec1();
     
     // Copy the compressed key to ensure it's not a temporary reference
@@ -247,7 +261,14 @@ pub fn generateSecp256k1() Secp256k1KeyPair {
 
 /// Generate secp256r1 keypair
 pub fn generateSecp256r1() Secp256r1KeyPair {
-    const kp = std.crypto.sign.ecdsa.EcdsaP256Sha256.KeyPair.generate();
+    // Use deterministic generation with random seed
+    var seed: [32]u8 = undefined;
+    rand.fill(&seed);
+    const kp = std.crypto.sign.ecdsa.EcdsaP256Sha256.KeyPair.generateDeterministic(seed) catch {
+        // If generation fails, try with a different seed
+        rand.fill(&seed);
+        return generateSecp256r1();
+    };
     return Secp256r1KeyPair{
         .public_key = kp.public_key.toCompressedSec1(),
         .private_key = kp.secret_key.bytes,

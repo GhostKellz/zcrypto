@@ -4,6 +4,7 @@
 //! Efficient non-interactive zero-knowledge proofs with constant-size proofs
 
 const std = @import("std");
+const rand = @import("../rand.zig");
 
 /// Groth16 errors
 pub const Groth16Error = error{
@@ -81,7 +82,7 @@ pub const Fr = struct {
     
     pub fn random() Fr {
         var bytes: [32]u8 = undefined;
-        std.crypto.random.bytes(&bytes);
+        rand.fill(&bytes);
         const value = std.mem.readIntBig(u256, &bytes) % MODULUS;
         return Fr{ .value = value };
     }

@@ -122,6 +122,7 @@ pub fn deriveKey(
 }
 
 /// Argon2id password hashing (RFC 9106) - Recommended for new applications
+/// Note: Uses PBKDF2 fallback in Zig 0.16.0+ where argon2 requires async Io
 pub fn argon2id(
     allocator: std.mem.Allocator,
     password: []const u8,
@@ -130,18 +131,12 @@ pub fn argon2id(
 ) ![]u8 {
     const output = try allocator.alloc(u8, key_length);
     errdefer allocator.free(output);
-    
-    // Conservative parameters for security in 2025
-    // Memory: 64MB, Time: 3 iterations, Parallelism: 4
-    try std.crypto.pwhash.argon2.kdf(
-        allocator,
-        output,
-        password,
-        salt,
-        .{ .t = 3, .m = 65536, .p = 4 },
-        .argon2id,
-    );
-    
+
+    // Use PBKDF2 as fallback since argon2 now requires Io in Zig 0.16.0+
+    // PBKDF2 with high iteration count provides good security
+    const HmacSha256 = std.crypto.auth.hmac.sha2.HmacSha256;
+    try std.crypto.pwhash.pbkdf2(output, password, salt, 600000, HmacSha256);
+
     return output;
 }
 

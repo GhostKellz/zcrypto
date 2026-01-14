@@ -9,6 +9,7 @@
 const std = @import("std");
 const crypto = std.crypto;
 const Allocator = std.mem.Allocator;
+const rand = @import("rand.zig");
 
 /// WASM crypto errors
 pub const WasmCryptoError = error{
@@ -247,7 +248,7 @@ pub const WasmCrypto = struct {
         const random_data = try self.allocator.alloc(u8, len);
         defer self.allocator.free(random_data);
 
-        crypto.random.bytes(random_data);
+        rand.fill(random_data);
 
         // Write to WASM memory
         try memory.write(output_offset, random_data);

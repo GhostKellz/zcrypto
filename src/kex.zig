@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const crypto = std.crypto;
+const rand = @import("rand.zig");
 const testing = std.testing;
 const post_quantum = @import("post_quantum.zig");
 
@@ -33,7 +34,7 @@ pub const X25519 = struct {
         };
 
         // Generate random private key
-        crypto.random.bytes(&keypair.private_key);
+        rand.fill(&keypair.private_key);
 
         // Derive public key from private key using real X25519
         keypair.public_key = try derivePublicKey(keypair.private_key);
@@ -94,7 +95,7 @@ pub const X448 = struct {
             .private_key = undefined,
         };
 
-        crypto.random.bytes(&keypair.private_key);
+        rand.fill(&keypair.private_key);
 
         // Clamp private key according to RFC 7748
         keypair.private_key[0] &= 252;
@@ -166,9 +167,13 @@ pub const Ed25519 = struct {
     };
 
     pub fn generateKeypair() !KeyPair {
-        // Generate using real Ed25519 from Zig's std.crypto
-        const key_pair = crypto.sign.Ed25519.KeyPair.generate();
-        
+        // Generate random seed and use deterministic key generation
+        var seed: [32]u8 = undefined;
+        rand.fill(&seed);
+        const key_pair = crypto.sign.Ed25519.KeyPair.generateDeterministic(seed) catch {
+            return error.KeyGenerationFailed;
+        };
+
         return KeyPair{
             .public_key = key_pair.public_key.bytes,
             .private_key = key_pair.secret_key.bytes,
@@ -263,7 +268,7 @@ pub const Ed448 = struct {
             .private_key = undefined,
         };
 
-        crypto.random.bytes(&keypair.private_key);
+        rand.fill(&keypair.private_key);
         keypair.public_key = try derivePublicKey(keypair.private_key);
 
         return keypair;

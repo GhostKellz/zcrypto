@@ -3,6 +3,7 @@
 //! Provides quantum-resistant key exchange and digital signatures
 
 const std = @import("std");
+const rand = @import("rand.zig");
 const crypto = std.crypto;
 const testing = std.testing;
 
@@ -44,8 +45,8 @@ pub const ML_KEM_512 = struct {
 
         // For now, this is a stub implementation
         // Real implementation would use NIST ML-KEM algorithm
-        crypto.random.bytes(&keypair.public_key);
-        crypto.random.bytes(&keypair.private_key);
+        rand.fill(&keypair.public_key);
+        rand.fill(&keypair.private_key);
 
         return keypair;
     }
@@ -58,8 +59,8 @@ pub const ML_KEM_512 = struct {
         };
 
         // Stub implementation - would use proper ML-KEM encapsulation
-        crypto.random.bytes(&result.ciphertext);
-        crypto.random.bytes(&result.shared_secret);
+        rand.fill(&result.ciphertext);
+        rand.fill(&result.shared_secret);
 
         // In real implementation, shared secret would be derived from public key
         _ = public_key;
@@ -104,8 +105,8 @@ pub const ML_KEM_768 = struct {
             .private_key = undefined,
         };
 
-        crypto.random.bytes(&keypair.public_key);
-        crypto.random.bytes(&keypair.private_key);
+        rand.fill(&keypair.public_key);
+        rand.fill(&keypair.private_key);
 
         return keypair;
     }
@@ -116,8 +117,8 @@ pub const ML_KEM_768 = struct {
             .shared_secret = undefined,
         };
 
-        crypto.random.bytes(&result.ciphertext);
-        crypto.random.bytes(&result.shared_secret);
+        rand.fill(&result.ciphertext);
+        rand.fill(&result.shared_secret);
         _ = public_key;
 
         return result;
@@ -158,8 +159,8 @@ pub const ML_KEM_1024 = struct {
             .private_key = undefined,
         };
 
-        crypto.random.bytes(&keypair.public_key);
-        crypto.random.bytes(&keypair.private_key);
+        rand.fill(&keypair.public_key);
+        rand.fill(&keypair.private_key);
 
         return keypair;
     }
@@ -170,8 +171,8 @@ pub const ML_KEM_1024 = struct {
             .shared_secret = undefined,
         };
 
-        crypto.random.bytes(&result.ciphertext);
-        crypto.random.bytes(&result.shared_secret);
+        rand.fill(&result.ciphertext);
+        rand.fill(&result.shared_secret);
         _ = public_key;
 
         return result;
@@ -206,8 +207,8 @@ pub const ML_DSA_44 = struct {
             .private_key = undefined,
         };
 
-        crypto.random.bytes(&keypair.public_key);
-        crypto.random.bytes(&keypair.private_key);
+        rand.fill(&keypair.public_key);
+        rand.fill(&keypair.private_key);
 
         return keypair;
     }
@@ -264,8 +265,8 @@ pub const ML_DSA_65 = struct {
             .private_key = undefined,
         };
 
-        crypto.random.bytes(&keypair.public_key);
-        crypto.random.bytes(&keypair.private_key);
+        rand.fill(&keypair.public_key);
+        rand.fill(&keypair.private_key);
 
         return keypair;
     }
@@ -318,8 +319,8 @@ pub const ML_DSA_87 = struct {
             .private_key = undefined,
         };
 
-        crypto.random.bytes(&keypair.public_key);
-        crypto.random.bytes(&keypair.private_key);
+        rand.fill(&keypair.public_key);
+        rand.fill(&keypair.private_key);
 
         return keypair;
     }
@@ -392,8 +393,8 @@ pub const HybridKeyExchange = struct {
         };
 
         // Generate X25519 keypair (stub - would use proper X25519)
-        crypto.random.bytes(&keypair.classical.private_key);
-        crypto.random.bytes(&keypair.classical.public_key);
+        rand.fill(&keypair.classical.private_key);
+        rand.fill(&keypair.classical.public_key);
 
         // Generate ML-KEM-768 keypair
         const pq_keypair = try ML_KEM_768.generateKeypair();
@@ -468,8 +469,8 @@ pub const HybridSignature = struct {
         };
 
         // Generate Ed25519 keypair (stub)
-        crypto.random.bytes(&keypair.classical.private_key);
-        crypto.random.bytes(&keypair.classical.public_key);
+        rand.fill(&keypair.classical.private_key);
+        rand.fill(&keypair.classical.public_key);
 
         // Generate ML-DSA-65 keypair
         const pq_keypair = try ML_DSA_65.generateKeypair();

@@ -4,10 +4,44 @@
 //! All functions use secure sources and are suitable for cryptographic use.
 
 const std = @import("std");
+const builtin = @import("builtin");
+
+/// Fill a buffer with secure random bytes using OS entropy
+fn osRandom(buf: []u8) void {
+    switch (builtin.os.tag) {
+        .linux => {
+            var filled: usize = 0;
+            while (filled < buf.len) {
+                const rc = std.os.linux.getrandom(buf.ptr + filled, buf.len - filled, 0);
+                if (std.os.linux.errno(rc) == .SUCCESS) {
+                    filled += rc;
+                }
+            }
+        },
+        .macos, .ios, .tvos, .watchos => {
+            // Use arc4random_buf on Darwin
+            std.c.arc4random_buf(buf.ptr, buf.len);
+        },
+        .windows => {
+            // Use RtlGenRandom on Windows
+            _ = std.os.windows.ntdll.RtlGenRandom(buf.ptr, @intCast(buf.len));
+        },
+        else => {
+            // Fallback: read from /dev/urandom
+            const fd = std.posix.open("/dev/urandom", .{ .ACCMODE = .RDONLY }, 0) catch unreachable;
+            defer std.posix.close(fd);
+            var filled: usize = 0;
+            while (filled < buf.len) {
+                const n = std.posix.read(fd, buf[filled..]) catch unreachable;
+                filled += n;
+            }
+        },
+    }
+}
 
 /// Fill a buffer with secure random bytes (matches documentation API)
 pub fn fillBytes(buf: []u8) void {
-    std.crypto.random.bytes(buf);
+    osRandom(buf);
 }
 
 /// Fill a buffer with secure random bytes (legacy name)
@@ -24,22 +58,28 @@ pub fn randomBytes(allocator: std.mem.Allocator, n: usize) ![]u8 {
 
 /// Generate a random u32
 pub fn randomU32() u32 {
-    return std.crypto.random.int(u32);
+    var buf: [4]u8 = undefined;
+    osRandom(&buf);
+    return std.mem.readInt(u32, &buf, .little);
 }
 
 /// Generate a random u64
 pub fn randomU64() u64 {
-    return std.crypto.random.int(u64);
+    var buf: [8]u8 = undefined;
+    osRandom(&buf);
+    return std.mem.readInt(u64, &buf, .little);
 }
 
 /// Generate a random integer in range [0, max)
 pub fn randomRange(comptime T: type, max: T) T {
-    return std.crypto.random.intRangeLessThan(T, 0, max);
+    const val = randomU64();
+    return @intCast(val % @as(u64, @intCast(max)));
 }
 
 /// Generate a random integer in range [min, max]
 pub fn randomRangeInclusive(comptime T: type, min: T, max: T) T {
-    return std.crypto.random.intRangeLessThan(T, min, max + 1);
+    const range = max - min + 1;
+    return min + randomRange(T, range);
 }
 
 /// Generate random bytes for a fixed-size array
@@ -56,7 +96,8 @@ pub fn randomBool() bool {
 
 /// Generate a random float in range [0.0, 1.0)
 pub fn randomFloat(comptime T: type) T {
-    return std.crypto.random.float(T);
+    const val = randomU64();
+    return @as(T, @floatFromInt(val)) / @as(T, @floatFromInt(std.math.maxInt(u64)));
 }
 
 /// Generate a cryptographically secure nonce

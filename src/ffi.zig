@@ -11,6 +11,7 @@
 //! Full post-quantum cryptography and zero-knowledge proof support.
 
 const std = @import("std");
+const rand = @import("rand.zig");
 const zcrypto = @import("root.zig");
 const pq = @import("pq.zig");
 const quic = @import("quic.zig");
@@ -169,7 +170,7 @@ pub export fn zcrypto_ml_kem_768_keygen(public_key: [*]u8, private_key: [*]u8) c
 pub export fn zcrypto_ml_kem_768_encaps(public_key: [*]const u8, ciphertext: [*]u8, shared_secret: [*]u8) callconv(.c) CryptoResult {
     const pub_key: [pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE]u8 = public_key[0..pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE].*;
     var randomness: [32]u8 = undefined;
-    std.crypto.random.bytes(&randomness);
+    rand.fill(&randomness);
 
     const result = pq.ml_kem.ML_KEM_768.KeyPair.encapsulate(pub_key, randomness) catch {
         return CryptoResult.failure(FFI_ERROR_POST_QUANTUM_FAILED);
@@ -231,7 +232,7 @@ pub export fn zcrypto_ml_dsa_65_sign(private_key: [*]const u8, message: [*]const
     const message_slice = message[0..message_len];
 
     var randomness: [32]u8 = undefined;
-    std.crypto.random.bytes(&randomness);
+    rand.fill(&randomness);
 
     const keypair = pq.ml_dsa.ML_DSA_65.KeyPair{
         .public_key = pub_key_placeholder,

@@ -6,6 +6,7 @@
 //! the Module Learning With Errors (MLWE) problem over module lattices.
 
 const std = @import("std");
+const rand = @import("../rand.zig");
 const pq = @import("../pq.zig");
 
 /// ML-KEM parameters and constants
@@ -282,7 +283,7 @@ pub const ML_KEM_768 = struct {
         /// Generate key pair using system randomness
         pub fn generateRandom() pq.PQError!KeyPair {
             var seed: [SEED_SIZE]u8 = undefined;
-            std.crypto.random.bytes(&seed);
+            rand.fill(&seed);
             return generate(seed);
         }
 
