@@ -314,7 +314,7 @@ pub const TlsClient = struct {
     }
 
     fn sendClientHello(self: *TlsClient) !void {
-        var buffer: std.ArrayList(u8) = .{};
+        var buffer: std.ArrayList(u8) = .empty;
         defer buffer.deinit(self.allocator);
 
         // Generate client key share for X25519
@@ -340,7 +340,7 @@ pub const TlsClient = struct {
         try writeU8(&buffer, self.allocator, 0);
 
         // Extensions
-        var extensions: std.ArrayList(u8) = .{};
+        var extensions: std.ArrayList(u8) = .empty;
         defer extensions.deinit(self.allocator);
 
         // Supported versions extension
@@ -709,7 +709,7 @@ pub const TlsClient = struct {
     }
 
     fn writeALPNExtension(self: *TlsClient, buffer: *std.ArrayList(u8), protocols: [][]const u8) !void {
-        var proto_list: std.ArrayList(u8) = .{};
+        var proto_list: std.ArrayList(u8) = .empty;
         defer proto_list.deinit(self.allocator);
 
         for (protocols) |proto| {
@@ -750,19 +750,19 @@ pub const TlsClient = struct {
     };
 
     fn writeRecord(self: *TlsClient, record_type: RecordType, data: []const u8) !void {
-        var buffer: std.ArrayList(u8) = .{};
-        defer buffer.deinit(self.allocator);
-
-        // Record header
-        try buffer.writer().writeByte(@intFromEnum(record_type));
-        try buffer.writer().writeInt(u16, 0x0303, .big); // Legacy version
-        try buffer.writer().writeInt(u16, @intCast(data.len), .big);
-        try buffer.writer().writeAll(data);
+        // Build record header directly
+        var header: [5]u8 = undefined;
+        header[0] = @intFromEnum(record_type);
+        header[1] = 0x03; // Legacy version high byte
+        header[2] = 0x03; // Legacy version low byte
+        header[3] = @intCast((data.len >> 8) & 0xFF);
+        header[4] = @intCast(data.len & 0xFF);
 
         // Write using new Io API
         var write_buf: [8192]u8 = undefined;
         var w = self.stream.writer(self.io, &write_buf);
-        try w.interface.writeAll(buffer.items);
+        try w.interface.writeAll(&header);
+        try w.interface.writeAll(data);
         try w.interface.flush();
     }
 
@@ -789,14 +789,20 @@ pub const TlsClient = struct {
     }
 
     fn writeHandshakeMessage(self: *TlsClient, msg_type: HandshakeType, data: []const u8) !void {
-        var buffer: std.ArrayList(u8) = .{};
-        defer buffer.deinit(self.allocator);
+        // Build handshake header: 1 byte type + 3 bytes length (u24 big endian)
+        var header: [4]u8 = undefined;
+        header[0] = @intFromEnum(msg_type);
+        header[1] = @intCast((data.len >> 16) & 0xFF);
+        header[2] = @intCast((data.len >> 8) & 0xFF);
+        header[3] = @intCast(data.len & 0xFF);
 
-        try buffer.writer().writeByte(@intFromEnum(msg_type));
-        try buffer.writer().writeInt(u24, @intCast(data.len), .big);
-        try buffer.writer().writeAll(data);
+        // Combine header and data for writeRecord
+        const full_msg = try self.allocator.alloc(u8, 4 + data.len);
+        defer self.allocator.free(full_msg);
+        @memcpy(full_msg[0..4], &header);
+        @memcpy(full_msg[4..], data);
 
-        try self.writeRecord(.handshake, buffer.items);
+        try self.writeRecord(.handshake, full_msg);
     }
 
     fn readHandshakeMessage(self: *TlsClient) !HandshakeMessage {

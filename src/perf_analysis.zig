@@ -136,7 +136,7 @@ pub const StatisticalAnalyzer = struct {
     /// Detect performance anomalies
     pub fn detectAnomalies(self: *StatisticalAnalyzer, threshold_std_devs: f64) ![]u64 {
         const stats = try self.analyze();
-        var anomalies: std.ArrayList(u64) = .{};
+        var anomalies: std.ArrayList(u64) = .empty;
 
         const lower_bound = stats.mean - (threshold_std_devs * stats.std_deviation);
         const upper_bound = stats.mean + (threshold_std_devs * stats.std_deviation);
@@ -193,7 +193,7 @@ pub const MemoryLeakDetector = struct {
     pub fn init(allocator: std.mem.Allocator) MemoryLeakDetector {
         return MemoryLeakDetector{
             .allocations = std.HashMap(usize, AllocationRecord, std.hash_map.AutoContext(usize), 80).init(allocator),
-            .allocation_timeline = .{},
+            .allocation_timeline = .empty,
             .total_allocated = 0,
             .total_freed = 0,
             .peak_usage = 0,
@@ -256,7 +256,7 @@ pub const MemoryLeakDetector = struct {
 
     /// Generate comprehensive leak report
     pub fn generateLeakReport(self: *MemoryLeakDetector) !LeakReport {
-        var leak_details: std.ArrayList(LeakDetail) = .{};
+        var leak_details: std.ArrayList(LeakDetail) = .empty;
         var total_leaked: u64 = 0;
 
         var iterator = self.allocations.iterator();

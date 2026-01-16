@@ -271,7 +271,7 @@ pub const KeyManager = struct {
         
         // Store key
         try self.keys.put(key_id, key_entry);
-        
+
         // Set as active key for this type
         try self.active_keys.put(key_type, key_id);
         
@@ -339,7 +339,7 @@ pub const KeyManager = struct {
         const ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
         const current_time = @as(u64, @intCast(ts.sec));
         
-        var keys_to_remove = std.ArrayList([16]u8).init();
+        var keys_to_remove: std.ArrayList([16]u8) = .empty;
         defer keys_to_remove.deinit(self.allocator);
         
         // Find expired keys

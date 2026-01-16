@@ -134,7 +134,7 @@ pub const KBucket = struct {
     /// Initialize k-bucket
     pub fn init(allocator: std.mem.Allocator) KBucket {
         return KBucket{
-            .entries = .{},
+            .entries = .empty,
             .allocator = allocator,
         };
     }
@@ -276,7 +276,7 @@ pub const RoutingTable = struct {
     
     /// Find closest nodes to target
     pub fn findClosestNodes(self: *RoutingTable, target: NodeId, count: usize, allocator: std.mem.Allocator) ![]DHTNode {
-        var all_nodes: std.ArrayList(DHTNode) = .{};
+        var all_nodes: std.ArrayList(DHTNode) = .empty;
         defer all_nodes.deinit(allocator);
         
         // Collect nodes from all buckets
@@ -345,7 +345,7 @@ pub const DHTLookup = struct {
     pub fn init(allocator: std.mem.Allocator, target: NodeId) DHTLookup {
         return DHTLookup{
             .target = target,
-            .closest_nodes = .{},
+            .closest_nodes = .empty,
             .queried_nodes = std.HashMap(NodeId, void, std.hash_map.AutoContext(NodeId), std.hash_map.default_max_load_percentage).init(allocator),
             .allocator = allocator,
         };

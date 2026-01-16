@@ -127,7 +127,7 @@ pub const MerkleTree = struct {
             return MerkleError.InvalidLeafIndex;
         }
 
-        var proof: std.ArrayList(Hash) = .{};
+        var proof: std.ArrayList(Hash) = .empty;
         errdefer proof.deinit(self.allocator);
 
         // Build proof by walking up the tree
