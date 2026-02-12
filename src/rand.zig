@@ -211,12 +211,12 @@ test "documentation api compatibility" {
     // Test fillBytes API
     var buf: [32]u8 = undefined;
     fillBytes(&buf);
-    
+
     // Test generateKey API
     const key = generateKey(32);
     try std.testing.expectEqual(@as(usize, 32), key.len);
-    
-    // Test generateSalt API  
+
+    // Test generateSalt API
     const test_salt = generateSalt(16);
     try std.testing.expectEqual(@as(usize, 16), test_salt.len);
 }

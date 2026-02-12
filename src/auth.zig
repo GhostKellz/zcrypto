@@ -83,13 +83,13 @@ pub const HmacSha512 = struct {
 test "hmac sha256 clean api" {
     const key = "secret-key-for-testing";
     const message = "Hello, authentication!";
-    
+
     const tag = hmac.sha256(message, key);
-    
+
     // Verify the tag
     const is_valid = verifyHmacSha256(message, key, tag);
     try std.testing.expect(is_valid);
-    
+
     // Test with wrong key
     const wrong_key = "wrong-key-for-testing";
     const is_invalid = verifyHmacSha256(message, wrong_key, tag);
@@ -99,32 +99,32 @@ test "hmac sha256 clean api" {
 test "hmac sha512 clean api" {
     const key = "another-secret-key";
     const message = "SHA-512 HMAC test";
-    
+
     const tag = hmac.sha512(message, key);
     const is_valid = verifyHmacSha512(message, key, tag);
-    
+
     try std.testing.expect(is_valid);
 }
 
 test "hmac blake2s clean api" {
     const key = "blake2s-secret-key";
     const message = "Blake2s HMAC test";
-    
+
     const tag = hmac.blake2s(message, key);
     const is_valid = verifyHmacBlake2s(message, key, tag);
-    
+
     try std.testing.expect(is_valid);
 }
 
 test "streaming hmac sha256" {
     const key = "streaming-test-key";
-    
+
     var hasher = HmacSha256.init(key);
     hasher.update("Hello, ");
     hasher.update("streaming ");
     hasher.update("HMAC!");
     const result = hasher.final();
-    
+
     // Compare with one-shot HMAC
     const expected = hmac.sha256("Hello, streaming HMAC!", key);
     try std.testing.expectEqualSlices(u8, &expected, &result);
@@ -132,13 +132,13 @@ test "streaming hmac sha256" {
 
 test "streaming hmac sha512" {
     const key = "sha512-streaming-key";
-    
+
     var hasher = HmacSha512.init(key);
     hasher.update("Streaming ");
     hasher.update("SHA-512 ");
     hasher.update("HMAC test");
     const result = hasher.final();
-    
+
     const expected = hmac.sha512("Streaming SHA-512 HMAC test", key);
     try std.testing.expectEqualSlices(u8, &expected, &result);
 }

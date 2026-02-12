@@ -228,17 +228,17 @@ pub fn encryptAesGcm(
     // Generate random nonce
     var nonce: [GCM_NONCE_SIZE]u8 = undefined;
     rand.fill(&nonce);
-    
+
     // Encrypt
     const result = try encryptAes256Gcm(allocator, key.*, nonce, plaintext, "");
     defer result.deinit();
-    
+
     // Format: nonce (12) + tag (16) + ciphertext
     const output = try allocator.alloc(u8, GCM_NONCE_SIZE + GCM_TAG_SIZE + result.data.len);
     @memcpy(output[0..GCM_NONCE_SIZE], &nonce);
-    @memcpy(output[GCM_NONCE_SIZE..GCM_NONCE_SIZE + GCM_TAG_SIZE], &result.tag);
-    @memcpy(output[GCM_NONCE_SIZE + GCM_TAG_SIZE..], result.data);
-    
+    @memcpy(output[GCM_NONCE_SIZE .. GCM_NONCE_SIZE + GCM_TAG_SIZE], &result.tag);
+    @memcpy(output[GCM_NONCE_SIZE + GCM_TAG_SIZE ..], result.data);
+
     return output;
 }
 
@@ -251,22 +251,22 @@ pub fn decryptAesGcm(
     if (ciphertext_with_nonce.len < GCM_NONCE_SIZE + GCM_TAG_SIZE) {
         return SymError.AuthenticationFailed;
     }
-    
+
     // Extract components
     const nonce = ciphertext_with_nonce[0..GCM_NONCE_SIZE];
-    const tag = ciphertext_with_nonce[GCM_NONCE_SIZE..GCM_NONCE_SIZE + GCM_TAG_SIZE];
-    const ciphertext = ciphertext_with_nonce[GCM_NONCE_SIZE + GCM_TAG_SIZE..];
-    
+    const tag = ciphertext_with_nonce[GCM_NONCE_SIZE .. GCM_NONCE_SIZE + GCM_TAG_SIZE];
+    const ciphertext = ciphertext_with_nonce[GCM_NONCE_SIZE + GCM_TAG_SIZE ..];
+
     var nonce_array: [GCM_NONCE_SIZE]u8 = undefined;
     var tag_array: [GCM_TAG_SIZE]u8 = undefined;
     @memcpy(&nonce_array, nonce);
     @memcpy(&tag_array, tag);
-    
+
     // Decrypt
     const plaintext = decryptAes256Gcm(allocator, key.*, nonce_array, ciphertext, tag_array, "") catch |err| switch (err) {
         error.OutOfMemory => return SymError.OutOfMemory,
     };
-    
+
     return plaintext orelse SymError.AuthenticationFailed;
 }
 
@@ -279,17 +279,17 @@ pub fn encryptChaCha20(
     // Generate random nonce
     var nonce: [CHACHA20_NONCE_SIZE]u8 = undefined;
     rand.fill(&nonce);
-    
+
     // Encrypt using the original function
     const result = try encryptChaCha20Poly1305(allocator, key.*, nonce, plaintext, "");
     defer result.deinit();
-    
+
     // Format: nonce (12) + tag (16) + ciphertext
     const output = try allocator.alloc(u8, CHACHA20_NONCE_SIZE + POLY1305_TAG_SIZE + result.data.len);
     @memcpy(output[0..CHACHA20_NONCE_SIZE], &nonce);
-    @memcpy(output[CHACHA20_NONCE_SIZE..CHACHA20_NONCE_SIZE + POLY1305_TAG_SIZE], &result.tag);
-    @memcpy(output[CHACHA20_NONCE_SIZE + POLY1305_TAG_SIZE..], result.data);
-    
+    @memcpy(output[CHACHA20_NONCE_SIZE .. CHACHA20_NONCE_SIZE + POLY1305_TAG_SIZE], &result.tag);
+    @memcpy(output[CHACHA20_NONCE_SIZE + POLY1305_TAG_SIZE ..], result.data);
+
     return output;
 }
 
@@ -302,22 +302,22 @@ pub fn decryptChaCha20(
     if (ciphertext_with_nonce.len < CHACHA20_NONCE_SIZE + POLY1305_TAG_SIZE) {
         return SymError.AuthenticationFailed;
     }
-    
+
     // Extract components
     const nonce = ciphertext_with_nonce[0..CHACHA20_NONCE_SIZE];
-    const tag = ciphertext_with_nonce[CHACHA20_NONCE_SIZE..CHACHA20_NONCE_SIZE + POLY1305_TAG_SIZE];
-    const ciphertext = ciphertext_with_nonce[CHACHA20_NONCE_SIZE + POLY1305_TAG_SIZE..];
-    
+    const tag = ciphertext_with_nonce[CHACHA20_NONCE_SIZE .. CHACHA20_NONCE_SIZE + POLY1305_TAG_SIZE];
+    const ciphertext = ciphertext_with_nonce[CHACHA20_NONCE_SIZE + POLY1305_TAG_SIZE ..];
+
     var nonce_array: [CHACHA20_NONCE_SIZE]u8 = undefined;
     var tag_array: [POLY1305_TAG_SIZE]u8 = undefined;
     @memcpy(&nonce_array, nonce);
     @memcpy(&tag_array, tag);
-    
+
     // Decrypt using the original function
     const plaintext = decryptChaCha20Poly1305(allocator, key.*, nonce_array, ciphertext, tag_array, "") catch |err| switch (err) {
         error.OutOfMemory => return SymError.OutOfMemory,
     };
-    
+
     return plaintext orelse SymError.AuthenticationFailed;
 }
 
@@ -363,41 +363,41 @@ test "chacha20-poly1305 round trip" {
 
 test "simplified aes gcm api" {
     const allocator = std.testing.allocator;
-    
+
     const key = [_]u8{0xAB} ** AES_256_KEY_SIZE;
     const plaintext = "Hello, simplified crypto!";
-    
+
     // Encrypt (auto-generates nonce)
     const ciphertext = try encryptAesGcm(allocator, plaintext, &key);
     defer allocator.free(ciphertext);
-    
+
     // Should be longer than plaintext (nonce + tag + data)
     try std.testing.expect(ciphertext.len > plaintext.len);
-    
+
     // Decrypt
     const decrypted = try decryptAesGcm(allocator, ciphertext, &key);
     defer allocator.free(decrypted);
-    
+
     try std.testing.expectEqualSlices(u8, plaintext, decrypted);
 }
 
 test "simplified chacha20 api" {
     const allocator = std.testing.allocator;
-    
+
     const key = [_]u8{0xCD} ** CHACHA20_KEY_SIZE;
     const plaintext = "ChaCha20 simplified!";
-    
+
     // Encrypt (auto-generates nonce)
     const ciphertext = try encryptChaCha20(allocator, plaintext, &key);
     defer allocator.free(ciphertext);
-    
+
     // Should be longer than plaintext (nonce + tag + data)
     try std.testing.expect(ciphertext.len > plaintext.len);
-    
+
     // Decrypt
     const decrypted = try decryptChaCha20(allocator, ciphertext, &key);
     defer allocator.free(decrypted);
-    
+
     try std.testing.expectEqualSlices(u8, plaintext, decrypted);
 }
 
@@ -406,7 +406,7 @@ test "simplified chacha20 api" {
 // =============================================================================
 
 /// Async convenience functions that use the async_crypto module
-/// Import async_crypto to use these functions in async contexts  
+/// Import async_crypto to use these functions in async contexts
 pub const Async = struct {
     /// Get async symmetric crypto handler
     /// Usage: const async_sym = zcrypto.sym.Async.init(allocator, runtime);
@@ -421,7 +421,7 @@ pub const Async = struct {
         return async_sym.aes256GcmEncryptAsync(key, nonce, plaintext, aad);
     }
 
-    /// Async AES-128-GCM encryption  
+    /// Async AES-128-GCM encryption
     /// Returns Task that can be awaited for encrypted result
     pub fn encryptAes128GcmAsync(allocator: std.mem.Allocator, runtime: anytype, key: [AES_128_KEY_SIZE]u8, nonce: [GCM_NONCE_SIZE]u8, plaintext: []const u8, aad: []const u8) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
         const async_sym = init(allocator, runtime) catch unreachable;
@@ -431,7 +431,7 @@ pub const Async = struct {
     }
 
     /// Async ChaCha20-Poly1305 encryption
-    /// Returns Task that can be awaited for encrypted result  
+    /// Returns Task that can be awaited for encrypted result
     pub fn encryptChaCha20Poly1305Async(allocator: std.mem.Allocator, runtime: anytype, key: [CHACHA20_KEY_SIZE]u8, nonce: [CHACHA20_NONCE_SIZE]u8, plaintext: []const u8, aad: []const u8) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
         const async_sym = init(allocator, runtime) catch unreachable;
         return async_sym.chacha20Poly1305EncryptAsync(key, nonce, plaintext, aad);

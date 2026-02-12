@@ -280,22 +280,22 @@ test "argon2id password hashing" {
 
     const password = "secure-password-123";
     const salt = "random-salt-16-bytes"; // Should be 16+ bytes
-    
+
     const key = try argon2id(allocator, password, salt, 32);
     defer allocator.free(key);
-    
+
     try std.testing.expectEqual(@as(usize, 32), key.len);
-    
+
     // Same input should produce same output
     const key2 = try argon2id(allocator, password, salt, 32);
     defer allocator.free(key2);
-    
+
     try std.testing.expectEqualSlices(u8, key, key2);
-    
+
     // Different salt should produce different output
     const different_salt = "different-salt-16b";
     const key3 = try argon2id(allocator, password, different_salt, 32);
     defer allocator.free(key3);
-    
+
     try std.testing.expect(!std.mem.eql(u8, key, key3));
 }

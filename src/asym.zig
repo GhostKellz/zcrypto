@@ -177,15 +177,15 @@ pub const SECP256K1_PRIVATE_KEY_SIZE = 32;
 pub const SECP256K1_PUBLIC_KEY_SIZE = 33; // Compressed
 pub const SECP256K1_SIGNATURE_SIZE = 64;
 
-/// secp256r1 constants (NIST P-256)  
+/// secp256r1 constants (NIST P-256)
 pub const SECP256R1_PRIVATE_KEY_SIZE = 32;
 pub const SECP256R1_PUBLIC_KEY_SIZE = 33; // Compressed
 pub const SECP256R1_SIGNATURE_SIZE = 64;
 
 /// secp256k1 keypair for Bitcoin/Ethereum compatibility
 pub const Secp256k1KeyPair = struct {
-    public_key_compressed: [SECP256K1_PUBLIC_KEY_SIZE]u8,  // Full 33-byte compressed key
-    public_key_x: [32]u8,                                  // X-coordinate only (for consistency)
+    public_key_compressed: [SECP256K1_PUBLIC_KEY_SIZE]u8, // Full 33-byte compressed key
+    public_key_x: [32]u8, // X-coordinate only (for consistency)
     private_key: [SECP256K1_PRIVATE_KEY_SIZE]u8,
 
     /// Get public key in desired format
@@ -244,14 +244,14 @@ pub fn generateSecp256k1() Secp256k1KeyPair {
         return generateSecp256k1();
     };
     const compressed_temp = kp.public_key.toCompressedSec1();
-    
+
     // Copy the compressed key to ensure it's not a temporary reference
     var public_key_compressed: [SECP256K1_PUBLIC_KEY_SIZE]u8 = undefined;
     @memcpy(&public_key_compressed, &compressed_temp);
-    
+
     var public_key_x: [32]u8 = undefined;
     @memcpy(&public_key_x, compressed_temp[1..33]);
-    
+
     return Secp256k1KeyPair{
         .public_key_compressed = public_key_compressed,
         .public_key_x = public_key_x,
@@ -299,7 +299,7 @@ pub fn signSecp256r1(message: [32]u8, private_key: [SECP256R1_PRIVATE_KEY_SIZE]u
     return sig.toBytes();
 }
 
-/// Verify secp256r1 signature  
+/// Verify secp256r1 signature
 pub fn verifySecp256r1(message: [32]u8, signature: [SECP256R1_SIGNATURE_SIZE]u8, public_key: [SECP256R1_PUBLIC_KEY_SIZE]u8) bool {
     const pub_key = std.crypto.sign.ecdsa.EcdsaP256Sha256.PublicKey.fromSec1(&public_key) catch return false;
     const sig = std.crypto.sign.ecdsa.EcdsaP256Sha256.Signature.fromBytes(signature);
@@ -417,12 +417,12 @@ pub const Ed25519VerifyData = struct {
 test "ed25519 keypair generation and signing" {
     const keypair = generateEd25519();
     const message = "Hello, zcrypto signatures!";
-    
+
     const signature = try keypair.sign(message);
     const valid = keypair.verify(message, signature);
-    
+
     try std.testing.expect(valid);
-    
+
     // Test with wrong message
     const wrong_message = "Wrong message";
     const invalid = keypair.verify(wrong_message, signature);
@@ -432,29 +432,29 @@ test "ed25519 keypair generation and signing" {
 test "ed25519 standalone functions" {
     const keypair = ed25519.generate();
     const message = "Standalone API test";
-    
+
     const signature = try ed25519.sign(message, keypair.private_key);
     const valid = ed25519.verify(message, signature, keypair.public_key);
-    
+
     try std.testing.expect(valid);
 }
 
 test "ed25519 deterministic generation from seed" {
     const seed = [_]u8{42} ** 32;
-    
+
     // Generate two keypairs from the same seed
     const keypair1 = ed25519.generateFromSeed(seed);
     const keypair2 = ed25519.generateFromSeed(seed);
-    
+
     // Should be identical
     try std.testing.expectEqualSlices(u8, &keypair1.public_key, &keypair2.public_key);
     try std.testing.expectEqualSlices(u8, &keypair1.private_key, &keypair2.private_key);
-    
+
     // Test signing with generated key
     const message = "Deterministic test message";
     const signature = try keypair1.sign(message);
     const valid = keypair1.verify(message, signature);
-    
+
     try std.testing.expect(valid);
 }
 
@@ -480,12 +480,12 @@ test "x25519 public key derivation" {
 test "secp256k1 keypair generation and signing" {
     const keypair = secp256k1.generate();
     const message = [_]u8{0xAB} ** 32; // Hash of message
-    
+
     const signature = try keypair.sign(message);
     const valid = keypair.verify(message, signature);
-    
+
     try std.testing.expect(valid);
-    
+
     // Test with different message
     const wrong_message = [_]u8{0xCD} ** 32;
     const invalid = keypair.verify(wrong_message, signature);
@@ -495,12 +495,12 @@ test "secp256k1 keypair generation and signing" {
 test "secp256r1 keypair generation and signing" {
     const keypair = secp256r1.generate();
     const message = [_]u8{0xEF} ** 32; // Hash of message
-    
+
     const signature = try keypair.sign(message);
     const valid = keypair.verify(message, signature);
-    
+
     try std.testing.expect(valid);
-    
+
     // Test with different message
     const wrong_message = [_]u8{0x12} ** 32;
     const invalid = keypair.verify(wrong_message, signature);
@@ -510,23 +510,23 @@ test "secp256r1 keypair generation and signing" {
 test "secp256k1 standalone functions" {
     const keypair = secp256k1.generate();
     const message = [_]u8{0x34} ** 32;
-    
+
     const signature = try secp256k1.sign(message, keypair.private_key);
     const valid = secp256k1.verify(message, signature, keypair.public_key_compressed);
-    
+
     try std.testing.expect(valid);
 }
 
 test "secp256k1 dual public key formats" {
     const keypair = secp256k1.generate();
-    
+
     // Test both public key formats exist and have correct lengths
     const compressed = keypair.publicKey(.compressed);
     const x_only = keypair.publicKey(.x_only);
-    
+
     try std.testing.expectEqual(@as(usize, 33), compressed.len);
     try std.testing.expectEqual(@as(usize, 32), x_only.len);
-    
+
     // Test that the keypair fields are properly initialized (non-zero)
     var compressed_all_zero = true;
     for (keypair.public_key_compressed) |byte| {
@@ -536,7 +536,7 @@ test "secp256k1 dual public key formats" {
         }
     }
     try std.testing.expect(!compressed_all_zero);
-    
+
     var x_only_all_zero = true;
     for (keypair.public_key_x) |byte| {
         if (byte != 0) {
@@ -550,9 +550,9 @@ test "secp256k1 dual public key formats" {
 test "secp256r1 standalone functions" {
     const keypair = secp256r1.generate();
     const message = [_]u8{0x56} ** 32;
-    
+
     const signature = try secp256r1.sign(message, keypair.private_key);
     const valid = secp256r1.verify(message, signature, keypair.public_key);
-    
+
     try std.testing.expect(valid);
 }

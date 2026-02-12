@@ -672,7 +672,7 @@ pub const STARKs = struct {
         _ = path;
         _ = root;
         _ = index;
-        
+
         // For mock implementation, always return true for testing purposes
         return true;
     }
@@ -682,7 +682,7 @@ pub const STARKs = struct {
         if (proof.commitments.len == 0 or proof.final_polynomial.len == 0) {
             return false;
         }
-        
+
         // For mock implementation, always return true if structure is valid
         return true;
     }

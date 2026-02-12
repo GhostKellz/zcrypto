@@ -164,14 +164,14 @@ pub const ErrorContext = struct {
     message: ?[]const u8 = null,
     /// File and line information (optional)
     location: ?SourceLocation = null,
-    
+
     /// Source location information
     pub const SourceLocation = struct {
         file: []const u8,
         line: u32,
         column: u32,
     };
-    
+
     /// Create error context
     pub fn init(err: ZCryptoError, module: []const u8, function: []const u8) ErrorContext {
         return ErrorContext{
@@ -180,7 +180,7 @@ pub const ErrorContext = struct {
             .function = function,
         };
     }
-    
+
     /// Create error context with message
     pub fn withMessage(err: ZCryptoError, module: []const u8, function: []const u8, message: []const u8) ErrorContext {
         return ErrorContext{
@@ -190,7 +190,7 @@ pub const ErrorContext = struct {
             .message = message,
         };
     }
-    
+
     /// Create error context with location
     pub fn withLocation(err: ZCryptoError, module: []const u8, function: []const u8, file: []const u8, line: u32, column: u32) ErrorContext {
         return ErrorContext{
@@ -204,31 +204,25 @@ pub const ErrorContext = struct {
             },
         };
     }
-    
+
     /// Format error for logging
     pub fn format(self: ErrorContext, allocator: std.mem.Allocator) ![]u8 {
         var buffer: [1024]u8 = undefined;
-        
-        const message = if (self.location) |loc| 
-            try std.fmt.bufPrint(&buffer, "ZCrypto Error: {} in {s}:{s} - {s} ({s}:{}:{})", .{ 
-                self.err, self.module, self.function, self.message.?, loc.file, loc.line, loc.column 
-            })
+
+        const message = if (self.location) |loc|
+            try std.fmt.bufPrint(&buffer, "ZCrypto Error: {} in {s}:{s} - {s} ({s}:{}:{})", .{ self.err, self.module, self.function, self.message.?, loc.file, loc.line, loc.column })
         else if (self.message) |msg|
-            try std.fmt.bufPrint(&buffer, "ZCrypto Error: {} in {s}:{s} - {s}", .{ 
-                self.err, self.module, self.function, msg 
-            })
+            try std.fmt.bufPrint(&buffer, "ZCrypto Error: {} in {s}:{s} - {s}", .{ self.err, self.module, self.function, msg })
         else
-            try std.fmt.bufPrint(&buffer, "ZCrypto Error: {} in {s}:{s}", .{ 
-                self.err, self.module, self.function 
-            });
-        
+            try std.fmt.bufPrint(&buffer, "ZCrypto Error: {} in {s}:{s}", .{ self.err, self.module, self.function });
+
         return allocator.dupe(u8, message);
     }
-    
+
     /// Print error to stderr
     pub fn log(self: ErrorContext) void {
         std.debug.print("ZCrypto Error: {} in {s}:{s}", .{ self.err, self.module, self.function });
-        
+
         if (self.message) |msg| {
             std.debug.print(" - {s}", .{msg});
         }
@@ -241,7 +235,7 @@ pub fn Result(comptime T: type) type {
     return union(enum) {
         ok: T,
         err: ErrorContext,
-        
+
         /// Check if result is ok
         pub fn isOk(self: @This()) bool {
             return switch (self) {
@@ -249,12 +243,12 @@ pub fn Result(comptime T: type) type {
                 .err => false,
             };
         }
-        
+
         /// Check if result is error
         pub fn isErr(self: @This()) bool {
             return !self.isOk();
         }
-        
+
         /// Unwrap the ok value (panics on error)
         pub fn unwrap(self: @This()) T {
             return switch (self) {
@@ -265,7 +259,7 @@ pub fn Result(comptime T: type) type {
                 },
             };
         }
-        
+
         /// Unwrap the ok value or return default
         pub fn unwrapOr(self: @This(), default: T) T {
             return switch (self) {
@@ -273,7 +267,7 @@ pub fn Result(comptime T: type) type {
                 .err => default,
             };
         }
-        
+
         /// Get error context (panics if ok)
         pub fn unwrapErr(self: @This()) ErrorContext {
             return switch (self) {
@@ -281,17 +275,17 @@ pub fn Result(comptime T: type) type {
                 .err => |ctx| ctx,
             };
         }
-        
+
         /// Map ok value to another type
-        pub fn map(self: @This(), comptime U: type, func: fn(T) U) Result(U) {
+        pub fn map(self: @This(), comptime U: type, func: fn (T) U) Result(U) {
             return switch (self) {
                 .ok => |value| Result(U){ .ok = func(value) },
                 .err => |ctx| Result(U){ .err = ctx },
             };
         }
-        
+
         /// Chain results (monadic bind)
-        pub fn andThen(self: @This(), comptime U: type, func: fn(T) Result(U)) Result(U) {
+        pub fn andThen(self: @This(), comptime U: type, func: fn (T) Result(U)) Result(U) {
             return switch (self) {
                 .ok => |value| func(value),
                 .err => |ctx| Result(U){ .err = ctx },
@@ -326,23 +320,18 @@ pub fn convertError(err: anyerror, module: []const u8, function: []const u8) Err
         error.Timeout => NetworkError.ConnectionTimeout,
         else => @panic("Unhandled error type"),
     };
-    
+
     return ErrorContext.init(zcrypto_err, module, function);
 }
 
 test "error context creation and formatting" {
     const allocator = std.testing.allocator;
-    
-    const ctx = ErrorContext.withMessage(
-        CryptoError.InvalidKeySize,
-        "sym",
-        "encryptAes128Gcm",
-        "Key must be 16 bytes for AES-128"
-    );
-    
+
+    const ctx = ErrorContext.withMessage(CryptoError.InvalidKeySize, "sym", "encryptAes128Gcm", "Key must be 16 bytes for AES-128");
+
     const formatted = try ctx.format(allocator);
     defer allocator.free(formatted);
-    
+
     try std.testing.expect(std.mem.indexOf(u8, formatted, "InvalidKeySize") != null);
     try std.testing.expect(std.mem.indexOf(u8, formatted, "sym:encryptAes128Gcm") != null);
     try std.testing.expect(std.mem.indexOf(u8, formatted, "Key must be 16 bytes") != null);
@@ -353,12 +342,12 @@ test "result type operations" {
     const ok_result = resultOk(@as(u32, 42));
     try std.testing.expect(ok_result.isOk());
     try std.testing.expectEqual(@as(u32, 42), ok_result.unwrap());
-    
+
     // Test error result
     const err_result = resultErr(u32, CryptoError.InvalidKeySize, "test", "function");
     try std.testing.expect(err_result.isErr());
     try std.testing.expectEqual(@as(u32, 0), err_result.unwrapOr(0));
-    
+
     // Test map operation
     const mapped = ok_result.map(u64, struct {
         fn double(x: u32) u64 {

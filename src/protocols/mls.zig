@@ -33,7 +33,7 @@ pub const CipherSuite = enum(u16) {
     MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519 = 0x0001,
     MLS_128_DHKEMP256_AES128GCM_SHA256_P256 = 0x0002,
     MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519 = 0x0003,
-    
+
     // Post-quantum enhanced suites
     MLS_128_HYBRID_X25519_KYBER768_AES256GCM_SHA384_Ed25519_Dilithium3 = 0x1001,
     MLS_256_KYBER1024_AES256GCM_SHA512_SPHINCS_SHA256 = 0x1002,
@@ -48,12 +48,655 @@ pub const GroupContext = struct {
     tree_hash: [32]u8,
     confirmed_transcript_hash: [32]u8,
     extensions: []const Extension,
-    
+
     const Extension = struct {
         extension_type: u16,
         extension_data: []const u8,
     };
-    
+
     pub fn encode(self: *const GroupContext, allocator: std.mem.Allocator) ![]u8 {
         // Simplified encoding
-        var list = std.ArrayList(u8).init();\n        try list.appendSlice(allocator, std.mem.asBytes(&self.version));\n        try list.appendSlice(allocator, std.mem.asBytes(&self.cipher_suite));\n        try list.appendSlice(allocator, self.group_id);\n        try list.appendSlice(allocator, std.mem.asBytes(&self.epoch));\n        try list.appendSlice(allocator, &self.tree_hash);\n        try list.appendSlice(allocator, &self.confirmed_transcript_hash);\n        \n        return list.toOwnedSlice(allocator);\n    }\n};\n\n/// Tree position in the ratchet tree\npub const LeafIndex = u32;\npub const NodeIndex = u32;\n\n/// Key package for joining groups\npub const KeyPackage = struct {\n    version: ProtocolVersion,\n    cipher_suite: CipherSuite,\n    init_key: [32]u8,        // Public key for initial DH\n    leaf_node: LeafNode,\n    extensions: []const GroupContext.Extension,\n    signature: [64]u8,       // Self-signature\n    \n    // Post-quantum keys\n    pq_init_key: ?[pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE]u8,\n    pq_signature: ?[pq.ml_dsa.ML_DSA_65.SIGNATURE_SIZE]u8,\n    \n    pub fn generate(\n        allocator: std.mem.Allocator,\n        cipher_suite: CipherSuite,\n        identity: []const u8,\n        credential: Credential,\n    ) !KeyPackage {\n        _ = allocator;\n        \n        // Generate init key\n        var init_seed: [32]u8 = undefined;\n        rand.fill(&init_seed);\n        \n        const init_keypair = std.crypto.dh.X25519.KeyPair.create(init_seed) catch {\n            return MLSError.InvalidMember;\n        };\n        \n        // Generate signing key for leaf node\n        var sign_seed: [32]u8 = undefined;\n        rand.fill(&sign_seed);\n        \n        const sign_keypair = std.crypto.sign.Ed25519.KeyPair.create(sign_seed) catch {\n            return MLSError.InvalidMember;\n        };\n        \n        const leaf_node = LeafNode{\n            .encryption_key = init_keypair.public_key,\n            .signature_key = sign_keypair.public_key,\n            .credential = credential,\n            .capabilities = Capabilities{\n                .versions = &[_]ProtocolVersion{.mls10},\n                .cipher_suites = &[_]CipherSuite{cipher_suite},\n                .extensions = &[_]u16{},\n                .proposals = &[_]ProposalType{ .add, .update, .remove },\n                .credentials = &[_]CredentialType{.basic},\n            },\n            .lifetime = 0, // Not before\n            .extensions = &[_]GroupContext.Extension{},\n        };\n        \n        var key_package = KeyPackage{\n            .version = .mls10,\n            .cipher_suite = cipher_suite,\n            .init_key = init_keypair.public_key,\n            .leaf_node = leaf_node,\n            .extensions = &[_]GroupContext.Extension{},\n            .signature = undefined,\n            .pq_init_key = null,\n            .pq_signature = null,\n        };\n        \n        // Generate post-quantum keys if supported\n        if (cipher_suite == .MLS_128_HYBRID_X25519_KYBER768_AES256GCM_SHA384_Ed25519_Dilithium3) {\n            var pq_seed: [32]u8 = undefined;\n            rand.fill(&pq_seed);\n            \n            const pq_keypair = pq.ml_kem.ML_KEM_768.KeyPair.generate(pq_seed) catch {\n                return MLSError.InvalidMember;\n            };\n            \n            key_package.pq_init_key = pq_keypair.public_key;\n        }\n        \n        // Sign the key package\n        var to_be_signed = std.ArrayList(u8).init(std.heap.page_allocator);\n        defer to_be_signed.deinit();\n        \n        try to_be_signed.appendSlice(std.mem.asBytes(&key_package.version));\n        try to_be_signed.appendSlice(std.mem.asBytes(&key_package.cipher_suite));\n        try to_be_signed.appendSlice(&key_package.init_key);\n        try to_be_signed.appendSlice(identity);\n        \n        key_package.signature = sign_keypair.sign(to_be_signed.items, null) catch {\n            return MLSError.InvalidSignature;\n        };\n        \n        return key_package;\n    }\n};\n\n/// Leaf node in the ratchet tree\npub const LeafNode = struct {\n    encryption_key: [32]u8,\n    signature_key: [32]u8,\n    credential: Credential,\n    capabilities: Capabilities,\n    lifetime: u64,\n    extensions: []const GroupContext.Extension,\n};\n\n/// Member capabilities\npub const Capabilities = struct {\n    versions: []const ProtocolVersion,\n    cipher_suites: []const CipherSuite,\n    extensions: []const u16,\n    proposals: []const ProposalType,\n    credentials: []const CredentialType,\n};\n\n/// Credential types\npub const CredentialType = enum(u16) {\n    basic = 0x0001,\n    x509 = 0x0002,\n};\n\npub const Credential = struct {\n    credential_type: CredentialType,\n    identity: []const u8,\n    \n    pub fn basic(identity: []const u8) Credential {\n        return Credential{\n            .credential_type = .basic,\n            .identity = identity,\n        };\n    }\n};\n\n/// Proposal types for group operations\npub const ProposalType = enum(u16) {\n    add = 0x0001,\n    update = 0x0002,\n    remove = 0x0003,\n    psk = 0x0004,\n    reinit = 0x0005,\n    external_init = 0x0006,\n    group_context_extensions = 0x0007,\n};\n\n/// Proposal for group state changes\npub const Proposal = struct {\n    proposal_type: ProposalType,\n    content: ProposalContent,\n    \n    const ProposalContent = union(ProposalType) {\n        add: AddProposal,\n        update: UpdateProposal,\n        remove: RemoveProposal,\n        psk: PSKProposal,\n        reinit: ReinitProposal,\n        external_init: ExternalInitProposal,\n        group_context_extensions: GroupContextExtensionsProposal,\n    };\n    \n    const AddProposal = struct {\n        key_package: KeyPackage,\n    };\n    \n    const UpdateProposal = struct {\n        leaf_node: LeafNode,\n    };\n    \n    const RemoveProposal = struct {\n        removed: LeafIndex,\n    };\n    \n    const PSKProposal = struct {\n        psk: PreSharedKey,\n    };\n    \n    const ReinitProposal = struct {\n        group_id: []const u8,\n        version: ProtocolVersion,\n        cipher_suite: CipherSuite,\n        extensions: []const GroupContext.Extension,\n    };\n    \n    const ExternalInitProposal = struct {\n        kem_output: []const u8,\n    };\n    \n    const GroupContextExtensionsProposal = struct {\n        extensions: []const GroupContext.Extension,\n    };\n};\n\n/// Pre-shared key\npub const PreSharedKey = struct {\n    psk_id: []const u8,\n    psk_nonce: []const u8,\n    psk: []const u8,\n};\n\n/// Commit message for applying proposals\npub const Commit = struct {\n    proposals: []const ProposalOrRef,\n    path: ?UpdatePath,\n    \n    const ProposalOrRef = union(enum) {\n        proposal: Proposal,\n        reference: ProposalRef,\n    };\n    \n    const ProposalRef = struct {\n        hash: [32]u8,\n    };\n    \n    const UpdatePath = struct {\n        leaf_node: LeafNode,\n        nodes: []const UpdatePathNode,\n    };\n    \n    const UpdatePathNode = struct {\n        public_key: [32]u8,\n        encrypted_path_secret: []const HPKECiphertext,\n    };\n    \n    const HPKECiphertext = struct {\n        kem_output: []const u8,\n        ciphertext: []const u8,\n    };\n};\n\n/// Welcome message for new members\npub const Welcome = struct {\n    cipher_suite: CipherSuite,\n    secrets: []const EncryptedGroupSecrets,\n    encrypted_group_info: []const u8,\n    \n    const EncryptedGroupSecrets = struct {\n        new_member: LeafIndex,\n        encrypted_group_secrets: []const u8,\n    };\n};\n\n/// MLS Group state\npub const Group = struct {\n    allocator: std.mem.Allocator,\n    context: GroupContext,\n    tree: RatchetTree,\n    epoch_secrets: EpochSecrets,\n    message_secrets: MessageSecrets,\n    pending_proposals: std.ArrayList(Proposal),\n    \n    /// Initialize a new group\n    pub fn init(\n        allocator: std.mem.Allocator,\n        group_id: []const u8,\n        cipher_suite: CipherSuite,\n        creator_key_package: KeyPackage,\n    ) !Group {\n        var context = GroupContext{\n            .version = .mls10,\n            .cipher_suite = cipher_suite,\n            .group_id = group_id,\n            .epoch = 0,\n            .tree_hash = undefined,\n            .confirmed_transcript_hash = undefined,\n            .extensions = &[_]GroupContext.Extension{},\n        };\n        \n        // Initialize ratchet tree with creator\n        var tree = try RatchetTree.init(allocator);\n        _ = try tree.addLeaf(creator_key_package.leaf_node);\n        \n        // Compute tree hash\n        tree.computeTreeHash(&context.tree_hash);\n        \n        // Initialize epoch secrets\n        var init_secret: [32]u8 = undefined;\n        rand.fill(&init_secret);\n        \n        const epoch_secrets = try EpochSecrets.derive(init_secret, context);\n        const message_secrets = MessageSecrets.init(epoch_secrets.sender_data_secret);\n        \n        return Group{\n            .allocator = allocator,\n            .context = context,\n            .tree = tree,\n            .epoch_secrets = epoch_secrets,\n            .message_secrets = message_secrets,\n            .pending_proposals = std.ArrayList(Proposal).init(allocator),\n        };\n    }\n    \n    pub fn deinit(self: *Group) void {\n        self.tree.deinit();\n        self.pending_proposals.deinit();\n    }\n    \n    /// Add a new member to the group\n    pub fn addMember(self: *Group, key_package: KeyPackage) !Proposal {\n        return Proposal{\n            .proposal_type = .add,\n            .content = .{ .add = .{ .key_package = key_package } },\n        };\n    }\n    \n    /// Remove a member from the group\n    pub fn removeMember(self: *Group, member_index: LeafIndex) !Proposal {\n        _ = self;\n        return Proposal{\n            .proposal_type = .remove,\n            .content = .{ .remove = .{ .removed = member_index } },\n        };\n    }\n    \n    /// Create a commit to apply pending proposals\n    pub fn createCommit(self: *Group) !Commit {\n        // Simplified commit creation\n        const proposals = try self.allocator.alloc(Commit.ProposalOrRef, self.pending_proposals.items.len);\n        \n        for (self.pending_proposals.items, 0..) |proposal, i| {\n            proposals[i] = .{ .proposal = proposal };\n        }\n        \n        return Commit{\n            .proposals = proposals,\n            .path = null, // Simplified - no path update\n        };\n    }\n    \n    /// Process a commit message\n    pub fn processCommit(self: *Group, commit: Commit) !void {\n        // Apply each proposal in the commit\n        for (commit.proposals) |prop_or_ref| {\n            switch (prop_or_ref) {\n                .proposal => |proposal| {\n                    try self.applyProposal(proposal);\n                },\n                .reference => {\n                    // Look up proposal by reference\n                    // Implementation needed\n                },\n            }\n        }\n        \n        // Advance epoch\n        self.context.epoch += 1;\n        \n        // Re-derive secrets for new epoch\n        var new_init_secret: [32]u8 = undefined;\n        rand.fill(&new_init_secret);\n        \n        self.epoch_secrets = try EpochSecrets.derive(new_init_secret, self.context);\n        self.message_secrets = MessageSecrets.init(self.epoch_secrets.sender_data_secret);\n        \n        // Update tree hash\n        self.tree.computeTreeHash(&self.context.tree_hash);\n        \n        // Clear pending proposals\n        self.pending_proposals.clearRetainingCapacity();\n    }\n    \n    fn applyProposal(self: *Group, proposal: Proposal) !void {\n        switch (proposal.content) {\n            .add => |add| {\n                _ = try self.tree.addLeaf(add.key_package.leaf_node);\n            },\n            .remove => |remove| {\n                try self.tree.removeLeaf(remove.removed);\n            },\n            .update => |update| {\n                try self.tree.updateLeaf(0, update.leaf_node); // Simplified\n            },\n            else => {\n                // Other proposal types\n            },\n        }\n    }\n    \n    /// Encrypt a message for the group\n    pub fn encryptMessage(self: *Group, plaintext: []const u8, ciphertext_buffer: []u8) ![]const u8 {\n        // Simplified group encryption\n        const key = self.epoch_secrets.application_secret;\n        const min_len = @min(plaintext.len, ciphertext_buffer.len);\n        \n        for (0..min_len) |i| {\n            ciphertext_buffer[i] = plaintext[i] ^ key[i % 32];\n        }\n        \n        return ciphertext_buffer[0..min_len];\n    }\n    \n    /// Decrypt a message from the group\n    pub fn decryptMessage(self: *Group, ciphertext: []const u8, plaintext_buffer: []u8) ![]const u8 {\n        // Simplified group decryption\n        const key = self.epoch_secrets.application_secret;\n        const min_len = @min(ciphertext.len, plaintext_buffer.len);\n        \n        for (0..min_len) |i| {\n            plaintext_buffer[i] = ciphertext[i] ^ key[i % 32];\n        }\n        \n        return plaintext_buffer[0..min_len];\n    }\n};\n\n/// Binary tree for key management\nconst RatchetTree = struct {\n    allocator: std.mem.Allocator,\n    nodes: std.ArrayList(?Node),\n    \n    const Node = struct {\n        public_key: ?[32]u8,\n        private_key: ?[32]u8,\n        parent: ?NodeIndex,\n        left_child: ?NodeIndex,\n        right_child: ?NodeIndex,\n    };\n    \n    fn init(allocator: std.mem.Allocator) !RatchetTree {\n        return RatchetTree{\n            .allocator = allocator,\n            .nodes = std.ArrayList(?Node).init(allocator),\n        };\n    }\n    \n    fn deinit(self: *RatchetTree) void {\n        self.nodes.deinit();\n    }\n    \n    fn addLeaf(self: *RatchetTree, leaf_node: LeafNode) !LeafIndex {\n        const node = Node{\n            .public_key = leaf_node.encryption_key,\n            .private_key = null, // Only known to the leaf owner\n            .parent = null,\n            .left_child = null,\n            .right_child = null,\n        };\n        \n        try self.nodes.append(node);\n        return @intCast(self.nodes.items.len - 1);\n    }\n    \n    fn removeLeaf(self: *RatchetTree, index: LeafIndex) !void {\n        if (index < self.nodes.items.len) {\n            self.nodes.items[index] = null;\n        }\n    }\n    \n    fn updateLeaf(self: *RatchetTree, index: LeafIndex, leaf_node: LeafNode) !void {\n        if (index < self.nodes.items.len) {\n            if (self.nodes.items[index]) |*node| {\n                node.public_key = leaf_node.encryption_key;\n            }\n        }\n    }\n    \n    fn computeTreeHash(self: *const RatchetTree, hash_output: []u8) void {\n        // Simplified tree hash computation\n        var hasher = std.crypto.hash.sha2.Sha256.init(.{});\n        \n        for (self.nodes.items) |maybe_node| {\n            if (maybe_node) |node| {\n                if (node.public_key) |pk| {\n                    hasher.update(&pk);\n                }\n            }\n        }\n        \n        hasher.final(hash_output[0..32]);\n    }\n};\n\n/// Epoch-specific secrets\nconst EpochSecrets = struct {\n    joiner_secret: [32]u8,\n    welcome_secret: [32]u8,\n    init_secret: [32]u8,\n    sender_data_secret: [32]u8,\n    encryption_secret: [32]u8,\n    exporter_secret: [32]u8,\n    external_secret: [32]u8,\n    confirmation_key: [32]u8,\n    membership_key: [32]u8,\n    resumption_psk: [32]u8,\n    application_secret: [32]u8,\n    \n    fn derive(init_secret: [32]u8, context: GroupContext) !EpochSecrets {\n        var secrets: EpochSecrets = undefined;\n        \n        // Simplified key derivation (would use proper HKDF in production)\n        var hasher = std.crypto.hash.sha2.Sha256.init(.{});\n        hasher.update(&init_secret);\n        hasher.update(\"joiner\");\n        hasher.final(&secrets.joiner_secret);\n        \n        hasher = std.crypto.hash.sha2.Sha256.init(.{});\n        hasher.update(&init_secret);\n        hasher.update(\"welcome\");\n        hasher.final(&secrets.welcome_secret);\n        \n        hasher = std.crypto.hash.sha2.Sha256.init(.{});\n        hasher.update(&init_secret);\n        hasher.update(\"sender_data\");\n        hasher.final(&secrets.sender_data_secret);\n        \n        hasher = std.crypto.hash.sha2.Sha256.init(.{});\n        hasher.update(&init_secret);\n        hasher.update(\"encryption\");\n        hasher.final(&secrets.encryption_secret);\n        \n        hasher = std.crypto.hash.sha2.Sha256.init(.{});\n        hasher.update(&init_secret);\n        hasher.update(\"exporter\");\n        hasher.final(&secrets.exporter_secret);\n        \n        hasher = std.crypto.hash.sha2.Sha256.init(.{});\n        hasher.update(&init_secret);\n        hasher.update(\"external\");\n        hasher.final(&secrets.external_secret);\n        \n        hasher = std.crypto.hash.sha2.Sha256.init(.{});\n        hasher.update(&init_secret);\n        hasher.update(\"confirmation\");\n        hasher.final(&secrets.confirmation_key);\n        \n        hasher = std.crypto.hash.sha2.Sha256.init(.{});\n        hasher.update(&init_secret);\n        hasher.update(\"membership\");\n        hasher.final(&secrets.membership_key);\n        \n        hasher = std.crypto.hash.sha2.Sha256.init(.{});\n        hasher.update(&init_secret);\n        hasher.update(\"resumption\");\n        hasher.final(&secrets.resumption_psk);\n        \n        hasher = std.crypto.hash.sha2.Sha256.init(.{});\n        hasher.update(&init_secret);\n        hasher.update(\"application\");\n        hasher.final(&secrets.application_secret);\n        \n        secrets.init_secret = init_secret;\n        \n        _ = context; // Would be used in full implementation\n        \n        return secrets;\n    }\n};\n\n/// Message-specific secrets\nconst MessageSecrets = struct {\n    sender_data_secret: [32]u8,\n    \n    fn init(sender_data_secret: [32]u8) MessageSecrets {\n        return MessageSecrets{\n            .sender_data_secret = sender_data_secret,\n        };\n    }\n};\n\ntest \"MLS group creation and member addition\" {\n    var gpa = std.heap.GeneralPurposeAllocator(.{}){};\n    defer _ = gpa.deinit();\n    \n    const allocator = gpa.allocator();\n    \n    // Create initial member key package\n    const credential = Credential.basic(\"alice@example.com\");\n    const alice_kp = try KeyPackage.generate(\n        allocator,\n        .MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519,\n        \"alice\",\n        credential,\n    );\n    \n    // Initialize group\n    var group = try Group.init(\n        allocator,\n        \"test-group\",\n        .MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519,\n        alice_kp,\n    );\n    defer group.deinit();\n    \n    // Verify initial state\n    try std.testing.expect(group.context.epoch == 0);\n    try std.testing.expect(std.mem.eql(u8, group.context.group_id, \"test-group\"));\n    \n    // Create proposal to add new member\n    const bob_credential = Credential.basic(\"bob@example.com\");\n    const bob_kp = try KeyPackage.generate(\n        allocator,\n        .MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519,\n        \"bob\",\n        bob_credential,\n    );\n    \n    const add_proposal = try group.addMember(bob_kp);\n    try group.pending_proposals.append(add_proposal);\n    \n    // Create and process commit\n    const commit = try group.createCommit();\n    try group.processCommit(commit);\n    \n    // Verify epoch advanced\n    try std.testing.expect(group.context.epoch == 1);\n}\n\ntest \"MLS message encryption/decryption\" {\n    var gpa = std.heap.GeneralPurposeAllocator(.{}){};\n    defer _ = gpa.deinit();\n    \n    const allocator = gpa.allocator();\n    \n    const credential = Credential.basic(\"test@example.com\");\n    const kp = try KeyPackage.generate(\n        allocator,\n        .MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519,\n        \"test\",\n        credential,\n    );\n    \n    var group = try Group.init(allocator, \"test\", .MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519, kp);\n    defer group.deinit();\n    \n    // Test message encryption/decryption\n    const plaintext = \"Hello, MLS!\";\n    var ciphertext_buffer = [_]u8{0} ** 64;\n    var decrypted_buffer = [_]u8{0} ** 64;\n    \n    const ciphertext = try group.encryptMessage(plaintext, &ciphertext_buffer);\n    const decrypted = try group.decryptMessage(ciphertext, &decrypted_buffer);\n    \n    try std.testing.expect(std.mem.eql(u8, plaintext, decrypted));\n}
+        var list = std.ArrayList(u8).init();
+        try list.appendSlice(allocator, std.mem.asBytes(&self.version));
+        try list.appendSlice(allocator, std.mem.asBytes(&self.cipher_suite));
+        try list.appendSlice(allocator, self.group_id);
+        try list.appendSlice(allocator, std.mem.asBytes(&self.epoch));
+        try list.appendSlice(allocator, &self.tree_hash);
+        try list.appendSlice(allocator, &self.confirmed_transcript_hash);
+
+        return list.toOwnedSlice(allocator);
+    }
+};
+
+/// Tree position in the ratchet tree
+pub const LeafIndex = u32;
+pub const NodeIndex = u32;
+
+/// Key package for joining groups
+pub const KeyPackage = struct {
+    version: ProtocolVersion,
+    cipher_suite: CipherSuite,
+    init_key: [32]u8, // Public key for initial DH
+    leaf_node: LeafNode,
+    extensions: []const GroupContext.Extension,
+    signature: [64]u8, // Self-signature
+
+    // Post-quantum keys
+    pq_init_key: ?[pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE]u8,
+    pq_signature: ?[pq.ml_dsa.ML_DSA_65.SIGNATURE_SIZE]u8,
+
+    pub fn generate(
+        allocator: std.mem.Allocator,
+        cipher_suite: CipherSuite,
+        identity: []const u8,
+        credential: Credential,
+    ) !KeyPackage {
+        _ = allocator;
+
+        // Generate init key
+        var init_seed: [32]u8 = undefined;
+        rand.fill(&init_seed);
+
+        const init_keypair = std.crypto.dh.X25519.KeyPair.create(init_seed) catch {
+            return MLSError.InvalidMember;
+        };
+
+        // Generate signing key for leaf node
+        var sign_seed: [32]u8 = undefined;
+        rand.fill(&sign_seed);
+
+        const sign_keypair = std.crypto.sign.Ed25519.KeyPair.create(sign_seed) catch {
+            return MLSError.InvalidMember;
+        };
+
+        const leaf_node = LeafNode{
+            .encryption_key = init_keypair.public_key,
+            .signature_key = sign_keypair.public_key,
+            .credential = credential,
+            .capabilities = Capabilities{
+                .versions = &[_]ProtocolVersion{.mls10},
+                .cipher_suites = &[_]CipherSuite{cipher_suite},
+                .extensions = &[_]u16{},
+                .proposals = &[_]ProposalType{ .add, .update, .remove },
+                .credentials = &[_]CredentialType{.basic},
+            },
+            .lifetime = 0, // Not before
+            .extensions = &[_]GroupContext.Extension{},
+        };
+
+        var key_package = KeyPackage{
+            .version = .mls10,
+            .cipher_suite = cipher_suite,
+            .init_key = init_keypair.public_key,
+            .leaf_node = leaf_node,
+            .extensions = &[_]GroupContext.Extension{},
+            .signature = undefined,
+            .pq_init_key = null,
+            .pq_signature = null,
+        };
+
+        // Generate post-quantum keys if supported
+        if (cipher_suite == .MLS_128_HYBRID_X25519_KYBER768_AES256GCM_SHA384_Ed25519_Dilithium3) {
+            var pq_seed: [32]u8 = undefined;
+            rand.fill(&pq_seed);
+
+            const pq_keypair = pq.ml_kem.ML_KEM_768.KeyPair.generate(pq_seed) catch {
+                return MLSError.InvalidMember;
+            };
+
+            key_package.pq_init_key = pq_keypair.public_key;
+        }
+
+        // Sign the key package
+        var to_be_signed = std.ArrayList(u8).init(std.heap.page_allocator);
+        defer to_be_signed.deinit();
+
+        try to_be_signed.appendSlice(std.mem.asBytes(&key_package.version));
+        try to_be_signed.appendSlice(std.mem.asBytes(&key_package.cipher_suite));
+        try to_be_signed.appendSlice(&key_package.init_key);
+        try to_be_signed.appendSlice(identity);
+
+        key_package.signature = sign_keypair.sign(to_be_signed.items, null) catch {
+            return MLSError.InvalidSignature;
+        };
+
+        return key_package;
+    }
+};
+
+/// Leaf node in the ratchet tree
+pub const LeafNode = struct {
+    encryption_key: [32]u8,
+    signature_key: [32]u8,
+    credential: Credential,
+    capabilities: Capabilities,
+    lifetime: u64,
+    extensions: []const GroupContext.Extension,
+};
+
+/// Member capabilities
+pub const Capabilities = struct {
+    versions: []const ProtocolVersion,
+    cipher_suites: []const CipherSuite,
+    extensions: []const u16,
+    proposals: []const ProposalType,
+    credentials: []const CredentialType,
+};
+
+/// Credential types
+pub const CredentialType = enum(u16) {
+    basic = 0x0001,
+    x509 = 0x0002,
+};
+
+pub const Credential = struct {
+    credential_type: CredentialType,
+    identity: []const u8,
+
+    pub fn basic(identity: []const u8) Credential {
+        return Credential{
+            .credential_type = .basic,
+            .identity = identity,
+        };
+    }
+};
+
+/// Proposal types for group operations
+pub const ProposalType = enum(u16) {
+    add = 0x0001,
+    update = 0x0002,
+    remove = 0x0003,
+    psk = 0x0004,
+    reinit = 0x0005,
+    external_init = 0x0006,
+    group_context_extensions = 0x0007,
+};
+
+/// Proposal for group state changes
+pub const Proposal = struct {
+    proposal_type: ProposalType,
+    content: ProposalContent,
+
+    const ProposalContent = union(ProposalType) {
+        add: AddProposal,
+        update: UpdateProposal,
+        remove: RemoveProposal,
+        psk: PSKProposal,
+        reinit: ReinitProposal,
+        external_init: ExternalInitProposal,
+        group_context_extensions: GroupContextExtensionsProposal,
+    };
+
+    const AddProposal = struct {
+        key_package: KeyPackage,
+    };
+
+    const UpdateProposal = struct {
+        leaf_node: LeafNode,
+    };
+
+    const RemoveProposal = struct {
+        removed: LeafIndex,
+    };
+
+    const PSKProposal = struct {
+        psk: PreSharedKey,
+    };
+
+    const ReinitProposal = struct {
+        group_id: []const u8,
+        version: ProtocolVersion,
+        cipher_suite: CipherSuite,
+        extensions: []const GroupContext.Extension,
+    };
+
+    const ExternalInitProposal = struct {
+        kem_output: []const u8,
+    };
+
+    const GroupContextExtensionsProposal = struct {
+        extensions: []const GroupContext.Extension,
+    };
+};
+
+/// Pre-shared key
+pub const PreSharedKey = struct {
+    psk_id: []const u8,
+    psk_nonce: []const u8,
+    psk: []const u8,
+};
+
+/// Commit message for applying proposals
+pub const Commit = struct {
+    proposals: []const ProposalOrRef,
+    path: ?UpdatePath,
+
+    const ProposalOrRef = union(enum) {
+        proposal: Proposal,
+        reference: ProposalRef,
+    };
+
+    const ProposalRef = struct {
+        hash: [32]u8,
+    };
+
+    const UpdatePath = struct {
+        leaf_node: LeafNode,
+        nodes: []const UpdatePathNode,
+    };
+
+    const UpdatePathNode = struct {
+        public_key: [32]u8,
+        encrypted_path_secret: []const HPKECiphertext,
+    };
+
+    const HPKECiphertext = struct {
+        kem_output: []const u8,
+        ciphertext: []const u8,
+    };
+};
+
+/// Welcome message for new members
+pub const Welcome = struct {
+    cipher_suite: CipherSuite,
+    secrets: []const EncryptedGroupSecrets,
+    encrypted_group_info: []const u8,
+
+    const EncryptedGroupSecrets = struct {
+        new_member: LeafIndex,
+        encrypted_group_secrets: []const u8,
+    };
+};
+
+/// MLS Group state
+pub const Group = struct {
+    allocator: std.mem.Allocator,
+    context: GroupContext,
+    tree: RatchetTree,
+    epoch_secrets: EpochSecrets,
+    message_secrets: MessageSecrets,
+    pending_proposals: std.ArrayList(Proposal),
+
+    /// Initialize a new group
+    pub fn init(
+        allocator: std.mem.Allocator,
+        group_id: []const u8,
+        cipher_suite: CipherSuite,
+        creator_key_package: KeyPackage,
+    ) !Group {
+        var context = GroupContext{
+            .version = .mls10,
+            .cipher_suite = cipher_suite,
+            .group_id = group_id,
+            .epoch = 0,
+            .tree_hash = undefined,
+            .confirmed_transcript_hash = undefined,
+            .extensions = &[_]GroupContext.Extension{},
+        };
+
+        // Initialize ratchet tree with creator
+        var tree = try RatchetTree.init(allocator);
+        _ = try tree.addLeaf(creator_key_package.leaf_node);
+
+        // Compute tree hash
+        tree.computeTreeHash(&context.tree_hash);
+
+        // Initialize epoch secrets
+        var init_secret: [32]u8 = undefined;
+        rand.fill(&init_secret);
+
+        const epoch_secrets = try EpochSecrets.derive(init_secret, context);
+        const message_secrets = MessageSecrets.init(epoch_secrets.sender_data_secret);
+
+        return Group{
+            .allocator = allocator,
+            .context = context,
+            .tree = tree,
+            .epoch_secrets = epoch_secrets,
+            .message_secrets = message_secrets,
+            .pending_proposals = std.ArrayList(Proposal).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Group) void {
+        self.tree.deinit();
+        self.pending_proposals.deinit();
+    }
+
+    /// Add a new member to the group
+    pub fn addMember(self: *Group, key_package: KeyPackage) !Proposal {
+        return Proposal{
+            .proposal_type = .add,
+            .content = .{ .add = .{ .key_package = key_package } },
+        };
+    }
+
+    /// Remove a member from the group
+    pub fn removeMember(self: *Group, member_index: LeafIndex) !Proposal {
+        _ = self;
+        return Proposal{
+            .proposal_type = .remove,
+            .content = .{ .remove = .{ .removed = member_index } },
+        };
+    }
+
+    /// Create a commit to apply pending proposals
+    pub fn createCommit(self: *Group) !Commit {
+        // Simplified commit creation
+        const proposals = try self.allocator.alloc(Commit.ProposalOrRef, self.pending_proposals.items.len);
+
+        for (self.pending_proposals.items, 0..) |proposal, i| {
+            proposals[i] = .{ .proposal = proposal };
+        }
+
+        return Commit{
+            .proposals = proposals,
+            .path = null, // Simplified - no path update
+        };
+    }
+
+    /// Process a commit message
+    pub fn processCommit(self: *Group, commit: Commit) !void {
+        // Apply each proposal in the commit
+        for (commit.proposals) |prop_or_ref| {
+            switch (prop_or_ref) {
+                .proposal => |proposal| {
+                    try self.applyProposal(proposal);
+                },
+                .reference => {
+                    // Look up proposal by reference
+                    // Implementation needed
+                },
+            }
+        }
+
+        // Advance epoch
+        self.context.epoch += 1;
+
+        // Re-derive secrets for new epoch
+        var new_init_secret: [32]u8 = undefined;
+        rand.fill(&new_init_secret);
+
+        self.epoch_secrets = try EpochSecrets.derive(new_init_secret, self.context);
+        self.message_secrets = MessageSecrets.init(self.epoch_secrets.sender_data_secret);
+
+        // Update tree hash
+        self.tree.computeTreeHash(&self.context.tree_hash);
+
+        // Clear pending proposals
+        self.pending_proposals.clearRetainingCapacity();
+    }
+
+    fn applyProposal(self: *Group, proposal: Proposal) !void {
+        switch (proposal.content) {
+            .add => |add| {
+                _ = try self.tree.addLeaf(add.key_package.leaf_node);
+            },
+            .remove => |remove| {
+                try self.tree.removeLeaf(remove.removed);
+            },
+            .update => |update| {
+                try self.tree.updateLeaf(0, update.leaf_node); // Simplified
+            },
+            else => {
+                // Other proposal types
+            },
+        }
+    }
+
+    /// Encrypt a message for the group
+    pub fn encryptMessage(self: *Group, plaintext: []const u8, ciphertext_buffer: []u8) ![]const u8 {
+        // Simplified group encryption
+        const key = self.epoch_secrets.application_secret;
+        const min_len = @min(plaintext.len, ciphertext_buffer.len);
+
+        for (0..min_len) |i| {
+            ciphertext_buffer[i] = plaintext[i] ^ key[i % 32];
+        }
+
+        return ciphertext_buffer[0..min_len];
+    }
+
+    /// Decrypt a message from the group
+    pub fn decryptMessage(self: *Group, ciphertext: []const u8, plaintext_buffer: []u8) ![]const u8 {
+        // Simplified group decryption
+        const key = self.epoch_secrets.application_secret;
+        const min_len = @min(ciphertext.len, plaintext_buffer.len);
+
+        for (0..min_len) |i| {
+            plaintext_buffer[i] = ciphertext[i] ^ key[i % 32];
+        }
+
+        return plaintext_buffer[0..min_len];
+    }
+};
+
+/// Binary tree for key management
+const RatchetTree = struct {
+    allocator: std.mem.Allocator,
+    nodes: std.ArrayList(?Node),
+
+    const Node = struct {
+        public_key: ?[32]u8,
+        private_key: ?[32]u8,
+        parent: ?NodeIndex,
+        left_child: ?NodeIndex,
+        right_child: ?NodeIndex,
+    };
+
+    fn init(allocator: std.mem.Allocator) !RatchetTree {
+        return RatchetTree{
+            .allocator = allocator,
+            .nodes = std.ArrayList(?Node).init(allocator),
+        };
+    }
+
+    fn deinit(self: *RatchetTree) void {
+        self.nodes.deinit();
+    }
+
+    fn addLeaf(self: *RatchetTree, leaf_node: LeafNode) !LeafIndex {
+        const node = Node{
+            .public_key = leaf_node.encryption_key,
+            .private_key = null, // Only known to the leaf owner
+            .parent = null,
+            .left_child = null,
+            .right_child = null,
+        };
+
+        try self.nodes.append(node);
+        return @intCast(self.nodes.items.len - 1);
+    }
+
+    fn removeLeaf(self: *RatchetTree, index: LeafIndex) !void {
+        if (index < self.nodes.items.len) {
+            self.nodes.items[index] = null;
+        }
+    }
+
+    fn updateLeaf(self: *RatchetTree, index: LeafIndex, leaf_node: LeafNode) !void {
+        if (index < self.nodes.items.len) {
+            if (self.nodes.items[index]) |*node| {
+                node.public_key = leaf_node.encryption_key;
+            }
+        }
+    }
+
+    fn computeTreeHash(self: *const RatchetTree, hash_output: []u8) void {
+        // Simplified tree hash computation
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+
+        for (self.nodes.items) |maybe_node| {
+            if (maybe_node) |node| {
+                if (node.public_key) |pk| {
+                    hasher.update(&pk);
+                }
+            }
+        }
+
+        hasher.final(hash_output[0..32]);
+    }
+};
+
+/// Epoch-specific secrets
+const EpochSecrets = struct {
+    joiner_secret: [32]u8,
+    welcome_secret: [32]u8,
+    init_secret: [32]u8,
+    sender_data_secret: [32]u8,
+    encryption_secret: [32]u8,
+    exporter_secret: [32]u8,
+    external_secret: [32]u8,
+    confirmation_key: [32]u8,
+    membership_key: [32]u8,
+    resumption_psk: [32]u8,
+    application_secret: [32]u8,
+
+    fn derive(init_secret: [32]u8, context: GroupContext) !EpochSecrets {
+        var secrets: EpochSecrets = undefined;
+
+        // Simplified key derivation (would use proper HKDF in production)
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update(&init_secret);
+        hasher.update("joiner");
+        hasher.final(&secrets.joiner_secret);
+
+        hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update(&init_secret);
+        hasher.update("welcome");
+        hasher.final(&secrets.welcome_secret);
+
+        hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update(&init_secret);
+        hasher.update("sender_data");
+        hasher.final(&secrets.sender_data_secret);
+
+        hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update(&init_secret);
+        hasher.update("encryption");
+        hasher.final(&secrets.encryption_secret);
+
+        hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update(&init_secret);
+        hasher.update("exporter");
+        hasher.final(&secrets.exporter_secret);
+
+        hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update(&init_secret);
+        hasher.update("external");
+        hasher.final(&secrets.external_secret);
+
+        hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update(&init_secret);
+        hasher.update("confirmation");
+        hasher.final(&secrets.confirmation_key);
+
+        hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update(&init_secret);
+        hasher.update("membership");
+        hasher.final(&secrets.membership_key);
+
+        hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update(&init_secret);
+        hasher.update("resumption");
+        hasher.final(&secrets.resumption_psk);
+
+        hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update(&init_secret);
+        hasher.update("application");
+        hasher.final(&secrets.application_secret);
+
+        secrets.init_secret = init_secret;
+
+        _ = context; // Would be used in full implementation
+
+        return secrets;
+    }
+};
+
+/// Message-specific secrets
+const MessageSecrets = struct {
+    sender_data_secret: [32]u8,
+
+    fn init(sender_data_secret: [32]u8) MessageSecrets {
+        return MessageSecrets{
+            .sender_data_secret = sender_data_secret,
+        };
+    }
+};
+
+test "MLS group creation and member addition" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    const allocator = gpa.allocator();
+
+    // Create initial member key package
+    const credential = Credential.basic("alice@example.com");
+    const alice_kp = try KeyPackage.generate(
+        allocator,
+        .MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519,
+        "alice",
+        credential,
+    );
+
+    // Initialize group
+    var group = try Group.init(
+        allocator,
+        "test-group",
+        .MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519,
+        alice_kp,
+    );
+    defer group.deinit();
+
+    // Verify initial state
+    try std.testing.expect(group.context.epoch == 0);
+    try std.testing.expect(std.mem.eql(u8, group.context.group_id, "test-group"));
+
+    // Create proposal to add new member
+    const bob_credential = Credential.basic("bob@example.com");
+    const bob_kp = try KeyPackage.generate(
+        allocator,
+        .MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519,
+        "bob",
+        bob_credential,
+    );
+
+    const add_proposal = try group.addMember(bob_kp);
+    try group.pending_proposals.append(add_proposal);
+
+    // Create and process commit
+    const commit = try group.createCommit();
+    try group.processCommit(commit);
+
+    // Verify epoch advanced
+    try std.testing.expect(group.context.epoch == 1);
+}
+
+test "MLS message encryption/decryption" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
+    const allocator = gpa.allocator();
+
+    const credential = Credential.basic("test@example.com");
+    const kp = try KeyPackage.generate(
+        allocator,
+        .MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519,
+        "test",
+        credential,
+    );
+
+    var group = try Group.init(allocator, "test", .MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519, kp);
+    defer group.deinit();
+
+    // Test message encryption/decryption
+    const plaintext = "Hello, MLS!";
+    var ciphertext_buffer = [_]u8{0} ** 64;
+    var decrypted_buffer = [_]u8{0} ** 64;
+
+    const ciphertext = try group.encryptMessage(plaintext, &ciphertext_buffer);
+    const decrypted = try group.decryptMessage(ciphertext, &decrypted_buffer);
+
+    try std.testing.expect(std.mem.eql(u8, plaintext, decrypted));
+}

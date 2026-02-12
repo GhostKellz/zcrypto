@@ -43,7 +43,7 @@ pub const Mnemonic = struct {
 
         var offset: usize = 0;
         for (self.words, 0..) |word, i| {
-            @memcpy(joined[offset..offset + word.len], word);
+            @memcpy(joined[offset .. offset + word.len], word);
             offset += word.len;
             if (i < self.words.len - 1) {
                 joined[offset] = ' ';
@@ -55,7 +55,7 @@ pub const Mnemonic = struct {
         const salt_prefix = "mnemonic";
         const full_salt = try allocator.alloc(u8, salt_prefix.len + passphrase.len);
         defer allocator.free(full_salt);
-        
+
         @memcpy(full_salt[0..salt_prefix.len], salt_prefix);
         @memcpy(full_salt[salt_prefix.len..], passphrase);
 
@@ -74,7 +74,7 @@ pub const ExtendedKey = struct {
     /// Derive child key (BIP-32)
     pub fn deriveChild(self: ExtendedKey, index: u32) ExtendedKey {
         const is_hardened = index >= 0x80000000;
-        
+
         // Create data for HMAC
         var data: [37]u8 = undefined;
         var data_len: usize = 0;
@@ -85,7 +85,7 @@ pub const ExtendedKey = struct {
             @memcpy(data[1..33], &self.key);
             data_len = 33;
         } else {
-            // Non-hardened derivation: public_key || index  
+            // Non-hardened derivation: public_key || index
             // For now, we'll use a simplified approach
             @memcpy(data[0..32], &self.key);
             data_len = 32;
@@ -124,7 +124,7 @@ pub const ExtendedKey = struct {
         // Generate public key from private key
         const secret_key = std.crypto.sign.ecdsa.EcdsaSecp256k1Sha256.SecretKey.fromBytes(self.key) catch return error.InvalidPrivateKey;
         const kp = std.crypto.sign.ecdsa.EcdsaSecp256k1Sha256.KeyPair.fromSecretKey(secret_key) catch return error.InvalidPrivateKey;
-        
+
         const compressed = kp.public_key.toCompressedSec1();
         return asym.Secp256k1KeyPair{
             .private_key = self.key,
@@ -142,7 +142,7 @@ pub const bip39 = struct {
         // In a production system, you'd use the official BIP-39 word list
         const word_count = @intFromEnum(length);
         const words = try allocator.alloc([]const u8, word_count);
-        
+
         // Generate simple words for demo (replace with proper BIP-39 wordlist)
         for (words, 0..) |*word, i| {
             const word_str = try std.fmt.allocPrint(allocator, "word{d}", .{i + 1});
@@ -160,7 +160,7 @@ pub const bip39 = struct {
         const salt_prefix = "mnemonic";
         const full_salt = try allocator.alloc(u8, salt_prefix.len + passphrase.len);
         defer allocator.free(full_salt);
-        
+
         @memcpy(full_salt[0..salt_prefix.len], salt_prefix);
         @memcpy(full_salt[salt_prefix.len..], passphrase);
 
@@ -173,7 +173,7 @@ pub const bip32 = struct {
     /// Create master key from seed
     pub fn masterKeyFromSeed(seed: []const u8) ExtendedKey {
         const hmac_result = hash.hmacSha512(seed, "Bitcoin seed");
-        
+
         var master_key: [32]u8 = undefined;
         var chain_code: [32]u8 = undefined;
         @memcpy(&master_key, hmac_result[0..32]);
@@ -198,9 +198,9 @@ pub const bip32 = struct {
 pub const bip44 = struct {
     /// BIP-44 derivation path: m/44'/coin_type'/account'/change/address_index
     pub const DerivationPath = struct {
-        coin_type: u32,     // 0 = Bitcoin, 60 = Ethereum
-        account: u32,       // Account index
-        change: u32,        // 0 = receiving, 1 = change
+        coin_type: u32, // 0 = Bitcoin, 60 = Ethereum
+        account: u32, // Account index
+        change: u32, // 0 = receiving, 1 = change
         address_index: u32, // Address index
     };
 
@@ -212,7 +212,7 @@ pub const bip44 = struct {
         const account = coin.deriveChild(path.account | 0x80000000); // account' (hardened)
         const change = account.deriveChild(path.change); // change (non-hardened)
         const address = change.deriveChild(path.address_index); // address_index (non-hardened)
-        
+
         return address;
     }
 
@@ -251,17 +251,17 @@ test "bip39 mnemonic to seed" {
 
     const mnemonic_phrase = "test mnemonic phrase for seed generation";
     const passphrase = "";
-    
+
     const seed = try bip39.mnemonicToSeed(allocator, mnemonic_phrase, passphrase);
     defer allocator.free(seed);
-    
+
     try std.testing.expectEqual(@as(usize, 64), seed.len);
 }
 
 test "bip32 master key derivation" {
     const seed = "test seed for master key derivation";
     const master = bip32.masterKeyFromSeed(seed);
-    
+
     try std.testing.expectEqual(@as(u8, 0), master.depth);
     try std.testing.expectEqual(@as(u32, 0), master.child_index);
 }
@@ -269,11 +269,11 @@ test "bip32 master key derivation" {
 test "bip32 child key derivation" {
     const seed = "test seed for child derivation";
     const master = bip32.masterKeyFromSeed(seed);
-    
+
     const child = master.deriveChild(0);
     try std.testing.expectEqual(@as(u8, 1), child.depth);
     try std.testing.expectEqual(@as(u32, 0), child.child_index);
-    
+
     // Child key should be different from parent
     try std.testing.expect(!std.mem.eql(u8, &master.key, &child.key));
 }
@@ -281,7 +281,7 @@ test "bip32 child key derivation" {
 test "bip44 derivation paths" {
     const btc_path = bip44.bitcoinPath(0, 0, 0);
     try std.testing.expectEqual(@as(u32, 0), btc_path.coin_type);
-    
+
     const eth_path = bip44.ethereumPath(0, 0, 0);
     try std.testing.expectEqual(@as(u32, 60), eth_path.coin_type);
 }
@@ -290,12 +290,12 @@ test "bip44 key derivation" {
     const seed = "test seed for bip44 derivation";
     const master = bip32.masterKeyFromSeed(seed);
     const path = bip44.bitcoinPath(0, 0, 0);
-    
+
     const derived = bip44.deriveKey(master, path);
-    
+
     // Should be at depth 5 (m/44'/0'/0'/0/0)
     try std.testing.expectEqual(@as(u8, 5), derived.depth);
-    
+
     // Convert to secp256k1 keypair
     const keypair = try derived.toSecp256k1KeyPair();
     try std.testing.expectEqual(@as(usize, 32), keypair.private_key.len);

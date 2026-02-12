@@ -217,7 +217,7 @@ pub const TlsClient = struct {
         var offset: usize = 0;
         while (offset < data.len) {
             const chunk_size = @min(data.len - offset, self.config.max_fragment_size);
-            try self.writeRecord(.application_data, data[offset..offset + chunk_size]);
+            try self.writeRecord(.application_data, data[offset .. offset + chunk_size]);
             offset += chunk_size;
         }
 
@@ -265,7 +265,7 @@ pub const TlsClient = struct {
         }
         if (self.server_public_key) |*key| util.secureZero(key);
         if (self.shared_secret) |*secret| util.secureZero(secret);
-        
+
         // Clean up secrets
         if (self.client_handshake_secret) |*secret| util.secureZero(secret);
         if (self.server_handshake_secret) |*secret| util.secureZero(secret);
@@ -416,12 +416,12 @@ pub const TlsClient = struct {
         // Parse extensions
         const extensions_len = try reader.readInt(u16, .big);
         const extensions_start = stream.pos;
-        
+
         while (stream.pos < extensions_start + extensions_len) {
             const ext_type = try reader.readInt(u16, .big);
             const ext_len = try reader.readInt(u16, .big);
-            const ext_data = msg.data[stream.pos..stream.pos + ext_len];
-            
+            const ext_data = msg.data[stream.pos .. stream.pos + ext_len];
+
             switch (std.meta.intToEnum(ExtensionType, ext_type) catch .unsupported) {
                 .supported_versions => {
                     const version = std.mem.readInt(u16, ext_data[0..2], .big);
@@ -434,17 +434,17 @@ pub const TlsClient = struct {
                     if (ext_data.len >= 4) {
                         const group = std.mem.readInt(u16, ext_data[0..2], .big);
                         const key_len = std.mem.readInt(u16, ext_data[2..4], .big);
-                        
+
                         if (group == 0x001d and key_len == 32 and ext_data.len >= 4 + key_len) {
                             // X25519 key share
                             self.server_public_key = [_]u8{0} ** 32;
-                            @memcpy(&self.server_public_key.?, ext_data[4..4 + key_len]);
+                            @memcpy(&self.server_public_key.?, ext_data[4 .. 4 + key_len]);
                         }
                     }
                 },
                 else => {},
             }
-            
+
             stream.pos += ext_len;
         }
 
@@ -457,42 +457,31 @@ pub const TlsClient = struct {
         if (self.client_key_share == null or self.server_public_key == null) {
             return error.MissingKeyExchange;
         }
-        
+
         // Compute shared secret
-        self.shared_secret = asym.x25519.dh(
-            self.client_key_share.?.private_key,
-            self.server_public_key.?
-        );
-        
+        self.shared_secret = asym.x25519.dh(self.client_key_share.?.private_key, self.server_public_key.?);
+
         // Initialize key schedule with the cipher suite's hash algorithm
         const hash_alg = self.cipher_suite.?.hashAlgorithm();
         var key_schedule = try tls.KeySchedule.init(self.allocator, hash_alg);
         defer key_schedule.deinit();
-        
+
         // Derive early secret (no PSK)
         try key_schedule.deriveEarlySecret(null);
-        
+
         // Derive handshake secret using ECDHE shared secret
         try key_schedule.deriveHandshakeSecret(&self.shared_secret.?);
-        
+
         // Derive client and server handshake secrets
         const transcript_data = try self.getTranscriptHash();
         defer self.allocator.free(transcript_data);
-        
-        const client_hs_secret = try key_schedule.deriveSecret(
-            key_schedule.handshake_secret,
-            "c hs traffic",
-            transcript_data
-        );
+
+        const client_hs_secret = try key_schedule.deriveSecret(key_schedule.handshake_secret, "c hs traffic", transcript_data);
         defer self.allocator.free(client_hs_secret);
-        
-        const server_hs_secret = try key_schedule.deriveSecret(
-            key_schedule.handshake_secret,
-            "s hs traffic",
-            transcript_data
-        );
+
+        const server_hs_secret = try key_schedule.deriveSecret(key_schedule.handshake_secret, "s hs traffic", transcript_data);
         defer self.allocator.free(server_hs_secret);
-        
+
         // Copy secrets (truncate to 32 bytes for now)
         self.client_handshake_secret = [_]u8{0} ** 32;
         self.server_handshake_secret = [_]u8{0} ** 32;
@@ -507,7 +496,7 @@ pub const TlsClient = struct {
     fn deriveTrafficKeys(self: *TlsClient, secret: [32]u8, is_client: bool) !TrafficKeys {
         _ = is_client;
         const key_size = self.cipher_suite.?.keySize();
-        
+
         const key = try kdf.hkdfExpandLabel(self.allocator, &secret, "key", "", key_size);
         const iv = try kdf.hkdfExpandLabel(self.allocator, &secret, "iv", "", 12);
 
@@ -520,10 +509,10 @@ pub const TlsClient = struct {
     fn getTranscriptHash(self: *TlsClient) ![]u8 {
         const hash_alg = self.cipher_suite.?.hashAlgorithm();
         const hash_len = hash_alg.digestSize();
-        
+
         var transcript_copy = self.transcript;
         const result = try self.allocator.alloc(u8, hash_len);
-        
+
         switch (hash_alg) {
             .sha256 => {
                 const final_hash = transcript_copy.final();
@@ -538,37 +527,31 @@ pub const TlsClient = struct {
                 }
             },
         }
-        
+
         return result;
     }
 
     fn computeFinishedVerifyData(self: *TlsClient, is_client: bool) ![]u8 {
         const hash_alg = self.cipher_suite.?.hashAlgorithm();
         const hash_len = hash_alg.digestSize();
-        
+
         // Get current transcript hash
         const transcript_hash = try self.getTranscriptHash();
         defer self.allocator.free(transcript_hash);
-        
+
         // Use appropriate handshake secret
-        const secret = if (is_client) 
-            self.client_handshake_secret.? 
-        else 
+        const secret = if (is_client)
+            self.client_handshake_secret.?
+        else
             self.server_handshake_secret.?;
-        
+
         // Compute finished key using HKDF-Expand-Label
-        const finished_key = try kdf.hkdfExpandLabel(
-            self.allocator,
-            &secret,
-            "finished",
-            "",
-            hash_len
-        );
+        const finished_key = try kdf.hkdfExpandLabel(self.allocator, &secret, "finished", "", hash_len);
         defer self.allocator.free(finished_key);
-        
+
         // Compute HMAC of transcript hash
         const verify_data = try self.allocator.alloc(u8, hash_len);
-        
+
         switch (hash_alg) {
             .sha256 => {
                 const key_array: [32]u8 = finished_key[0..32].*;
@@ -585,7 +568,7 @@ pub const TlsClient = struct {
                 }
             },
         }
-        
+
         return verify_data;
     }
 
@@ -594,31 +577,23 @@ pub const TlsClient = struct {
         const hash_alg = self.cipher_suite.?.hashAlgorithm();
         var key_schedule = try tls.KeySchedule.init(self.allocator, hash_alg);
         defer key_schedule.deinit();
-        
+
         // Reconstruct the key schedule
         try key_schedule.deriveEarlySecret(null);
         try key_schedule.deriveHandshakeSecret(&self.shared_secret.?);
         try key_schedule.deriveMasterSecret();
-        
+
         // Get current transcript hash
         const transcript_data = try self.getTranscriptHash();
         defer self.allocator.free(transcript_data);
-        
+
         // Derive application traffic secrets
-        const client_app_secret = try key_schedule.deriveSecret(
-            key_schedule.master_secret,
-            "c ap traffic",
-            transcript_data
-        );
+        const client_app_secret = try key_schedule.deriveSecret(key_schedule.master_secret, "c ap traffic", transcript_data);
         defer self.allocator.free(client_app_secret);
-        
-        const server_app_secret = try key_schedule.deriveSecret(
-            key_schedule.master_secret,
-            "s ap traffic",
-            transcript_data
-        );
+
+        const server_app_secret = try key_schedule.deriveSecret(key_schedule.master_secret, "s ap traffic", transcript_data);
         defer self.allocator.free(server_app_secret);
-        
+
         // Copy secrets (truncate to 32 bytes for now)
         self.client_traffic_secret = [_]u8{0} ** 32;
         self.server_traffic_secret = [_]u8{0} ** 32;
@@ -669,10 +644,10 @@ pub const TlsClient = struct {
     fn sendFinished(self: *TlsClient) !void {
         const verify_data = try self.computeFinishedVerifyData(true);
         defer self.allocator.free(verify_data);
-        
+
         // Update transcript with Finished message
         self.transcript.update(verify_data);
-        
+
         // Send Finished message
         try self.writeHandshakeMessage(.finished, verify_data);
     }
@@ -819,7 +794,7 @@ pub const TlsClient = struct {
         const length = std.mem.readInt(u24, record.data[1..4], .big);
 
         const data = try self.allocator.alloc(u8, length);
-        @memcpy(data, record.data[4..4 + length]);
+        @memcpy(data, record.data[4 .. 4 + length]);
 
         return HandshakeMessage{
             .msg_type = msg_type,
@@ -830,11 +805,11 @@ pub const TlsClient = struct {
 
 test "TLS client initialization" {
     const allocator = std.testing.allocator;
-    
+
     // Test basic TLS client structure initialization
     const config = tls_config.TlsConfig.init(allocator);
     defer config.deinit();
-    
+
     // Just test that config can be created and destroyed
     try std.testing.expect(config.certificates == null);
     try std.testing.expect(config.private_key == null);
@@ -842,11 +817,11 @@ test "TLS client initialization" {
 
 test "TLS client record writing" {
     const allocator = std.testing.allocator;
-    
+
     // Test basic config setup
     const config = tls_config.TlsConfig.init(allocator);
     defer config.deinit();
-    
+
     // Test would write records here - simplified for now
     try std.testing.expect(config.certificates == null);
 }

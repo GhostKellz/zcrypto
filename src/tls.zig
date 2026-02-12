@@ -169,11 +169,11 @@ pub fn computePacketNumber(largest_pn: u64, truncated_pn: u32, pn_nbits: u8) u64
     const pn_win = @as(u64, 1) << @intCast(pn_nbits);
     const pn_hwin = pn_win / 2;
     const pn_mask = pn_win - 1;
-    
+
     // Reconstruct packet number by taking high bits from expected_pn
     // and low bits from truncated_pn
     const candidate_pn = (expected_pn & ~pn_mask) | @as(u64, truncated_pn);
-    
+
     // Choose the candidate closest to expected_pn
     if (candidate_pn + pn_hwin <= expected_pn) {
         return candidate_pn + pn_win;
@@ -199,7 +199,7 @@ pub const KeySchedule = struct {
 
     pub fn init(allocator: std.mem.Allocator, hash_alg: config.HashAlgorithm) !KeySchedule {
         const hash_len = hash_alg.digestSize();
-        
+
         return KeySchedule{
             .hash_alg = hash_alg,
             .early_secret = try allocator.alloc(u8, hash_len),
@@ -225,7 +225,7 @@ pub const KeySchedule = struct {
         @memset(zero_hash, 0);
 
         const ikm = psk orelse zero_hash;
-        
+
         switch (self.hash_alg) {
             .sha256 => {
                 const extracted = std.crypto.kdf.hkdf.HkdfSha256.extract(&[_]u8{0}, ikm);
@@ -525,18 +525,18 @@ test "packet number computation" {
     // Should reconstruct to 0xa82f30ac
     const result1 = computePacketNumber(0xa82f30ea, 0xac, 8);
     try std.testing.expectEqual(@as(u64, 0xa82f30ac), result1);
-    
+
     // Additional test cases
     const result2 = computePacketNumber(0xa82f30ea, 0x9b, 8);
     try std.testing.expectEqual(@as(u64, 0xa82f309b), result2);
-    
+
     // Test edge case with wraparound
     const result3 = computePacketNumber(0xff, 0x00, 8);
     try std.testing.expectEqual(@as(u64, 0x100), result3);
 }
 
 // =============================================================================
-// ASYNC CONVENIENCE FUNCTIONS  
+// ASYNC CONVENIENCE FUNCTIONS
 // =============================================================================
 
 /// Async convenience functions that use the async_crypto module

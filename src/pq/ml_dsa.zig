@@ -17,7 +17,7 @@ pub const Params = struct {
 
     // Polynomial reduction constants
     pub const QINV: u32 = 58728449; // Q^(-1) mod 2^32
-    pub const MONT: u32 = 2^32 % Q; // 2^32 mod Q
+    pub const MONT: u32 = 2 ^ 32 % Q; // 2^32 mod Q
 
     // Hash function output lengths
     pub const SEEDBYTES = 32; // Seed length
@@ -30,7 +30,7 @@ pub const Params = struct {
 /// ML-DSA security levels
 pub const SecurityLevel = enum {
     ML_DSA_44, // 128-bit security
-    ML_DSA_65, // 192-bit security  
+    ML_DSA_65, // 192-bit security
     ML_DSA_87, // 256-bit security
 };
 
@@ -44,20 +44,38 @@ pub const LevelParams = struct {
     gamma1: u32, // Coefficient range for y
     gamma2: u32, // Low-order rounding range
     omega: u32, // Maximum number of 1's in hint h
-    
+
     pub fn forLevel(level: SecurityLevel) LevelParams {
         return switch (level) {
             .ML_DSA_44 => .{
-                .k = 4, .l = 4, .eta = 2, .tau = 39, .beta = 78,
-                .gamma1 = 1 << 17, .gamma2 = (Params.Q - 1) / 88, .omega = 80,
+                .k = 4,
+                .l = 4,
+                .eta = 2,
+                .tau = 39,
+                .beta = 78,
+                .gamma1 = 1 << 17,
+                .gamma2 = (Params.Q - 1) / 88,
+                .omega = 80,
             },
             .ML_DSA_65 => .{
-                .k = 6, .l = 5, .eta = 4, .tau = 49, .beta = 196,
-                .gamma1 = 1 << 19, .gamma2 = (Params.Q - 1) / 32, .omega = 55,
+                .k = 6,
+                .l = 5,
+                .eta = 4,
+                .tau = 49,
+                .beta = 196,
+                .gamma1 = 1 << 19,
+                .gamma2 = (Params.Q - 1) / 32,
+                .omega = 55,
             },
             .ML_DSA_87 => .{
-                .k = 8, .l = 7, .eta = 2, .tau = 60, .beta = 120,
-                .gamma1 = 1 << 19, .gamma2 = (Params.Q - 1) / 32, .omega = 75,
+                .k = 8,
+                .l = 7,
+                .eta = 2,
+                .tau = 60,
+                .beta = 120,
+                .gamma1 = 1 << 19,
+                .gamma2 = (Params.Q - 1) / 32,
+                .omega = 75,
             },
         };
     }
@@ -78,9 +96,9 @@ pub const Poly = struct {
         for (0..Params.N) |i| {
             const idx = i * 3;
             if (idx + 2 < bytes.len) {
-                poly.coeffs[i] = @as(u32, bytes[idx]) | 
-                               (@as(u32, bytes[idx + 1]) << 8) | 
-                               (@as(u32, bytes[idx + 2]) << 16);
+                poly.coeffs[i] = @as(u32, bytes[idx]) |
+                    (@as(u32, bytes[idx + 1]) << 8) |
+                    (@as(u32, bytes[idx + 2]) << 16);
                 poly.coeffs[i] = poly.coeffs[i] % Params.Q;
             }
         }
@@ -265,7 +283,7 @@ fn sampleEta(allocator: std.mem.Allocator, seed: []const u8, nonce: u16, eta: u3
     _ = allocator;
     _ = seed;
     _ = nonce;
-    
+
     var poly = Poly.zero();
     // Simplified implementation - in production would use SHAKE-256
     for (0..Params.N) |i| {
@@ -281,7 +299,7 @@ fn sampleGamma1(allocator: std.mem.Allocator, seed: []const u8, nonce: u16, gamm
     _ = allocator;
     _ = seed;
     _ = nonce;
-    
+
     var poly = Poly.zero();
     // Simplified implementation - in production would use SHAKE-256
     for (0..Params.N) |i| {
@@ -295,10 +313,10 @@ fn sampleGamma1(allocator: std.mem.Allocator, seed: []const u8, nonce: u16, gamm
 /// Generate ML-DSA keypair
 pub fn generateKeyPair(allocator: std.mem.Allocator, level: SecurityLevel) !KeyPair {
     const params = LevelParams.forLevel(level);
-    
+
     var public_key = try PublicKey.init(allocator, level);
     var secret_key = try SecretKey.init(allocator, level);
-    
+
     // Generate random seed
     // In production, use proper CSPRNG
     for (0..Params.SEEDBYTES) |i| {
@@ -306,16 +324,16 @@ pub fn generateKeyPair(allocator: std.mem.Allocator, level: SecurityLevel) !KeyP
         secret_key.rho[i] = public_key.rho[i];
         secret_key.key[i] = @truncate(i * 59 + 31);
     }
-    
+
     // Sample secret polynomials
     for (0..params.l) |i| {
         secret_key.s1[i] = try sampleEta(allocator, &secret_key.rho, @truncate(i), params.eta);
     }
-    
+
     for (0..params.k) |i| {
         secret_key.s2[i] = try sampleEta(allocator, &secret_key.rho, @truncate(params.l + i), params.eta);
     }
-    
+
     // Compute public key t1 = A * s1 + s2 (simplified)
     for (0..params.k) |i| {
         public_key.t1[i] = Poly.zero();
@@ -326,12 +344,12 @@ pub fn generateKeyPair(allocator: std.mem.Allocator, level: SecurityLevel) !KeyP
         }
         public_key.t1[i] = public_key.t1[i].add(secret_key.s2[i]);
     }
-    
+
     // Compute t0 (simplified)
     for (0..params.k) |i| {
         secret_key.t0[i] = public_key.t1[i].mulScalar(2);
     }
-    
+
     return KeyPair{
         .public_key = public_key,
         .secret_key = secret_key,
@@ -341,24 +359,24 @@ pub fn generateKeyPair(allocator: std.mem.Allocator, level: SecurityLevel) !KeyP
 /// Sign a message using ML-DSA
 pub fn sign(allocator: std.mem.Allocator, message: []const u8, secret_key: *const SecretKey, level: SecurityLevel) !Signature {
     const params = LevelParams.forLevel(level);
-    
+
     var signature = try Signature.init(allocator, level);
-    
+
     // Compute message hash
     const msg_hash = hash.sha256(message);
-    
+
     // Sample y polynomials
     var y = try allocator.alloc(Poly, params.l);
     defer allocator.free(y);
-    
+
     for (0..params.l) |i| {
         y[i] = try sampleGamma1(allocator, &msg_hash, @truncate(i), params.gamma1);
     }
-    
+
     // Compute w = A * y (simplified)
     var w = try allocator.alloc(Poly, params.k);
     defer allocator.free(w);
-    
+
     for (0..params.k) |i| {
         w[i] = Poly.zero();
         for (0..params.l) |j| {
@@ -367,21 +385,21 @@ pub fn sign(allocator: std.mem.Allocator, message: []const u8, secret_key: *cons
             w[i] = w[i].add(prod);
         }
     }
-    
+
     // Compute challenge c (simplified)
     var c_bytes: [32]u8 = undefined;
     for (0..32) |i| {
         c_bytes[i] = msg_hash[i] ^ @as(u8, @truncate(i));
     }
     signature.c = c_bytes;
-    
+
     // Compute z = y + c * s1 (simplified)
     for (0..params.l) |i| {
         const c_scalar = @as(u32, signature.c[i % 32]);
         const c_s1 = secret_key.s1[i].mulScalar(c_scalar);
         signature.z[i] = y[i].add(c_s1);
     }
-    
+
     // Compute hint h (simplified)
     for (0..params.k) |i| {
         signature.h[i] = Poly.zero();
@@ -390,7 +408,7 @@ pub fn sign(allocator: std.mem.Allocator, message: []const u8, secret_key: *cons
             signature.h[i].coeffs[j] = if (w[i].coeffs[j] > params.gamma2) 1 else 0;
         }
     }
-    
+
     return signature;
 }
 
@@ -398,37 +416,37 @@ pub fn sign(allocator: std.mem.Allocator, message: []const u8, secret_key: *cons
 pub fn verify(message: []const u8, signature: *const Signature, public_key: *const PublicKey, level: SecurityLevel) bool {
     const params = LevelParams.forLevel(level);
     _ = params;
-    
+
     // Compute message hash
     const msg_hash = hash.sha256(message);
-    
+
     // Verify challenge c (simplified)
     var expected_c: [32]u8 = undefined;
     for (0..32) |i| {
         expected_c[i] = msg_hash[i] ^ @as(u8, @truncate(i));
     }
-    
+
     // Check if c matches
     for (0..32) |i| {
         if (signature.c[i] != expected_c[i]) {
             return false;
         }
     }
-    
+
     // In a full implementation, would verify the mathematical relationship
     // between z, h, and the public key t1
     _ = public_key;
-    
+
     return true;
 }
 
 // Tests
 test "ML-DSA-44 key generation" {
     const allocator = std.testing.allocator;
-    
+
     var keypair = try generateKeyPair(allocator, .ML_DSA_44);
     defer keypair.deinit();
-    
+
     // Basic sanity checks
     try std.testing.expect(keypair.public_key.t1.len == 4);
     try std.testing.expect(keypair.secret_key.s1.len == 4);
@@ -437,17 +455,17 @@ test "ML-DSA-44 key generation" {
 
 test "ML-DSA-44 sign and verify" {
     const allocator = std.testing.allocator;
-    
+
     var keypair = try generateKeyPair(allocator, .ML_DSA_44);
     defer keypair.deinit();
-    
+
     const message = "Hello, ML-DSA!";
     var signature = try sign(allocator, message, &keypair.secret_key, .ML_DSA_44);
     defer signature.deinit();
-    
+
     const is_valid = verify(message, &signature, &keypair.public_key, .ML_DSA_44);
     try std.testing.expect(is_valid);
-    
+
     // Test with wrong message
     const wrong_message = "Wrong message";
     const is_invalid = verify(wrong_message, &signature, &keypair.public_key, .ML_DSA_44);
@@ -455,13 +473,13 @@ test "ML-DSA-44 sign and verify" {
 }
 
 test "ML-DSA polynomial operations" {
-    const poly1 = Poly.fromBytes(&[_]u8{1, 2, 3} ** 256);
-    const poly2 = Poly.fromBytes(&[_]u8{4, 5, 6} ** 256);
-    
+    const poly1 = Poly.fromBytes(&[_]u8{ 1, 2, 3 } ** 256);
+    const poly2 = Poly.fromBytes(&[_]u8{ 4, 5, 6 } ** 256);
+
     const sum = poly1.add(poly2);
     const diff = poly1.sub(poly2);
     const scaled = poly1.mulScalar(7);
-    
+
     try std.testing.expect(sum.coeffs[0] != 0);
     try std.testing.expect(diff.coeffs[0] != 0);
     try std.testing.expect(scaled.coeffs[0] != 0);

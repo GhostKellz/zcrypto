@@ -146,12 +146,12 @@ test "streaming sha256" {
 test "hmac sha256" {
     const key = "secret-key";
     const message = "Hello, HMAC!";
-    
+
     const result = hmacSha256(message, key);
-    
+
     // Test that we get a 32-byte result
     try std.testing.expectEqual(@as(usize, 32), result.len);
-    
+
     // Test deterministic - same input should give same output
     const result2 = hmacSha256(message, key);
     try std.testing.expectEqualSlices(u8, &result, &result2);
@@ -160,17 +160,17 @@ test "hmac sha256" {
 test "hmac sha512" {
     const key = "another-secret-key";
     const message = "Hello, HMAC-512!";
-    
+
     const result = hmacSha512(message, key);
-    
+
     try std.testing.expectEqual(@as(usize, 64), result.len);
 }
 
 test "hmac blake2s" {
     const key = "blake2s-secret";
     const message = "Blake2s HMAC test";
-    
+
     const result = hmacBlake2s(message, key);
-    
+
     try std.testing.expectEqual(@as(usize, 32), result.len);
 }

@@ -33,23 +33,23 @@ pub fn chacha20_avx512(
 ) void {
     // ChaCha20 constants
     const constants = [4]u32{ 0x61707865, 0x3320646e, 0x79622d32, 0x6b206574 };
-    
+
     var state: [16]u32 = undefined;
-    
+
     // Initialize state
     @memcpy(state[0..4], &constants);
     @memcpy(std.mem.asBytes(state[4..12]), key[0..32]);
     state[12] = counter;
     @memcpy(std.mem.asBytes(state[13..16]), nonce[0..12]);
-    
+
     // Simple implementation (would be AVX-512 optimized in production)
     var i: usize = 0;
     while (i < input.len) : (i += 64) {
         const chunk_size = @min(64, input.len - i);
-        
+
         // ChaCha20 quarter round (simplified)
         var working_state = state;
-        
+
         // 20 rounds of ChaCha20
         for (0..10) |_| {
             // Quarter rounds
@@ -62,18 +62,18 @@ pub fn chacha20_avx512(
             quarterRound(&working_state, 2, 7, 8, 13);
             quarterRound(&working_state, 3, 4, 9, 14);
         }
-        
+
         // Add original state
         for (0..16) |j| {
             working_state[j] +%= state[j];
         }
-        
+
         // XOR with input
         const keystream = std.mem.asBytes(&working_state);
         for (0..chunk_size) |j| {
             output[i + j] = input[i + j] ^ keystream[j];
         }
-        
+
         state[12] +%= 1; // Increment counter
     }
 }
@@ -83,15 +83,15 @@ fn quarterRound(state: []u32, a: usize, b: usize, c: usize, d: usize) void {
     state[a] +%= state[b];
     state[d] ^= state[a];
     state[d] = std.math.rotl(u32, state[d], 16);
-    
+
     state[c] +%= state[d];
     state[b] ^= state[c];
     state[b] = std.math.rotl(u32, state[b], 12);
-    
+
     state[a] +%= state[b];
     state[d] ^= state[a];
     state[d] = std.math.rotl(u32, state[d], 8);
-    
+
     state[c] +%= state[d];
     state[b] ^= state[c];
     state[b] = std.math.rotl(u32, state[b], 7);
@@ -101,10 +101,10 @@ fn quarterRound(state: []u32, a: usize, b: usize, c: usize, d: usize) void {
 pub fn curve25519_mul_avx2(point: *[32]u8, scalar: []const u8) void {
     // Simplified scalar multiplication (would use optimized field arithmetic)
     _ = scalar;
-    
+
     // Montgomery ladder implementation (placeholder)
     var result: [32]u8 = [_]u8{1} ++ [_]u8{0} ** 31;
-    
+
     for (scalar) |byte| {
         for (0..8) |bit| {
             if ((byte >> @intCast(bit)) & 1 == 1) {
@@ -122,7 +122,7 @@ pub fn curve25519_mul_avx2(point: *[32]u8, scalar: []const u8) void {
             }
         }
     }
-    
+
     @memcpy(point, &result);
 }
 
@@ -130,7 +130,7 @@ pub fn curve25519_mul_avx2(point: *[32]u8, scalar: []const u8) void {
 pub fn poly_mul_ntt_avx2(a: []const u16, b: []const u16, result: []u16) void {
     // Simplified NTT multiplication (would use AVX2 in production)
     const n = @min(a.len, @min(b.len, result.len));
-    
+
     for (0..n) |i| {
         var sum: u32 = 0;
         for (0..i + 1) |j| {
@@ -172,14 +172,14 @@ pub const ConstantTime = struct {
     /// Constant-time byte comparison
     pub fn memcmp(a: []const u8, b: []const u8) bool {
         if (a.len != b.len) return false;
-        
+
         var result: u8 = 0;
         for (a, b) |x, y| {
             result |= x ^ y;
         }
         return result == 0;
     }
-    
+
     /// Constant-time conditional copy
     pub fn cmov(dest: []u8, src: []const u8, condition: bool) void {
         const mask: u8 = if (condition) 0xFF else 0x00;
@@ -187,7 +187,7 @@ pub const ConstantTime = struct {
             d.* ^= mask & (d.* ^ s);
         }
     }
-    
+
     /// Constant-time conditional select
     pub fn cselect(a: u32, b: u32, condition: bool) u32 {
         const mask: u32 = if (condition) 0xFFFFFFFF else 0x00000000;
@@ -201,14 +201,14 @@ test "x86_64 optimizations" {
     var nonce = [_]u8{0x00} ** 12;
     var input = [_]u8{0x00} ** 64;
     var output = [_]u8{0x00} ** 64;
-    
+
     chacha20_avx512(&input, &key, &nonce, 0, &output);
-    
+
     // Test constant-time operations
     const a = [_]u8{ 1, 2, 3, 4 };
     const b = [_]u8{ 1, 2, 3, 4 };
     const c = [_]u8{ 1, 2, 3, 5 };
-    
+
     try std.testing.expect(ConstantTime.memcmp(&a, &b));
     try std.testing.expect(!ConstantTime.memcmp(&a, &c));
 }

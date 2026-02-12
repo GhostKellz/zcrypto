@@ -178,20 +178,20 @@ pub const Signal = struct {
         // Encrypt using ChaCha20-Poly1305
         const ChaCha20Poly1305 = crypto.aead.chacha_poly.ChaCha20Poly1305;
         const cipher = ChaCha20Poly1305.init(message_key);
-        
+
         const ciphertext = try allocator.alloc(u8, plaintext.len + 12 + 16); // plaintext + nonce + tag
-        
+
         // Generate random nonce
         var nonce: [12]u8 = undefined;
         rand.fill(&nonce);
         @memcpy(ciphertext[0..12], &nonce);
-        
+
         // Encrypt with associated data (empty)
         const encrypted_len = cipher.encrypt(ciphertext[12..], plaintext, "", nonce) catch {
             allocator.free(ciphertext);
             return ProtocolError.MessageEncryptionFailed;
         };
-        
+
         if (encrypted_len != plaintext.len + 16) {
             allocator.free(ciphertext);
             return ProtocolError.MessageEncryptionFailed;
@@ -210,15 +210,15 @@ pub const Signal = struct {
 
         // Decrypt using ChaCha20-Poly1305
         if (ciphertext.len < 28) return ProtocolError.MessageDecryptionFailed; // 12 nonce + 16 tag minimum
-        
+
         const ChaCha20Poly1305 = crypto.aead.chacha_poly.ChaCha20Poly1305;
         const cipher = ChaCha20Poly1305.init(message_key);
-        
+
         const nonce = ciphertext[0..12];
         const encrypted_data = ciphertext[12..];
         const plaintext_len = encrypted_data.len - 16;
         const plaintext = try allocator.alloc(u8, plaintext_len);
-        
+
         // Decrypt with associated data (empty)
         cipher.decrypt(plaintext, encrypted_data, "", nonce.*) catch {
             allocator.free(plaintext);
@@ -347,12 +347,12 @@ pub const Noise = struct {
                 // Encrypt using ChaCha20-Poly1305
                 const ChaCha20Poly1305 = crypto.aead.chacha_poly.ChaCha20Poly1305;
                 const cipher = ChaCha20Poly1305.init(key);
-                
+
                 // Encrypt with associated data (empty for Noise)
                 const encrypted_len = cipher.encrypt(ciphertext, plaintext, "", nonce) catch {
                     return ProtocolError.MessageEncryptionFailed;
                 };
-                
+
                 if (encrypted_len != plaintext.len + TAGLEN) {
                     return ProtocolError.MessageEncryptionFailed;
                 }
@@ -378,11 +378,11 @@ pub const Noise = struct {
                 // Decrypt using ChaCha20-Poly1305
                 const ChaCha20Poly1305 = crypto.aead.chacha_poly.ChaCha20Poly1305;
                 const cipher = ChaCha20Poly1305.init(key);
-                
+
                 // Convert nonce to bytes
                 var nonce: [12]u8 = std.mem.zeroes([12]u8);
                 std.mem.writeIntLittle(u64, nonce[4..12], self.n);
-                
+
                 // Decrypt with associated data (empty for Noise)
                 cipher.decrypt(plaintext, ciphertext, "", nonce) catch {
                     allocator.free(plaintext);

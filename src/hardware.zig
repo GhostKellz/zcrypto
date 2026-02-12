@@ -218,18 +218,18 @@ pub const DevCrypto = struct {
     pub fn isAvailable(self: DevCrypto) bool {
         return self.fd != null;
     }
-    
+
     /// Perform AES encryption using /dev/crypto
     pub fn aesEncrypt(self: *DevCrypto, key: []const u8, plaintext: []const u8, ciphertext: []u8) !void {
         if (self.fd == null) {
             return error.DeviceNotAvailable;
         }
-        
+
         // Mock implementation - real implementation would use ioctl calls
         _ = key;
         _ = plaintext;
         _ = ciphertext;
-        
+
         // In reality, this would:
         // 1. Create crypto session with CIOCGSESSION ioctl
         // 2. Setup crypto operation with CIOCCRYPT ioctl
@@ -241,14 +241,14 @@ pub const DevCrypto = struct {
 /// OpenSSL engine integration
 pub const OpenSSLEngine = struct {
     engine_handle: ?*anyopaque = null,
-    
+
     pub fn init(engine_name: []const u8) !OpenSSLEngine {
         _ = engine_name;
         // Try to load OpenSSL engine
         // In real implementation, this would use dlopen/dlsym
         return OpenSSLEngine{ .engine_handle = null };
     }
-    
+
     pub fn deinit(self: *OpenSSLEngine) void {
         if (self.engine_handle) |handle| {
             _ = handle;
@@ -256,21 +256,21 @@ pub const OpenSSLEngine = struct {
             self.engine_handle = null;
         }
     }
-    
+
     pub fn isAvailable(self: OpenSSLEngine) bool {
         return self.engine_handle != null;
     }
-    
+
     /// Use OpenSSL engine for crypto operations
     pub fn engineCrypto(self: *OpenSSLEngine, operation: []const u8, input: []const u8, output: []u8) !void {
         if (self.engine_handle == null) {
             return error.EngineNotLoaded;
         }
-        
+
         _ = operation;
         _ = input;
         _ = output;
-        
+
         // In reality, this would call OpenSSL engine functions
         return error.NotImplemented;
     }
@@ -468,7 +468,7 @@ test "/dev/crypto availability" {
         else => return err,
     };
     defer dev_crypto.deinit();
-    
+
     // Test that we can detect availability
     _ = dev_crypto.isAvailable();
 }
@@ -476,7 +476,7 @@ test "/dev/crypto availability" {
 test "OpenSSL engine loading" {
     var engine = try OpenSSLEngine.init("aesni");
     defer engine.deinit();
-    
+
     // Engine likely won't be available in test environment
     try testing.expect(!engine.isAvailable());
 }

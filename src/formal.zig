@@ -87,14 +87,14 @@ pub const ConstantTimeVerifier = struct {
         // Multiple rounds of measurement for statistical reliability
         const num_rounds = 10;
         const warm_up_rounds = 3;
-        
+
         // Warm-up phase to stabilize caches and branch prediction
         for (0..warm_up_rounds) |_| {
             for (inputs) |input| {
                 _ = func(input);
             }
         }
-        
+
         // Actual measurement phase with multiple rounds
         for (0..num_rounds) |_| {
             for (inputs) |input| {
@@ -113,18 +113,18 @@ pub const ConstantTimeVerifier = struct {
 
         // Sort for median calculation
         std.mem.sort(u64, times, {}, std.sort.asc(u64));
-        
+
         const min_time = times[0];
         const max_time = times[times.len - 1];
         const median_time = times[times.len / 2];
-        
+
         // Calculate variance and standard deviation
         var sum: u64 = 0;
         for (times) |time| {
             sum += time;
         }
         const mean_time = sum / times.len;
-        
+
         var variance_sum: u64 = 0;
         for (times) |time| {
             const diff = if (time > mean_time) time - mean_time else mean_time - time;
@@ -132,7 +132,7 @@ pub const ConstantTimeVerifier = struct {
         }
         const variance = variance_sum / times.len;
         const std_dev = std.math.sqrt(@as(f64, @floatFromInt(variance)));
-        
+
         // Multiple statistical measures for robust analysis
         const range_variation = if (median_time > 0) ((max_time - min_time) * 100) / median_time else 0;
         const cv_variation = if (mean_time > 0) (@as(u64, @intFromFloat(std_dev)) * 100) / mean_time else 0; // Coefficient of variation
@@ -142,15 +142,15 @@ pub const ConstantTimeVerifier = struct {
 
         // Production crypto security: robust statistical analysis
         // Account for legitimate system noise while detecting real timing attacks
-        
+
         // Check if the coefficient of variation is within acceptable bounds for crypto
         // CV < 10% indicates consistent timing behavior suitable for crypto operations
         const is_statistically_constant = cv_variation < 10;
-        
+
         // Check if the range variation is reasonable for the operation complexity
         // For simple operations, even 15% range variation can be acceptable if CV is low
         const range_acceptable = range_variation < 15 or (cv_variation < 5 and range_variation < 25);
-        
+
         if (is_statistically_constant and range_acceptable) {
             const proof = "Cryptographically constant-time verified with robust statistical analysis";
 
@@ -347,22 +347,22 @@ test "constant time verification" {
             // Simulates constant-time cryptographic operation
             // Always accesses the same amount of memory regardless of input
             var table: [256]u32 = undefined;
-            
+
             // Initialize with deterministic values
             for (&table, 0..) |*entry, i| {
                 entry.* = @intCast(i * 31 + 17); // Deterministic but spread values
             }
-            
+
             // Constant-time table lookup (always accesses all entries)
             var result: u32 = 0;
             const target_idx = x & 0xFF; // Use only low 8 bits
-            
+
             for (table, 0..) |entry, i| {
                 // Constant-time conditional: always compute, conditionally use
                 const mask = if (i == target_idx) ~@as(u32, 0) else 0;
                 result |= entry & mask;
             }
-            
+
             return result;
         }
     }.constantTimeMemoryAccess;

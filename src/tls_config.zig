@@ -88,7 +88,7 @@ pub const Certificate = struct {
             parsed.deinit();
         }
     }
-    
+
     /// Parse the certificate (lazy loading)
     pub fn parse(self: *Certificate, allocator: std.mem.Allocator) !*x509.Certificate {
         if (self.parsed == null) {
@@ -96,7 +96,7 @@ pub const Certificate = struct {
         }
         return &self.parsed.?;
     }
-    
+
     /// Create certificate from DER data
     pub fn fromDer(allocator: std.mem.Allocator, der: []const u8) !Certificate {
         return Certificate{
@@ -105,14 +105,14 @@ pub const Certificate = struct {
             .parsed = null,
         };
     }
-    
+
     /// Create certificate with chain from DER data
     pub fn fromDerWithChain(allocator: std.mem.Allocator, der: []const u8, chain: [][]const u8) !Certificate {
         const owned_chain = try allocator.alloc([]u8, chain.len);
         for (chain, 0..) |cert, i| {
             owned_chain[i] = try allocator.dupe(u8, cert);
         }
-        
+
         return Certificate{
             .der = try allocator.dupe(u8, der),
             .chain = owned_chain,
@@ -174,35 +174,35 @@ pub const TlsConfig = struct {
     min_version: TlsVersion = .tls_1_3,
     /// Maximum TLS version
     max_version: TlsVersion = .tls_1_3,
-    
+
     /// Enabled cipher suites
     cipher_suites: []const CipherSuite = &default_cipher_suites,
-    
+
     /// Server certificates and private key
     certificates: ?[]Certificate = null,
     private_key: ?PrivateKey = null,
-    
+
     /// Client configuration
     server_name: ?[]const u8 = null,
     insecure_skip_verify: bool = false,
     root_cas: ?[]Certificate = null,
-    
+
     /// ALPN protocols
     alpn_protocols: ?[][]const u8 = null,
-    
+
     /// Session management
     session_cache: ?SessionCache = null,
     enable_session_tickets: bool = true,
-    
+
     /// Performance settings
     max_fragment_size: u16 = 16384,
-    
+
     /// Session ticket keys (server only)
     session_ticket_keys: ?[][32]u8 = null,
-    
+
     /// Allocator for dynamic allocations
     allocator: std.mem.Allocator = undefined,
-    
+
     /// Memory ownership tracking (private)
     _owned: OwnedData = .{},
 
@@ -236,7 +236,7 @@ pub const TlsConfig = struct {
         config._owned.server_name = false; // Mark as reference
         return config;
     }
-    
+
     /// Set server name for SNI (creates an owned copy)
     pub fn withServerNameOwned(self: TlsConfig, name: []const u8) !TlsConfig {
         var config = self;
@@ -252,17 +252,17 @@ pub const TlsConfig = struct {
         config._owned.alpn_protocols = false; // Mark as reference
         return config;
     }
-    
+
     /// Set ALPN protocols (creates an owned copy)
     pub fn withALPNOwned(self: TlsConfig, protocols: [][]const u8) !TlsConfig {
         var config = self;
-        
+
         // Deep copy the protocols array
         const new_protocols = try config.allocator.alloc([]const u8, protocols.len);
         for (protocols, 0..) |proto, i| {
             new_protocols[i] = try config.allocator.dupe(u8, proto);
         }
-        
+
         config.alpn_protocols = new_protocols;
         config._owned.alpn_protocols = true; // Mark as owned
         return config;
@@ -322,7 +322,7 @@ pub const TlsConfig = struct {
         if (self.private_key != null and self.certificates == null) {
             return errors.ConfigError.MissingCertificate;
         }
-        
+
         // Validate certificates if present
         if (self.certificates) |certs| {
             for (certs) |*cert| {
@@ -332,7 +332,7 @@ pub const TlsConfig = struct {
                 }
             }
         }
-        
+
         // Validate root CAs if present
         if (self.root_cas) |cas| {
             for (cas) |*ca| {
@@ -343,28 +343,28 @@ pub const TlsConfig = struct {
             }
         }
     }
-    
+
     /// Verify server certificate against hostname (client-side)
     pub fn verifyCertificate(self: TlsConfig, cert_der: []const u8, hostname: ?[]const u8) !bool {
         if (self.insecure_skip_verify) {
             return true;
         }
-        
+
         const cert = try x509.Certificate.parse(self.allocator, cert_der);
         defer cert.deinit();
-        
+
         // Check validity period
         if (!cert.isValid()) {
             return error.CertificateExpired;
         }
-        
+
         // Check hostname if provided
         if (hostname) |host| {
             if (!try cert.isValidForHostname(host)) {
                 return error.HostnameMismatch;
             }
         }
-        
+
         // Check against root CAs if provided
         if (self.root_cas) |cas| {
             for (cas) |*ca| {
@@ -376,7 +376,7 @@ pub const TlsConfig = struct {
             }
             return error.UntrustedCertificate;
         }
-        
+
         // If no root CAs configured, accept any valid certificate
         return true;
     }
@@ -385,7 +385,7 @@ pub const TlsConfig = struct {
     pub fn clone(self: TlsConfig, allocator: std.mem.Allocator) !TlsConfig {
         var config = self;
         config.allocator = allocator;
-        
+
         // Mark all cloned data as owned
         config._owned = .{
             .server_name = self.server_name != null,
@@ -395,16 +395,16 @@ pub const TlsConfig = struct {
             .root_cas = self.root_cas != null,
             .session_ticket_keys = self.session_ticket_keys != null,
         };
-        
+
         // Deep copy slices
         if (self.cipher_suites.ptr != &default_cipher_suites) {
             config.cipher_suites = try allocator.dupe(CipherSuite, self.cipher_suites);
         }
-        
+
         if (self.server_name) |name| {
             config.server_name = try allocator.dupe(u8, name);
         }
-        
+
         if (self.alpn_protocols) |protocols| {
             const new_protocols = try allocator.alloc([]u8, protocols.len);
             for (protocols, 0..) |proto, i| {
@@ -412,9 +412,9 @@ pub const TlsConfig = struct {
             }
             config.alpn_protocols = new_protocols;
         }
-        
+
         // TODO: Clone certificates, root_cas, session_ticket_keys
-        
+
         return config;
     }
 
@@ -425,7 +425,7 @@ pub const TlsConfig = struct {
         if (self._owned.server_name and self.server_name != null) {
             self.allocator.free(self.server_name.?);
         }
-        
+
         // Free ALPN protocols if owned
         if (self._owned.alpn_protocols and self.alpn_protocols != null) {
             for (self.alpn_protocols.?) |proto| {
@@ -433,12 +433,12 @@ pub const TlsConfig = struct {
             }
             self.allocator.free(self.alpn_protocols.?);
         }
-        
+
         // Free cipher suites if owned
         if (self._owned.cipher_suites and self.cipher_suites.ptr != &default_cipher_suites) {
             self.allocator.free(self.cipher_suites);
         }
-        
+
         // Free certificates if owned
         if (self._owned.certificates and self.certificates != null) {
             for (self.certificates.?) |cert| {
@@ -446,12 +446,12 @@ pub const TlsConfig = struct {
             }
             self.allocator.free(self.certificates.?);
         }
-        
+
         // Free private key if owned
         if (self.private_key != null) {
             self.private_key.?.deinit(self.allocator);
         }
-        
+
         // Free root CAs if owned
         if (self._owned.root_cas and self.root_cas != null) {
             for (self.root_cas.?) |ca| {
@@ -459,7 +459,7 @@ pub const TlsConfig = struct {
             }
             self.allocator.free(self.root_cas.?);
         }
-        
+
         // Free session ticket keys if owned
         if (self._owned.session_ticket_keys and self.session_ticket_keys != null) {
             self.allocator.free(self.session_ticket_keys.?);
@@ -469,10 +469,10 @@ pub const TlsConfig = struct {
 
 test "TLS config initialization" {
     const allocator = std.testing.allocator;
-    
+
     const config = TlsConfig.init(allocator);
     defer config.deinit();
-    
+
     try std.testing.expectEqual(TlsVersion.tls_1_3, config.min_version);
     try std.testing.expectEqual(TlsVersion.tls_1_3, config.max_version);
     try std.testing.expectEqual(@as(usize, 3), config.cipher_suites.len);
@@ -480,14 +480,14 @@ test "TLS config initialization" {
 
 test "TLS config builder pattern" {
     const allocator = std.testing.allocator;
-    
+
     const protocols = [_][]const u8{ "h2", "http/1.1" };
     const config = TlsConfig.init(allocator)
         .withServerName("example.com")
         .withALPN(@constCast(&protocols))
         .withInsecureSkipVerify(true);
     defer config.deinit();
-    
+
     try std.testing.expectEqualStrings("example.com", config.server_name.?);
     try std.testing.expectEqual(true, config.insecure_skip_verify);
     try std.testing.expectEqual(@as(usize, 2), config.alpn_protocols.?.len);
@@ -495,12 +495,12 @@ test "TLS config builder pattern" {
 
 test "TLS config validation" {
     const allocator = std.testing.allocator;
-    
+
     // Valid config
     const valid_config = TlsConfig.init(allocator);
     defer valid_config.deinit();
     try valid_config.validate();
-    
+
     // Invalid version range
     const invalid_config = TlsConfig.init(allocator)
         .withVersions(.tls_1_3, .tls_1_2);
@@ -516,25 +516,25 @@ test "cipher suite properties" {
 
 test "TLS configuration memory ownership" {
     const allocator = std.testing.allocator;
-    
+
     // Test reference-based configuration (no memory to free)
     {
         const server_name = "test.example.com";
         const config = TlsConfig.init(allocator)
             .withServerName(server_name);
         defer config.deinit();
-        
+
         try std.testing.expectEqualStrings(server_name, config.server_name.?);
         try std.testing.expectEqual(false, config._owned.server_name);
     }
-    
+
     // Test owned configuration (memory should be freed)
     {
         const server_name = "test.example.com";
         const config = try TlsConfig.init(allocator)
             .withServerNameOwned(server_name);
         defer config.deinit();
-        
+
         try std.testing.expectEqualStrings(server_name, config.server_name.?);
         try std.testing.expectEqual(true, config._owned.server_name);
         // Memory will be freed by deinit()
@@ -543,13 +543,13 @@ test "TLS configuration memory ownership" {
 
 test "TLS configuration ALPN ownership" {
     const allocator = std.testing.allocator;
-    
+
     // Test owned ALPN protocols
     const protocols = [_][]const u8{ "h2", "http/1.1" };
     const config = try TlsConfig.init(allocator)
         .withALPNOwned(@constCast(&protocols));
     defer config.deinit();
-    
+
     try std.testing.expectEqual(@as(usize, 2), config.alpn_protocols.?.len);
     try std.testing.expectEqual(true, config._owned.alpn_protocols);
     try std.testing.expectEqualStrings("h2", config.alpn_protocols.?[0]);

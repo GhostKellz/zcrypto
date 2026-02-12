@@ -52,7 +52,7 @@ pub const X25519 = struct {
     pub fn computeSharedSecret(private_key: [PRIVATE_KEY_SIZE]u8, peer_public_key: [PUBLIC_KEY_SIZE]u8) ![SHARED_SECRET_SIZE]u8 {
         // Use real X25519 implementation from Zig's std.crypto
         const shared_secret = crypto.dh.X25519.scalarmult(private_key, peer_public_key) catch return error.InvalidKey;
-        
+
         // Check for weak shared secret (all zeros)
         var all_zeros = true;
         for (shared_secret) |byte| {
