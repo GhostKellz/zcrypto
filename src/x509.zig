@@ -104,13 +104,17 @@ pub const Extension = struct {
 pub const Validity = struct {
     not_before: i64, // Unix timestamp
     not_after: i64,  // Unix timestamp
-    
+
     pub fn isValid(self: Validity, timestamp: i64) bool {
         return timestamp >= self.not_before and timestamp <= self.not_after;
     }
-    
+
     pub fn isCurrentlyValid(self: Validity) bool {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch return false;
+        var ts: std.posix.timespec = undefined;
+        const rc = std.posix.system.clock_gettime(.REALTIME, &ts);
+        if (std.posix.errno(rc) != .SUCCESS) {
+            return false;
+        }
         return self.isValid(ts.sec);
     }
 };

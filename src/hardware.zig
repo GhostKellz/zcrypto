@@ -4,6 +4,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const rand = @import("rand.zig");
+const util = @import("util.zig");
 
 pub const HardwareAcceleration = struct {
     aes_ni: bool = false, // Intel AES-NI instructions
@@ -395,15 +396,13 @@ pub const Benchmark = struct {
         const features = HardwareAcceleration.detect();
         const hardware_available = features.aes_ni and features.pclmulqdq;
 
-        const start_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
-        const start_time = @as(i128, start_ts.sec) * std.time.ns_per_s + start_ts.nsec;
+        const start_time = (try util.getTimestampOrError()).toNanos();
 
         for (0..iterations) |_| {
             try HardwareCrypto.aesGcmEncryptHw(key, &nonce, plaintext, "", ciphertext, &tag);
         }
 
-        const end_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
-        const end_time = @as(i128, end_ts.sec) * std.time.ns_per_s + end_ts.nsec;
+        const end_time = (try util.getTimestampOrError()).toNanos();
         const total_time_ns = @as(u64, @intCast(end_time - start_time));
         const average_latency_ns = total_time_ns / iterations;
         const operations_per_second = (@as(f64, @floatFromInt(iterations)) * 1_000_000_000.0) / @as(f64, @floatFromInt(total_time_ns));

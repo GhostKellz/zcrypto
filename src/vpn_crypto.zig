@@ -10,6 +10,7 @@ const std = @import("std");
 const crypto = std.crypto;
 const Allocator = std.mem.Allocator;
 const rand = @import("rand.zig");
+const util = @import("util.zig");
 
 /// VPN-specific errors
 pub const VpnCryptoError = error{
@@ -57,10 +58,7 @@ pub const VpnTunnel = struct {
             .recv_key = [_]u8{0} ** 32,
             .send_counter = 0,
             .recv_counter = 0,
-            .last_key_rotation = blk: {
-                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-                break :blk ts.sec;
-            },
+            .last_key_rotation = util.getCurrentUnixTime() orelse 0,
             .obfuscation_key = [_]u8{0} ** 16,
         };
     }
@@ -92,13 +90,12 @@ pub const VpnTunnel = struct {
 
         self.send_counter = 0;
         self.recv_counter = 0;
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        self.last_key_rotation = ts.sec;
+        self.last_key_rotation = util.getCurrentUnixTime() orelse 0;
     }
 
     /// Rotate keys for long-lived tunnels
     pub fn rotateKeys(self: *VpnTunnel) !void {
-        const ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+        const ts = try util.getTimestampOrError();
         const current_time = ts.sec;
         if (current_time - self.last_key_rotation < @as(i64, @intCast(self.config.key_rotation_interval_ms / 1000))) {
             return; // Too early for rotation

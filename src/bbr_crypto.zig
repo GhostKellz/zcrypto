@@ -7,6 +7,7 @@
 const std = @import("std");
 const testing = std.testing;
 const hardware = @import("hardware.zig");
+const util = @import("util.zig");
 
 pub const BBRCryptoProfiler = struct {
     // Performance metrics
@@ -185,8 +186,7 @@ pub const BBRCryptoIntegration = struct {
     last_update_time: u64,
 
     pub fn init(profiler: *BBRCryptoProfiler, update_interval_ms: u32) BBRCryptoIntegration {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const now = @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
+        const now = util.getTimestampNanosOrZero();
         return BBRCryptoIntegration{
             .profiler = profiler,
             .last_metrics = profiler.getMetrics(),
@@ -218,8 +218,7 @@ pub const BBRCryptoIntegration = struct {
     }
 
     fn updateMetricsIfNeeded(self: *BBRCryptoIntegration) void {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch return;
-        const current_time = @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
+        const current_time = util.getTimestampNanos() orelse return;
         const elapsed_ms = @divTrunc((current_time - self.last_update_time), 1_000_000);
 
         if (elapsed_ms >= self.metrics_update_interval_ms) {
@@ -246,13 +245,13 @@ test "BBR crypto profiler basic operations" {
     var profiler = BBRCryptoProfiler.init(hw_features, 100); // 100ms window
 
     // Simulate encryption timing
-    const start_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
-    const start_time = @as(i128, start_ts.sec) * std.time.ns_per_s + start_ts.nsec;
+    const start_time = try util.getTimestampOrError();
+    const start_ns = start_time.toNanos();
     std.Thread.sleep(1000); // 1μs
-    const end_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
-    const end_time = @as(i128, end_ts.sec) * std.time.ns_per_s + end_ts.nsec;
+    const end_time = try util.getTimestampOrError();
+    const end_ns = end_time.toNanos();
 
-    profiler.recordEncryption(@intCast(start_time), @intCast(end_time), 1024);
+    profiler.recordEncryption(@intCast(start_ns), @intCast(end_ns), 1024);
 
     const metrics = profiler.getMetrics();
     try testing.expect(metrics.avg_encryption_latency_us > 0);

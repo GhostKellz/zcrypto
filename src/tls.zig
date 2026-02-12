@@ -620,13 +620,11 @@ const ApplicationSecretsData = struct {
 };
 
 fn tlsKeyDerivationWorker(task_data: *TlsKeyDerivationData) @import("async_crypto.zig").AsyncCryptoResult {
-    const start_ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-    const start_time = @as(i128, start_ts.sec) * std.time.ns_per_s + start_ts.nsec;
+    const start_time = util.getTimestampNanosOrZero();
     defer task_data.deinit();
 
     const traffic_keys = task_data.secrets.deriveKeys(task_data.allocator, task_data.is_client) catch |err| {
-        const end_ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const end_time = @as(i128, end_ts.sec) * std.time.ns_per_s + end_ts.nsec;
+        const end_time = util.getTimestampNanosOrZero();
         const error_msg = std.fmt.allocPrint(task_data.allocator, "TLS key derivation failed: {}", .{err}) catch "TLS key derivation failed";
         return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, @intCast(end_time - start_time));
     };
@@ -634,8 +632,7 @@ fn tlsKeyDerivationWorker(task_data: *TlsKeyDerivationData) @import("async_crypt
     // Serialize traffic keys to bytes for result
     const key_data = task_data.allocator.alloc(u8, 16 + 12 + 16) catch {
         traffic_keys.deinit();
-        const end_ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const end_time = @as(i128, end_ts.sec) * std.time.ns_per_s + end_ts.nsec;
+        const end_time = util.getTimestampNanosOrZero();
         const error_msg = task_data.allocator.dupe(u8, "Memory allocation failed") catch "Memory allocation failed";
         return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, @intCast(end_time - start_time));
     };
@@ -645,28 +642,24 @@ fn tlsKeyDerivationWorker(task_data: *TlsKeyDerivationData) @import("async_crypt
     @memcpy(key_data[28..44], &traffic_keys.hp);
     traffic_keys.deinit();
 
-    const end_ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-    const end_time = @as(i128, end_ts.sec) * std.time.ns_per_s + end_ts.nsec;
+    const end_time = util.getTimestampNanosOrZero();
     return @import("async_crypto.zig").AsyncCryptoResult.success_result(key_data, @intCast(end_time - start_time));
 }
 
 fn handshakeSecretsWorker(task_data: *HandshakeSecretsData) @import("async_crypto.zig").AsyncCryptoResult {
-    const start_ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-    const start_time = @as(i128, start_ts.sec) * std.time.ns_per_s + start_ts.nsec;
+    const start_time = util.getTimestampNanosOrZero();
     defer task_data.deinit();
 
     // Derive client and server handshake secrets
     const client_secret = kdf.hkdfExpandLabel(task_data.allocator, &task_data.handshake_secret, "c hs traffic", "", 32) catch |err| {
-        const end_ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const end_time = @as(i128, end_ts.sec) * std.time.ns_per_s + end_ts.nsec;
+        const end_time = util.getTimestampNanosOrZero();
         const error_msg = std.fmt.allocPrint(task_data.allocator, "Client handshake secret derivation failed: {}", .{err}) catch "Client handshake secret derivation failed";
         return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, @intCast(end_time - start_time));
     };
     defer task_data.allocator.free(client_secret);
 
     const server_secret = kdf.hkdfExpandLabel(task_data.allocator, &task_data.handshake_secret, "s hs traffic", "", 32) catch |err| {
-        const end_ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const end_time = @as(i128, end_ts.sec) * std.time.ns_per_s + end_ts.nsec;
+        const end_time = util.getTimestampNanosOrZero();
         const error_msg = std.fmt.allocPrint(task_data.allocator, "Server handshake secret derivation failed: {}", .{err}) catch "Server handshake secret derivation failed";
         return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, @intCast(end_time - start_time));
     };
@@ -674,8 +667,7 @@ fn handshakeSecretsWorker(task_data: *HandshakeSecretsData) @import("async_crypt
 
     // Combine secrets for result
     const combined_secrets = task_data.allocator.alloc(u8, 64) catch {
-        const end_ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const end_time = @as(i128, end_ts.sec) * std.time.ns_per_s + end_ts.nsec;
+        const end_time = util.getTimestampNanosOrZero();
         const error_msg = task_data.allocator.dupe(u8, "Memory allocation failed") catch "Memory allocation failed";
         return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, @intCast(end_time - start_time));
     };
@@ -683,28 +675,24 @@ fn handshakeSecretsWorker(task_data: *HandshakeSecretsData) @import("async_crypt
     @memcpy(combined_secrets[0..32], client_secret);
     @memcpy(combined_secrets[32..64], server_secret);
 
-    const end_ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-    const end_time = @as(i128, end_ts.sec) * std.time.ns_per_s + end_ts.nsec;
+    const end_time = util.getTimestampNanosOrZero();
     return @import("async_crypto.zig").AsyncCryptoResult.success_result(combined_secrets, @intCast(end_time - start_time));
 }
 
 fn applicationSecretsWorker(task_data: *ApplicationSecretsData) @import("async_crypto.zig").AsyncCryptoResult {
-    const start_ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-    const start_time = @as(i128, start_ts.sec) * std.time.ns_per_s + start_ts.nsec;
+    const start_time = util.getTimestampNanosOrZero();
     defer task_data.deinit();
 
     // Derive client and server application secrets
     const client_secret = kdf.hkdfExpandLabel(task_data.allocator, &task_data.master_secret, "c ap traffic", "", 32) catch |err| {
-        const end_ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const end_time = @as(i128, end_ts.sec) * std.time.ns_per_s + end_ts.nsec;
+        const end_time = util.getTimestampNanosOrZero();
         const error_msg = std.fmt.allocPrint(task_data.allocator, "Client application secret derivation failed: {}", .{err}) catch "Client application secret derivation failed";
         return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, @intCast(end_time - start_time));
     };
     defer task_data.allocator.free(client_secret);
 
     const server_secret = kdf.hkdfExpandLabel(task_data.allocator, &task_data.master_secret, "s ap traffic", "", 32) catch |err| {
-        const end_ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const end_time = @as(i128, end_ts.sec) * std.time.ns_per_s + end_ts.nsec;
+        const end_time = util.getTimestampNanosOrZero();
         const error_msg = std.fmt.allocPrint(task_data.allocator, "Server application secret derivation failed: {}", .{err}) catch "Server application secret derivation failed";
         return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, @intCast(end_time - start_time));
     };
@@ -712,8 +700,7 @@ fn applicationSecretsWorker(task_data: *ApplicationSecretsData) @import("async_c
 
     // Combine secrets for result
     const combined_secrets = task_data.allocator.alloc(u8, 64) catch {
-        const end_ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const end_time = @as(i128, end_ts.sec) * std.time.ns_per_s + end_ts.nsec;
+        const end_time = util.getTimestampNanosOrZero();
         const error_msg = task_data.allocator.dupe(u8, "Memory allocation failed") catch "Memory allocation failed";
         return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, @intCast(end_time - start_time));
     };
@@ -721,7 +708,6 @@ fn applicationSecretsWorker(task_data: *ApplicationSecretsData) @import("async_c
     @memcpy(combined_secrets[0..32], client_secret);
     @memcpy(combined_secrets[32..64], server_secret);
 
-    const end_ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-    const end_time = @as(i128, end_ts.sec) * std.time.ns_per_s + end_ts.nsec;
+    const end_time = util.getTimestampNanosOrZero();
     return @import("async_crypto.zig").AsyncCryptoResult.success_result(combined_secrets, @intCast(end_time - start_time));
 }

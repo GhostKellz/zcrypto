@@ -299,6 +299,44 @@ pub const QuicLabels = struct {
     pub const ku = "quic ku";
 };
 
+/// SSH/QUIC secret derivation support (draft-denis-ssh-quic)
+/// Allows bypassing TLS handshake when SSH key exchange is used instead
+pub const SshQuicSecrets = struct {
+    client_secret: [32]u8,
+    server_secret: [32]u8,
+
+    /// Derive QUIC secrets from SSH shared secret (K) and exchange hash (H)
+    /// per draft-denis-ssh-quic specification
+    pub fn deriveFromSshSecret(
+        shared_secret_k: []const u8,
+        exchange_hash_h: []const u8,
+    ) SshQuicSecrets {
+        var client_secret: [32]u8 = undefined;
+        var server_secret: [32]u8 = undefined;
+
+        // Use HKDF with exchange hash as salt and shared secret as IKM
+        var prk: [32]u8 = undefined;
+        QuicCrypto.HKDF.extract(exchange_hash_h, shared_secret_k, &prk);
+
+        // Derive client and server secrets using SSH/QUIC labels
+        QuicCrypto.HKDF.expandLabel(&prk, "ssh quic client", "", &client_secret);
+        QuicCrypto.HKDF.expandLabel(&prk, "ssh quic server", "", &server_secret);
+
+        return SshQuicSecrets{
+            .client_secret = client_secret,
+            .server_secret = server_secret,
+        };
+    }
+
+    /// Create from pre-computed secrets (for external SSH key exchange)
+    pub fn fromSecrets(client_secret: [32]u8, server_secret: [32]u8) SshQuicSecrets {
+        return SshQuicSecrets{
+            .client_secret = client_secret,
+            .server_secret = server_secret,
+        };
+    }
+};
+
 // High-level QUIC crypto context
 pub const QuicConnection = struct {
     allocator: std.mem.Allocator,
@@ -307,6 +345,53 @@ pub const QuicConnection = struct {
     server_secret: [32]u8,
     header_protection: QuicCrypto.HeaderProtection,
     aead: QuicCrypto.AEAD,
+    is_ssh_mode: bool = false,
+
+    /// Initialize from pre-computed secrets (SSH/QUIC mode or session resumption)
+    /// This bypasses TLS handshake and uses externally-derived secrets
+    pub fn initFromSecrets(
+        allocator: std.mem.Allocator,
+        client_secret: [32]u8,
+        server_secret: [32]u8,
+        cipher_suite: QuicCrypto.CipherSuite,
+        is_client: bool,
+    ) QuicConnection {
+        // Use client or server secret depending on role
+        const active_secret = if (is_client) client_secret else server_secret;
+
+        // Derive traffic keys from secret
+        var key: [32]u8 = undefined;
+        var hp_key: [32]u8 = undefined;
+
+        QuicCrypto.HKDF.expandLabel(&active_secret, QuicLabels.key, "", key[0..cipher_suite.keySize()]);
+        QuicCrypto.HKDF.expandLabel(&active_secret, QuicLabels.hp, "", hp_key[0..cipher_suite.keySize()]);
+
+        return QuicConnection{
+            .allocator = allocator,
+            .cipher_suite = cipher_suite,
+            .client_secret = client_secret,
+            .server_secret = server_secret,
+            .header_protection = QuicCrypto.HeaderProtection.init(cipher_suite, &hp_key),
+            .aead = QuicCrypto.AEAD.init(cipher_suite, &key),
+            .is_ssh_mode = true,
+        };
+    }
+
+    /// Initialize from SSH/QUIC secrets
+    pub fn initFromSshSecrets(
+        allocator: std.mem.Allocator,
+        ssh_secrets: SshQuicSecrets,
+        cipher_suite: QuicCrypto.CipherSuite,
+        is_client: bool,
+    ) QuicConnection {
+        return initFromSecrets(
+            allocator,
+            ssh_secrets.client_secret,
+            ssh_secrets.server_secret,
+            cipher_suite,
+            is_client,
+        );
+    }
 
     pub fn initFromConnectionId(allocator: std.mem.Allocator, connection_id: []const u8, cipher_suite: QuicCrypto.CipherSuite) !QuicConnection {
         // Derive initial secrets
@@ -424,4 +509,61 @@ test "Header protection" {
 
     try hp.remove(&packet, 5);
     try testing.expectEqual(original_first_byte, packet[0]);
+}
+
+test "SSH/QUIC secret derivation" {
+    // Simulate SSH shared secret K and exchange hash H
+    const shared_secret_k = "test-ssh-shared-secret-key-32b!";
+    const exchange_hash_h = "test-exchange-hash-for-ssh-quic";
+
+    // Derive QUIC secrets from SSH key exchange
+    const ssh_secrets = SshQuicSecrets.deriveFromSshSecret(shared_secret_k, exchange_hash_h);
+
+    // Client and server secrets should be different
+    try testing.expect(!std.mem.eql(u8, &ssh_secrets.client_secret, &ssh_secrets.server_secret));
+
+    // Secrets should not be all zeros
+    var client_all_zeros = true;
+    for (ssh_secrets.client_secret) |byte| {
+        if (byte != 0) {
+            client_all_zeros = false;
+            break;
+        }
+    }
+    try testing.expect(!client_all_zeros);
+}
+
+test "QuicConnection from SSH secrets" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    // Create SSH-derived secrets
+    const client_secret: [32]u8 = [_]u8{0x11} ** 32;
+    const server_secret: [32]u8 = [_]u8{0x22} ** 32;
+
+    // Initialize QUIC connection from pre-computed secrets (SSH mode)
+    const client_conn = QuicConnection.initFromSecrets(
+        allocator,
+        client_secret,
+        server_secret,
+        .chacha20_poly1305,
+        true, // is_client
+    );
+
+    const server_conn = QuicConnection.initFromSecrets(
+        allocator,
+        client_secret,
+        server_secret,
+        .chacha20_poly1305,
+        false, // is_server
+    );
+
+    // Both should be in SSH mode
+    try testing.expect(client_conn.is_ssh_mode);
+    try testing.expect(server_conn.is_ssh_mode);
+
+    // Secrets should be stored correctly
+    try testing.expectEqualSlices(u8, &client_secret, &client_conn.client_secret);
+    try testing.expectEqualSlices(u8, &server_secret, &server_conn.server_secret);
 }

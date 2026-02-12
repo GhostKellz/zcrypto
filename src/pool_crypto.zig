@@ -9,6 +9,7 @@
 const std = @import("std");
 const crypto = std.crypto;
 const Allocator = std.mem.Allocator;
+const util = @import("util.zig");
 
 /// Pool crypto errors
 pub const PoolCryptoError = error{
@@ -34,20 +35,15 @@ pub const CryptoContext = struct {
     is_compressed: bool,
 
     pub fn init(id: u64) CryptoContext {
+        const now = util.getCurrentUnixTime() orelse 0;
         return CryptoContext{
             .id = id,
             .encryption_key = [_]u8{0} ** 32,
             .decryption_key = [_]u8{0} ** 32,
             .send_counter = 0,
             .recv_counter = 0,
-            .creation_time = blk: {
-                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-                break :blk ts.sec;
-            },
-            .last_used = blk: {
-                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-                break :blk ts.sec;
-            },
+            .creation_time = now,
+            .last_used = now,
             .reference_count = 0,
             .is_compressed = false,
         };
@@ -76,8 +72,7 @@ pub const CryptoContext = struct {
 
         self.send_counter = 0;
         self.recv_counter = 0;
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        self.creation_time = ts.sec;
+        self.creation_time = util.getCurrentUnixTime() orelse 0;
         self.last_used = self.creation_time;
     }
 
@@ -162,14 +157,12 @@ pub const CryptoContext = struct {
 
     /// Update last used timestamp
     pub fn touch(self: *CryptoContext) void {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch return;
-        self.last_used = ts.sec;
+        self.last_used = util.getCurrentUnixTime() orelse return;
     }
 
     /// Check if context has expired
     pub fn hasExpired(self: CryptoContext, ttl_seconds: i64) bool {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch return true;
-        const current_time = ts.sec;
+        const current_time = util.getCurrentUnixTime() orelse return true;
         return (current_time - self.last_used) > ttl_seconds;
     }
 };
@@ -356,13 +349,13 @@ pub const SessionCache = struct {
             try self.evictOldest();
         }
 
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch return error.TimestampFailed;
+        const now = util.getCurrentUnixTime() orelse return error.TimestampFailed;
         const session_data = SessionData{
             .session_id = session_id,
             .resumption_key = resumption_key,
             .cipher_suite = cipher_suite,
-            .creation_time = ts.sec,
-            .last_used = ts.sec,
+            .creation_time = now,
+            .last_used = now,
             .use_count = 0,
         };
 
@@ -372,8 +365,7 @@ pub const SessionCache = struct {
     /// Resume a session
     pub fn resumeSession(self: *SessionCache, session_id: u64) ?SessionData {
         if (self.sessions.getPtr(session_id)) |session| {
-            const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch return null;
-            session.last_used = ts.sec;
+            session.last_used = util.getCurrentUnixTime() orelse return null;
             session.use_count += 1;
             return session.*;
         }
@@ -381,7 +373,7 @@ pub const SessionCache = struct {
     }
 
     fn evictOldest(self: *SessionCache) !void {
-        const ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+        const ts = try util.getTimestampOrError();
         var oldest_time: i64 = ts.sec;
         var oldest_id: ?u64 = null;
 

@@ -9,6 +9,7 @@ const asym = @import("asym.zig");
 const kdf = @import("kdf.zig");
 const hash = @import("hash.zig");
 const rand = @import("rand.zig");
+const util = @import("util.zig");
 
 /// Key rotation errors
 pub const KeyRotationError = error{
@@ -94,11 +95,10 @@ pub const KeyMetadata = struct {
     
     /// Create new key metadata
     pub fn init(key_type: KeyType, policy: RotationPolicy) KeyMetadata {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const current_time = @as(u64, @intCast(ts.sec));
+        const current_time = @as(u64, @intCast(util.getCurrentUnixTime() orelse 0));
         var id: [16]u8 = undefined;
         rand.fill(&id);
-        
+
         return KeyMetadata{
             .id = id,
             .key_type = key_type,
@@ -109,18 +109,16 @@ pub const KeyMetadata = struct {
             .generation = 0,
         };
     }
-    
+
     /// Check if key is expired
     pub fn isExpired(self: KeyMetadata) bool {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch return true;
-        const current_time = @as(u64, @intCast(ts.sec));
+        const current_time = @as(u64, @intCast(util.getCurrentUnixTime() orelse return true));
         return current_time > self.expires_at;
     }
-    
+
     /// Check if key needs rotation
     pub fn needsRotation(self: KeyMetadata, policy: RotationPolicy) bool {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch return true;
-        const current_time = @as(u64, @intCast(ts.sec));
+        const current_time = @as(u64, @intCast(util.getCurrentUnixTime() orelse return true));
         const age = current_time - self.created_at;
         return age >= policy.max_key_age;
     }
@@ -309,7 +307,7 @@ pub const KeyManager = struct {
     
     /// Check if any keys need rotation
     pub fn checkRotation(self: *KeyManager) !void {
-        const ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+        const ts = try util.getTimestampOrError();
         const current_time = @as(u64, @intCast(ts.sec));
         
         // Check if it's time to check rotation
@@ -336,7 +334,7 @@ pub const KeyManager = struct {
     
     /// Clean up expired keys
     pub fn cleanupExpiredKeys(self: *KeyManager) !void {
-        const ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+        const ts = try util.getTimestampOrError();
         const current_time = @as(u64, @intCast(ts.sec));
         
         var keys_to_remove: std.ArrayList([16]u8) = .empty;

@@ -10,6 +10,7 @@ const rand = @import("rand.zig");
 const testing = std.testing;
 const hash = @import("hash.zig");
 const sym = @import("sym.zig");
+const util = @import("util.zig");
 
 /// Check if a file exists using OS-level syscall
 fn fileExists(path: []const u8) bool {
@@ -132,8 +133,7 @@ pub const TPMProvider = struct {
         // TPM random number generation implementation
         // This would interface with the actual TPM through appropriate drivers
         // For now, we'll use a secure fallback
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const seed = @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
+        const seed = util.getTimestampNanosOrZero();
         var prng = std.Random.DefaultPrng.init(@as(u64, @intCast(seed & 0xFFFFFFFFFFFFFFFF)));
         prng.fill(buffer);
 

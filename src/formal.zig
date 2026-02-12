@@ -11,6 +11,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const testing = std.testing;
+const util = @import("util.zig");
 
 pub const FormalError = error{
     VerificationFailed,
@@ -78,8 +79,7 @@ pub const VerificationResult = struct {
 pub const ConstantTimeVerifier = struct {
     /// Verify that a function executes in constant time
     pub fn verify(comptime T: type, comptime func: anytype, inputs: []const T) !VerificationResult {
-        const start_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
-        const start_time = @as(i128, start_ts.sec) * std.time.ns_per_s + start_ts.nsec;
+        const start_time = (try util.getTimestampOrError()).toNanos();
 
         var all_execution_times: std.ArrayList(u64) = .{};
         defer all_execution_times.deinit(std.testing.allocator);
@@ -98,11 +98,9 @@ pub const ConstantTimeVerifier = struct {
         // Actual measurement phase with multiple rounds
         for (0..num_rounds) |_| {
             for (inputs) |input| {
-                const func_start_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
-                const func_start = @as(i128, func_start_ts.sec) * std.time.ns_per_s + func_start_ts.nsec;
+                const func_start = (try util.getTimestampOrError()).toNanos();
                 _ = func(input);
-                const func_end_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
-                const func_end = @as(i128, func_end_ts.sec) * std.time.ns_per_s + func_end_ts.nsec;
+                const func_end = (try util.getTimestampOrError()).toNanos();
                 try all_execution_times.append(std.testing.allocator, @intCast(func_end - func_start));
             }
         }
@@ -139,8 +137,7 @@ pub const ConstantTimeVerifier = struct {
         const range_variation = if (median_time > 0) ((max_time - min_time) * 100) / median_time else 0;
         const cv_variation = if (mean_time > 0) (@as(u64, @intFromFloat(std_dev)) * 100) / mean_time else 0; // Coefficient of variation
 
-        const end_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
-        const end_time = @as(i128, end_ts.sec) * std.time.ns_per_s + end_ts.nsec;
+        const end_time = (try util.getTimestampOrError()).toNanos();
         const total_time: u64 = @intCast(end_time - start_time);
 
         // Production crypto security: robust statistical analysis
@@ -197,8 +194,7 @@ pub const MemorySafetyVerifier = struct {
 
     /// Verify memory safety (no leaks, no double-free)
     pub fn verify(self: *MemorySafetyVerifier) !VerificationResult {
-        const start_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
-        const start_time = @as(i128, start_ts.sec) * std.time.ns_per_s + start_ts.nsec;
+        const start_time = (try util.getTimestampOrError()).toNanos();
 
         // Check for memory leaks
         var leaked_count: usize = 0;
@@ -223,8 +219,7 @@ pub const MemorySafetyVerifier = struct {
             }
         }
 
-        const end_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
-        const end_time = @as(i128, end_ts.sec) * std.time.ns_per_s + end_ts.nsec;
+        const end_time = (try util.getTimestampOrError()).toNanos();
         const total_time: u64 = @intCast(end_time - start_time);
 
         if (leaked_count == 0 and double_free_count == 0) {
@@ -243,8 +238,7 @@ pub const MemorySafetyVerifier = struct {
 pub const SideChannelVerifier = struct {
     /// Verify resistance to cache timing attacks
     pub fn verifyCacheTimingResistance(comptime func: anytype, test_inputs: anytype) !VerificationResult {
-        const start_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
-        const start_time = @as(i128, start_ts.sec) * std.time.ns_per_s + start_ts.nsec;
+        const start_time = (try util.getTimestampOrError()).toNanos();
 
         // Measure cache behavior using performance counters (simplified)
         var cache_misses: std.ArrayList(u64) = .{};
@@ -258,11 +252,9 @@ pub const SideChannelVerifier = struct {
                 dummy[i] = @intCast(i % 256);
             }
 
-            const cache_start_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
-            const cache_start = @as(i128, cache_start_ts.sec) * std.time.ns_per_s + cache_start_ts.nsec;
+            const cache_start = (try util.getTimestampOrError()).toNanos();
             _ = func(input);
-            const cache_end_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
-            const cache_end = @as(i128, cache_end_ts.sec) * std.time.ns_per_s + cache_end_ts.nsec;
+            const cache_end = (try util.getTimestampOrError()).toNanos();
 
             try cache_misses.append(std.testing.allocator, @intCast(cache_end - cache_start));
         }
@@ -277,8 +269,7 @@ pub const SideChannelVerifier = struct {
             max_time = @max(max_time, time);
         }
 
-        const end_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
-        const end_time = @as(i128, end_ts.sec) * std.time.ns_per_s + end_ts.nsec;
+        const end_time = (try util.getTimestampOrError()).toNanos();
         const total_time: u64 = @intCast(end_time - start_time);
 
         // Side-channel resistance threshold
@@ -301,8 +292,7 @@ pub const SideChannelVerifier = struct {
 pub const PostQuantumVerifier = struct {
     /// Verify that a cryptographic primitive is post-quantum secure
     pub fn verifyPQSecurity(algorithm_name: []const u8, key_size: usize, security_level: u8) !VerificationResult {
-        const start_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
-        const start_time = @as(i128, start_ts.sec) * std.time.ns_per_s + start_ts.nsec;
+        const start_time = (try util.getTimestampOrError()).toNanos();
 
         // Use key_size for security analysis
         _ = key_size; // TODO: Incorporate key size into security analysis
@@ -322,8 +312,7 @@ pub const PostQuantumVerifier = struct {
         const min_security_level: u8 = 128; // bits
         const sufficient_security = security_level >= min_security_level;
 
-        const end_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
-        const end_time = @as(i128, end_ts.sec) * std.time.ns_per_s + end_ts.nsec;
+        const end_time = (try util.getTimestampOrError()).toNanos();
         const total_time: u64 = @intCast(end_time - start_time);
 
         if (is_pq_safe and sufficient_security) {

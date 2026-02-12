@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const zcrypto = @import("zcrypto");
+const builtin = @import("builtin");
 
 const ITERATIONS = 10000;
 const LARGE_DATA_SIZE = 1024 * 1024; // 1MB
@@ -18,16 +19,24 @@ var test_nonce: [12]u8 = undefined;
 var test_plaintext: []u8 = undefined;
 var test_allocator: std.mem.Allocator = undefined;
 
+/// Cross-platform timestamp helper for Zig 0.16.0-dev compatibility
+fn getTimestampNs() !i128 {
+    var ts: std.posix.timespec = undefined;
+    const rc = std.posix.system.clock_gettime(.REALTIME, &ts);
+    if (std.posix.errno(rc) != .SUCCESS) {
+        return error.ClockGetTimeFailed;
+    }
+    return @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
+}
+
 fn benchmark(comptime name: []const u8, iterations: u32, func: anytype) !void {
-    const start_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
-    const start_time = @as(i128, start_ts.sec) * std.time.ns_per_s + start_ts.nsec;
+    const start_time = try getTimestampNs();
 
     for (0..iterations) |_| {
         try func();
     }
 
-    const end_ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
-    const end_time = @as(i128, end_ts.sec) * std.time.ns_per_s + end_ts.nsec;
+    const end_time = try getTimestampNs();
     const duration_ns = @as(f64, @floatFromInt(end_time - start_time));
     const duration_ms = duration_ns / 1_000_000.0;
     const ops_per_sec = @as(f64, @floatFromInt(iterations)) / (duration_ns / 1_000_000_000.0);

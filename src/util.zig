@@ -1,9 +1,68 @@
 //! Cryptographic utilities
 //!
 //! Helper functions for constant-time operations, padding, endian conversion,
-//! and other cryptographic utilities.
+//! timestamp utilities, and other cryptographic utilities.
 
 const std = @import("std");
+
+// =============================================================================
+// TIMESTAMP UTILITIES (Zig 0.16.0-dev compatible)
+// =============================================================================
+
+/// Timestamp result containing seconds and nanoseconds
+pub const Timestamp = struct {
+    sec: i64,
+    nsec: i64,
+
+    /// Convert to nanoseconds since epoch
+    pub fn toNanos(self: Timestamp) i128 {
+        return @as(i128, self.sec) * std.time.ns_per_s + self.nsec;
+    }
+
+    /// Get Unix timestamp in seconds
+    pub fn toUnixSeconds(self: Timestamp) i64 {
+        return self.sec;
+    }
+};
+
+/// Get current realtime timestamp (Zig 0.16.0-dev compatible)
+/// Returns null on error for use in contexts where errors can't be propagated
+pub fn getTimestamp() ?Timestamp {
+    var ts: std.posix.timespec = undefined;
+    const rc = std.posix.system.clock_gettime(.REALTIME, &ts);
+    if (std.posix.errno(rc) != .SUCCESS) {
+        return null;
+    }
+    return Timestamp{ .sec = ts.sec, .nsec = ts.nsec };
+}
+
+/// Get current realtime timestamp, returning error on failure
+pub fn getTimestampOrError() !Timestamp {
+    var ts: std.posix.timespec = undefined;
+    const rc = std.posix.system.clock_gettime(.REALTIME, &ts);
+    if (std.posix.errno(rc) != .SUCCESS) {
+        return error.ClockGetTimeFailed;
+    }
+    return Timestamp{ .sec = ts.sec, .nsec = ts.nsec };
+}
+
+/// Get current Unix timestamp in seconds
+pub fn getCurrentUnixTime() ?i64 {
+    const ts = getTimestamp() orelse return null;
+    return ts.sec;
+}
+
+/// Get current timestamp in nanoseconds (for benchmarking)
+pub fn getTimestampNanos() ?i128 {
+    const ts = getTimestamp() orelse return null;
+    return ts.toNanos();
+}
+
+/// Get current timestamp in nanoseconds, returning 0 on failure
+/// Useful for timing measurements where failure is acceptable
+pub fn getTimestampNanosOrZero() i128 {
+    return getTimestampNanos() orelse 0;
+}
 
 /// Constant-time comparison of two byte slices (matches documentation API)
 pub fn constantTimeCompare(a: []const u8, b: []const u8) bool {

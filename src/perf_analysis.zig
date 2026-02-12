@@ -6,6 +6,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const testing = std.testing;
+const util = @import("util.zig");
 
 pub const AnalysisError = error{
     InsufficientData,
@@ -209,8 +210,7 @@ pub const MemoryLeakDetector = struct {
 
     /// Record memory allocation
     pub fn recordAllocation(self: *MemoryLeakDetector, address: usize, size: usize, call_site: ?[]const u8) !void {
-        const ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
-        const timestamp = @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
+        const timestamp = (try util.getTimestampOrError()).toNanos();
 
         const record = AllocationRecord{
             .size = size,
@@ -238,8 +238,7 @@ pub const MemoryLeakDetector = struct {
     /// Record memory deallocation
     pub fn recordDeallocation(self: *MemoryLeakDetector, address: usize) !void {
         if (self.allocations.get(address)) |record| {
-            const ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
-            const timestamp = @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
+            const timestamp = (try util.getTimestampOrError()).toNanos();
 
             try self.allocation_timeline.append(self.allocator, AllocationEvent{
                 .timestamp = timestamp,
@@ -261,8 +260,7 @@ pub const MemoryLeakDetector = struct {
 
         var iterator = self.allocations.iterator();
         while (iterator.next()) |entry| {
-            const ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
-            const now = @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
+            const now = (try util.getTimestampOrError()).toNanos();
             const leak = LeakDetail{
                 .address = entry.key_ptr.*,
                 .size = entry.value_ptr.size,
