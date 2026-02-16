@@ -170,7 +170,7 @@ pub const TlsConnection = struct {
         self.handshake_state = .received_client_hello;
 
         // Generate server random
-        rand.random(&self.server_random);
+        rand.fill(&self.server_random);
 
         // Send ServerHello
         try self.sendServerHello();
@@ -324,31 +324,47 @@ pub const TlsConnection = struct {
             return error.ExpectedClientHello;
         }
 
-        var stream = std.io.fixedBufferStream(msg.data);
-        const reader = stream.reader();
+        // Parse ClientHello using manual buffer position tracking
+        var pos: usize = 0;
 
-        // Legacy version
-        _ = try reader.readInt(u16, .big);
+        // Legacy version (2 bytes)
+        if (pos + 2 > msg.data.len) return error.TruncatedMessage;
+        _ = std.mem.readInt(u16, msg.data[pos..][0..2], .big);
+        pos += 2;
 
-        // Client random
-        _ = try reader.readAll(&self.client_random);
+        // Client random (32 bytes)
+        if (pos + 32 > msg.data.len) return error.TruncatedMessage;
+        @memcpy(&self.client_random, msg.data[pos..][0..32]);
+        pos += 32;
 
         // Session ID
-        const session_id_len = try reader.readByte();
+        if (pos + 1 > msg.data.len) return error.TruncatedMessage;
+        const session_id_len = msg.data[pos];
+        pos += 1;
         if (session_id_len > 0) {
-            try reader.skipBytes(session_id_len, .{});
+            if (pos + session_id_len > msg.data.len) return error.TruncatedMessage;
+            pos += session_id_len;
         }
 
         // Cipher suites
-        const cipher_suites_len = try reader.readInt(u16, .big);
+        if (pos + 2 > msg.data.len) return error.TruncatedMessage;
+        const cipher_suites_len = std.mem.readInt(u16, msg.data[pos..][0..2], .big);
+        pos += 2;
         const num_suites = cipher_suites_len / 2;
 
         // Select a cipher suite
         var selected = false;
         var i: usize = 0;
         while (i < num_suites) : (i += 1) {
-            const suite_value = try reader.readInt(u16, .big);
-            const suite = std.meta.intToEnum(tls_config.CipherSuite, suite_value) catch continue;
+            if (pos + 2 > msg.data.len) return error.TruncatedMessage;
+            const suite_value = std.mem.readInt(u16, msg.data[pos..][0..2], .big);
+            pos += 2;
+            const suite: tls_config.CipherSuite = switch (suite_value) {
+                0x1301 => .TLS_AES_128_GCM_SHA256,
+                0x1302 => .TLS_AES_256_GCM_SHA384,
+                0x1303 => .TLS_CHACHA20_POLY1305_SHA256,
+                else => continue,
+            };
 
             // Check if this suite is in our configured list
             for (self.config.cipher_suites) |configured_suite| {
@@ -368,23 +384,52 @@ pub const TlsConnection = struct {
 
         // Skip remaining cipher suites
         if (i < num_suites - 1) {
-            try reader.skipBytes((num_suites - i - 1) * 2, .{});
+            const skip_len = (num_suites - i - 1) * 2;
+            if (pos + skip_len > msg.data.len) return error.TruncatedMessage;
+            pos += skip_len;
         }
 
         // Compression methods
-        const compression_len = try reader.readByte();
-        try reader.skipBytes(compression_len, .{});
+        if (pos + 1 > msg.data.len) return error.TruncatedMessage;
+        const compression_len = msg.data[pos];
+        pos += 1;
+        if (compression_len > 0) {
+            if (pos + compression_len > msg.data.len) return error.TruncatedMessage;
+            pos += compression_len;
+        }
 
         // Parse extensions
-        const extensions_len = try reader.readInt(u16, .big);
-        const extensions_start = stream.pos;
+        if (pos + 2 > msg.data.len) return error.TruncatedMessage;
+        const extensions_len = std.mem.readInt(u16, msg.data[pos..][0..2], .big);
+        pos += 2;
+        const extensions_start = pos;
 
-        while (stream.pos < extensions_start + extensions_len) {
-            const ext_type = try reader.readInt(u16, .big);
-            const ext_len = try reader.readInt(u16, .big);
-            const ext_data = msg.data[stream.pos .. stream.pos + ext_len];
+        while (pos < extensions_start + extensions_len) {
+            if (pos + 4 > msg.data.len) return error.TruncatedMessage;
+            const ext_type = std.mem.readInt(u16, msg.data[pos..][0..2], .big);
+            pos += 2;
+            const ext_len = std.mem.readInt(u16, msg.data[pos..][0..2], .big);
+            pos += 2;
 
-            switch (std.meta.intToEnum(tls_client.ExtensionType, ext_type) catch continue) {
+            if (pos + ext_len > msg.data.len) return error.TruncatedMessage;
+            const ext_data = msg.data[pos .. pos + ext_len];
+
+            const ext_type_enum: ?tls_client.ExtensionType = switch (ext_type) {
+                0 => .server_name,
+                10 => .supported_groups,
+                13 => .signature_algorithms,
+                16 => .application_layer_protocol_negotiation,
+                41 => .pre_shared_key,
+                42 => .early_data,
+                43 => .supported_versions,
+                44 => .cookie,
+                45 => .psk_key_exchange_modes,
+                47 => .certificate_authorities,
+                51 => .key_share,
+                else => null,
+            };
+            if (ext_type_enum) |ext| {
+            switch (ext) {
                 .server_name => {
                     // Parse SNI
                     if (ext_data.len >= 5) {
@@ -434,8 +479,8 @@ pub const TlsConnection = struct {
                         var offset: usize = 2;
 
                         while (offset < 2 + shares_len and offset + 4 <= ext_data.len) {
-                            const group = std.mem.readInt(u16, ext_data[offset .. offset + 2], .big);
-                            const key_len = std.mem.readInt(u16, ext_data[offset + 2 .. offset + 4], .big);
+                            const group = std.mem.readInt(u16, ext_data[offset..][0..2], .big);
+                            const key_len = std.mem.readInt(u16, ext_data[offset + 2..][0..2], .big);
 
                             if (group == 0x001d and key_len == 32 and offset + 4 + key_len <= ext_data.len) {
                                 // X25519 key share
@@ -448,10 +493,19 @@ pub const TlsConnection = struct {
                         }
                     }
                 },
-                else => {},
+                // Unhandled extensions - ignore them
+                .supported_groups,
+                .signature_algorithms,
+                .pre_shared_key,
+                .early_data,
+                .supported_versions,
+                .cookie,
+                .psk_key_exchange_modes,
+                .certificate_authorities => {},
+            }
             }
 
-            stream.pos += ext_len;
+            pos += ext_len;
         }
 
         // Update transcript
@@ -500,7 +554,7 @@ pub const TlsConnection = struct {
 
         // Session ID (echo client's or generate new)
         try writeU8(&buffer, self.allocator, 32);
-        const session_id = rand.generateSessionId();
+        const session_id = rand.randomArray(32);
         try writeBytes(&buffer, self.allocator, &session_id);
 
         // Selected cipher suite
@@ -551,7 +605,7 @@ pub const TlsConnection = struct {
 
         // Update extensions length
         const ext_len = buffer.items.len - len_pos - 2;
-        std.mem.writeInt(u16, buffer.items[len_pos .. len_pos + 2], @intCast(ext_len), .big);
+        std.mem.writeInt(u16, buffer.items[len_pos..][0..2], @intCast(ext_len), .big);
 
         // Update transcript and send
         self.transcript.update(buffer.items);
@@ -586,7 +640,7 @@ pub const TlsConnection = struct {
         }
 
         // Update certificate list length
-        std.mem.writeInt(u24, buffer.items[list_len_pos .. list_len_pos + 3], @intCast(total_len), .big);
+        std.mem.writeInt(u24, buffer.items[list_len_pos..][0..3], @intCast(total_len), .big);
 
         // Update transcript and send
         self.transcript.update(buffer.items);
@@ -624,7 +678,48 @@ pub const TlsConnection = struct {
     }
 
     fn receiveFinished(self: *TlsConnection) !void {
-        const msg = try self.readHandshakeMessage();
+        // Skip any ChangeCipherSpec records (sent for middlebox compatibility in TLS 1.3)
+        var msg: HandshakeMessage = undefined;
+        while (true) {
+            const record = try self.readRecord();
+            if (record.record_type == .change_cipher_spec) {
+                self.allocator.free(record.data);
+                continue;
+            }
+
+            // Not ChangeCipherSpec, must be handshake
+            if (record.record_type != .handshake) {
+                self.allocator.free(record.data);
+                return error.ExpectedHandshake;
+            }
+
+            const msg_type: tls_client.HandshakeType = switch (record.data[0]) {
+                1 => .client_hello,
+                2 => .server_hello,
+                4 => .new_session_ticket,
+                5 => .end_of_early_data,
+                8 => .encrypted_extensions,
+                11 => .certificate,
+                13 => .certificate_request,
+                15 => .certificate_verify,
+                20 => .finished,
+                else => {
+                    self.allocator.free(record.data);
+                    return error.UnknownHandshakeType;
+                },
+            };
+
+            const msg_len = std.mem.readInt(u24, record.data[1..4], .big);
+            const msg_data = try self.allocator.dupe(u8, record.data[4 .. 4 + msg_len]);
+            self.allocator.free(record.data);
+
+            msg = HandshakeMessage{
+                .msg_type = msg_type,
+                .data = msg_data,
+            };
+            break;
+        }
+
         defer self.allocator.free(msg.data);
 
         if (msg.msg_type != .finished) {
@@ -656,7 +751,7 @@ pub const TlsConnection = struct {
         try writeU32(&buffer, self.allocator, age_add);
 
         // Ticket nonce
-        const nonce = rand.generateNonce();
+        const nonce = rand.randomArray(8);
         try writeU8(&buffer, self.allocator, @intCast(nonce.len));
         try writeBytes(&buffer, self.allocator, &nonce);
 
@@ -675,7 +770,7 @@ pub const TlsConnection = struct {
     fn generateSessionTicket(self: *TlsConnection) ![]u8 {
         // TODO: Implement proper session ticket generation
         const ticket = try self.allocator.alloc(u8, 128);
-        rand.random(ticket);
+        rand.fill(ticket);
         return ticket;
     }
 
@@ -686,7 +781,7 @@ pub const TlsConnection = struct {
         }
 
         // Compute shared secret
-        self.shared_secret = asym.x25519.dh(self.server_key_share.?.private_key, self.client_public_key.?);
+        self.shared_secret = try asym.x25519.dh(self.server_key_share.?.private_key, self.client_public_key.?);
 
         // Initialize key schedule with the cipher suite's hash algorithm
         const hash_alg = self.cipher_suite.?.hashAlgorithm();
@@ -813,13 +908,15 @@ pub const TlsConnection = struct {
         switch (hash_alg) {
             .sha256 => {
                 const key_array: [32]u8 = finished_key[0..32].*;
-                const hmac_result = std.crypto.auth.hmac.HmacSha256.create(transcript_hash, &key_array);
+                var hmac_result: [32]u8 = undefined;
+                std.crypto.auth.hmac.sha2.HmacSha256.create(&hmac_result, transcript_hash, &key_array);
                 @memcpy(verify_data, &hmac_result);
             },
             .sha384, .sha512 => {
                 // For compatibility, use SHA256 HMAC
                 const key_array: [32]u8 = finished_key[0..32].*;
-                const hmac_result = std.crypto.auth.hmac.HmacSha256.create(transcript_hash[0..32], &key_array);
+                var hmac_result: [32]u8 = undefined;
+                std.crypto.auth.hmac.sha2.HmacSha256.create(&hmac_result, transcript_hash[0..32], &key_array);
                 @memcpy(verify_data[0..32], &hmac_result);
                 if (hash_len > 32) {
                     @memset(verify_data[32..], 0);
@@ -865,20 +962,35 @@ pub const TlsConnection = struct {
         try writeU16(&buffer, self.allocator, @intCast(data.len));
         try writeBytes(&buffer, self.allocator, data);
 
-        try self.stream.writeAll(buffer.items);
+        // Write using new Io API
+        var write_buf: [8192]u8 = undefined;
+        var writer = self.stream.writer(self.io, &write_buf);
+        var source_reader = std.Io.Reader.fixed(buffer.items);
+        _ = try source_reader.stream(&writer.interface, .unlimited);
+        try writer.interface.flush();
     }
 
     fn readRecord(self: *TlsConnection) !Record {
+        // Read 5-byte record header using new Io API
         var header: [5]u8 = undefined;
-        _ = try self.stream.read(&header);
+        var read_buf: [8192]u8 = undefined;
+        var reader = self.stream.reader(self.io, &read_buf);
+        var header_writer = std.Io.Writer.fixed(&header);
+        try reader.interface.streamExact(&header_writer, header.len);
 
-        const record_type = std.meta.intToEnum(tls_client.RecordType, header[0]) catch {
-            return error.UnknownRecordType;
+        const record_type: tls_client.RecordType = switch (header[0]) {
+            20 => .change_cipher_spec,
+            21 => .alert,
+            22 => .handshake,
+            23 => .application_data,
+            else => return error.UnknownRecordType,
         };
         const length = std.mem.readInt(u16, header[3..5], .big);
 
+        // Read record data
         const data = try self.allocator.alloc(u8, length);
-        _ = try self.stream.read(data);
+        var data_writer = std.Io.Writer.fixed(data);
+        try reader.interface.streamExact(&data_writer, length);
 
         return Record{
             .record_type = record_type,
@@ -905,8 +1017,18 @@ pub const TlsConnection = struct {
             return error.ExpectedHandshake;
         }
 
-        const msg_type = std.meta.intToEnum(tls_client.HandshakeType, record.data[0]) catch {
-            return error.UnknownHandshakeType;
+        const msg_type: tls_client.HandshakeType = switch (record.data[0]) {
+            1 => .client_hello,
+            2 => .server_hello,
+            4 => .new_session_ticket,
+            5 => .end_of_early_data,
+            8 => .encrypted_extensions,
+            11 => .certificate,
+            13 => .certificate_request,
+            15 => .certificate_verify,
+            20 => .finished,
+            24 => .key_update,
+            else => return error.UnknownHandshakeType,
         };
         const length = std.mem.readInt(u24, record.data[1..4], .big);
 
