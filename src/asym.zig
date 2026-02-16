@@ -107,8 +107,8 @@ pub fn verifyEd25519(message: []const u8, signature: [ED25519_SIGNATURE_SIZE]u8,
 }
 
 /// Perform X25519 Diffie-Hellman key exchange
-pub fn dhX25519(private_key: [CURVE25519_PRIVATE_KEY_SIZE]u8, public_key: [CURVE25519_PUBLIC_KEY_SIZE]u8) [CURVE25519_PUBLIC_KEY_SIZE]u8 {
-    return std.crypto.dh.X25519.scalarmult(private_key, public_key);
+pub fn dhX25519(private_key: [CURVE25519_PRIVATE_KEY_SIZE]u8, public_key: [CURVE25519_PUBLIC_KEY_SIZE]u8) error{IdentityElement}![CURVE25519_PUBLIC_KEY_SIZE]u8 {
+    return try std.crypto.dh.X25519.scalarmult(private_key, public_key);
 }
 
 /// Generate X25519 public key from private key
@@ -162,8 +162,8 @@ pub const x25519 = struct {
     }
 
     /// Perform key exchange
-    pub fn dh(private_key: [CURVE25519_PRIVATE_KEY_SIZE]u8, public_key: [CURVE25519_PUBLIC_KEY_SIZE]u8) [CURVE25519_PUBLIC_KEY_SIZE]u8 {
-        return dhX25519(private_key, public_key);
+    pub fn dh(private_key: [CURVE25519_PRIVATE_KEY_SIZE]u8, public_key: [CURVE25519_PUBLIC_KEY_SIZE]u8) error{IdentityElement}![CURVE25519_PUBLIC_KEY_SIZE]u8 {
+        return try dhX25519(private_key, public_key);
     }
 
     /// Generate public key from private key
