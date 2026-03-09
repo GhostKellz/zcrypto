@@ -11,23 +11,16 @@ jobs:
   build:
     runs-on: self-hosted
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Zig Version
         run: zig version
 
-      - name: Check Formatting
+      - name: Format Check
         run: zig fmt --check src/
 
-      - name: Build (Debug)
-        run: zig build
-
-      - name: Build (Release)
+      - name: Build
         run: zig build -Doptimize=ReleaseSafe
 
-      - name: Run Tests
+      - name: Test
         run: zig build test
-
-      - name: Build Documentation
-        run: zig build docs || true
