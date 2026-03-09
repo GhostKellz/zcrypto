@@ -28,8 +28,8 @@ fn osRandom(buf: []u8) void {
         },
         else => {
             // Fallback: read from /dev/urandom
-            const fd = std.posix.open("/dev/urandom", .{ .ACCMODE = .RDONLY }, 0) catch unreachable;
-            defer std.posix.close(fd);
+            const fd = std.posix.openat(std.posix.AT.FDCWD, "/dev/urandom", .{ .ACCMODE = .RDONLY }, 0) catch unreachable;
+            defer _ = std.posix.system.close(fd);
             var filled: usize = 0;
             while (filled < buf.len) {
                 const n = std.posix.read(fd, buf[filled..]) catch unreachable;

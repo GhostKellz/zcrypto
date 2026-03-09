@@ -429,80 +429,73 @@ pub const TlsConnection = struct {
                 else => null,
             };
             if (ext_type_enum) |ext| {
-            switch (ext) {
-                .server_name => {
-                    // Parse SNI
-                    if (ext_data.len >= 5) {
-                        const list_len = std.mem.readInt(u16, ext_data[0..2], .big);
-                        if (list_len > 0 and ext_data[2] == 0) { // hostname type
-                            const name_len = std.mem.readInt(u16, ext_data[3..5], .big);
-                            if (5 + name_len <= ext_data.len) {
-                                self.client_sni = try self.allocator.dupe(u8, ext_data[5 .. 5 + name_len]);
+                switch (ext) {
+                    .server_name => {
+                        // Parse SNI
+                        if (ext_data.len >= 5) {
+                            const list_len = std.mem.readInt(u16, ext_data[0..2], .big);
+                            if (list_len > 0 and ext_data[2] == 0) { // hostname type
+                                const name_len = std.mem.readInt(u16, ext_data[3..5], .big);
+                                if (5 + name_len <= ext_data.len) {
+                                    self.client_sni = try self.allocator.dupe(u8, ext_data[5 .. 5 + name_len]);
+                                }
                             }
                         }
-                    }
-                },
-                .application_layer_protocol_negotiation => {
-                    // Parse ALPN
-                    if (self.config.alpn_protocols) |server_protocols| {
-                        if (ext_data.len >= 2) {
-                            const list_len = std.mem.readInt(u16, ext_data[0..2], .big);
-                            var offset: usize = 2;
+                    },
+                    .application_layer_protocol_negotiation => {
+                        // Parse ALPN
+                        if (self.config.alpn_protocols) |server_protocols| {
+                            if (ext_data.len >= 2) {
+                                const list_len = std.mem.readInt(u16, ext_data[0..2], .big);
+                                var offset: usize = 2;
 
-                            while (offset < 2 + list_len and offset < ext_data.len) {
-                                const proto_len = ext_data[offset];
-                                offset += 1;
+                                while (offset < 2 + list_len and offset < ext_data.len) {
+                                    const proto_len = ext_data[offset];
+                                    offset += 1;
 
-                                if (offset + proto_len <= ext_data.len) {
-                                    const client_proto = ext_data[offset .. offset + proto_len];
+                                    if (offset + proto_len <= ext_data.len) {
+                                        const client_proto = ext_data[offset .. offset + proto_len];
 
-                                    // Check against server's protocols
-                                    for (server_protocols) |server_proto| {
-                                        if (std.mem.eql(u8, client_proto, server_proto)) {
-                                            self.selected_alpn = try self.allocator.dupe(u8, server_proto);
-                                            break;
+                                        // Check against server's protocols
+                                        for (server_protocols) |server_proto| {
+                                            if (std.mem.eql(u8, client_proto, server_proto)) {
+                                                self.selected_alpn = try self.allocator.dupe(u8, server_proto);
+                                                break;
+                                            }
                                         }
+
+                                        offset += proto_len;
                                     }
 
-                                    offset += proto_len;
+                                    if (self.selected_alpn != null) break;
+                                }
+                            }
+                        }
+                    },
+                    .key_share => {
+                        // Parse client's key share
+                        if (ext_data.len >= 2) {
+                            const shares_len = std.mem.readInt(u16, ext_data[0..2], .big);
+                            var offset: usize = 2;
+
+                            while (offset < 2 + shares_len and offset + 4 <= ext_data.len) {
+                                const group = std.mem.readInt(u16, ext_data[offset..][0..2], .big);
+                                const key_len = std.mem.readInt(u16, ext_data[offset + 2 ..][0..2], .big);
+
+                                if (group == 0x001d and key_len == 32 and offset + 4 + key_len <= ext_data.len) {
+                                    // X25519 key share
+                                    self.client_public_key = [_]u8{0} ** 32;
+                                    @memcpy(&self.client_public_key.?, ext_data[offset + 4 .. offset + 4 + key_len]);
+                                    break; // Use first X25519 key share
                                 }
 
-                                if (self.selected_alpn != null) break;
+                                offset += 4 + key_len;
                             }
                         }
-                    }
-                },
-                .key_share => {
-                    // Parse client's key share
-                    if (ext_data.len >= 2) {
-                        const shares_len = std.mem.readInt(u16, ext_data[0..2], .big);
-                        var offset: usize = 2;
-
-                        while (offset < 2 + shares_len and offset + 4 <= ext_data.len) {
-                            const group = std.mem.readInt(u16, ext_data[offset..][0..2], .big);
-                            const key_len = std.mem.readInt(u16, ext_data[offset + 2..][0..2], .big);
-
-                            if (group == 0x001d and key_len == 32 and offset + 4 + key_len <= ext_data.len) {
-                                // X25519 key share
-                                self.client_public_key = [_]u8{0} ** 32;
-                                @memcpy(&self.client_public_key.?, ext_data[offset + 4 .. offset + 4 + key_len]);
-                                break; // Use first X25519 key share
-                            }
-
-                            offset += 4 + key_len;
-                        }
-                    }
-                },
-                // Unhandled extensions - ignore them
-                .supported_groups,
-                .signature_algorithms,
-                .pre_shared_key,
-                .early_data,
-                .supported_versions,
-                .cookie,
-                .psk_key_exchange_modes,
-                .certificate_authorities => {},
-            }
+                    },
+                    // Unhandled extensions - ignore them
+                    .supported_groups, .signature_algorithms, .pre_shared_key, .early_data, .supported_versions, .cookie, .psk_key_exchange_modes, .certificate_authorities => {},
+                }
             }
 
             pos += ext_len;

@@ -210,7 +210,7 @@ pub const DevCrypto = struct {
 
     pub fn deinit(self: *DevCrypto) void {
         if (self.fd) |fd| {
-            std.posix.close(fd);
+            _ = std.posix.system.close(fd);
             self.fd = null;
         }
     }

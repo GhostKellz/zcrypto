@@ -25,7 +25,7 @@ fn fileExists(path: []const u8) bool {
     }
     // For non-Linux, use posix openat to check
     const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY }, 0) catch return false;
-    std.posix.close(fd);
+    _ = std.posix.system.close(fd);
     return true;
 }
 
