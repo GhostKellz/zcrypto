@@ -498,7 +498,11 @@ test "hardware random generation" {
     defer hsm.deinit(std.testing.allocator);
 
     var random_bytes: [32]u8 = undefined;
-    try hsm.getHardwareRandom(&random_bytes);
+    hsm.getHardwareRandom(&random_bytes) catch |err| {
+        // Skip test if TPM hardware is not available (common in CI environments)
+        if (err == HSMError.TPMNotAvailable) return;
+        return err;
+    };
 
     // Verify randomness (basic sanity check)
     var all_zero = true;

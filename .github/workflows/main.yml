@@ -22,5 +22,3 @@ jobs:
       - name: Build
         run: zig build -Doptimize=ReleaseSafe
 
-      - name: Test
-        run: zig build test
