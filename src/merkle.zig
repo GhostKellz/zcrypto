@@ -495,7 +495,7 @@ test "merkle large tree" {
     const allocator = testing.allocator;
 
     // Build tree with 100 leaves
-    var leaves = try allocator.alloc(Hash, 100);
+    const leaves = try allocator.alloc(Hash, 100);
     defer allocator.free(leaves);
 
     for (leaves, 0..) |*leaf, i| {

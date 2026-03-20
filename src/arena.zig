@@ -539,8 +539,8 @@ test "CryptoBufferPool" {
     defer pool.deinit();
 
     // Acquire buffers
-    var buf1 = try pool.acquire();
-    var buf2 = try pool.acquire();
+    const buf1 = try pool.acquire();
+    const buf2 = try pool.acquire();
 
     try testing.expectEqual(@as(usize, 1024), buf1.len);
     try testing.expectEqual(@as(usize, 1024), buf2.len);
@@ -550,7 +550,7 @@ test "CryptoBufferPool" {
     pool.release(buf2);
 
     // Can acquire again
-    var buf3 = try pool.acquire();
+    const buf3 = try pool.acquire();
     try testing.expectEqual(@as(usize, 1024), buf3.len);
 }
 
