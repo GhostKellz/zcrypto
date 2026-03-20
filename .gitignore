@@ -1,8 +1,9 @@
-/zig-cache/
-/zig-out/
+zig-cache/
+zig-out/
 /.zigcache/
 .zig-cache/
 zig-pkg/
 *.o
 *.exe
 CLAUDE.md
+SEC_TASKLIST.md

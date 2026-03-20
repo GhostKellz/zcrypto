@@ -469,6 +469,54 @@ const DerParser = struct {
 
         return timestamp;
     }
+
+    /// Parse GeneralizedTime (YYYYMMDDHHMMSSz or YYYYMMDDHHMM[SS][.f*]Z)
+    fn parseGeneralizedTime(self: *DerParser) !i64 {
+        try self.parseTag(.generalized_time);
+        const length = try self.parseLength();
+        // GeneralizedTime: minimum 15 bytes (YYYYMMDDHHMMSSZ)
+        if (length < 15) return DerError.InvalidDerEncoding;
+        if (self.pos + length > self.data.len) return DerError.UnexpectedEOF;
+
+        const time_str = self.data[self.pos .. self.pos + length];
+        try self.advance(length);
+
+        // Must end with 'Z' for UTC
+        if (time_str[length - 1] != 'Z') return DerError.InvalidDerEncoding;
+
+        const year = try std.fmt.parseInt(u16, time_str[0..4], 10);
+        const month = try std.fmt.parseInt(u8, time_str[4..6], 10);
+        const day = try std.fmt.parseInt(u8, time_str[6..8], 10);
+        const hour = try std.fmt.parseInt(u8, time_str[8..10], 10);
+        const minute = try std.fmt.parseInt(u8, time_str[10..12], 10);
+        const second = try std.fmt.parseInt(u8, time_str[12..14], 10);
+
+        // Validate ranges
+        if (month == 0 or month > 12) return DerError.InvalidDerEncoding;
+        if (day == 0 or day > 31) return DerError.InvalidDerEncoding;
+        if (hour > 23) return DerError.InvalidDerEncoding;
+        if (minute > 59) return DerError.InvalidDerEncoding;
+        if (second > 60) return DerError.InvalidDerEncoding; // Allow 60 for leap seconds
+
+        // Convert to Unix timestamp
+        const days_since_epoch = daysSinceEpoch(year, month, day);
+        const timestamp: i64 = @as(i64, days_since_epoch) * 86400 +
+            @as(i64, hour) * 3600 +
+            @as(i64, minute) * 60 +
+            @as(i64, second);
+
+        return timestamp;
+    }
+
+    /// Parse either UTCTime or GeneralizedTime based on tag
+    fn parseTime(self: *DerParser) !i64 {
+        const tag = self.peekTag();
+        return switch (tag) {
+            @intFromEnum(DerTag.utc_time) => self.parseUtcTime(),
+            @intFromEnum(DerTag.generalized_time) => self.parseGeneralizedTime(),
+            else => DerError.InvalidDerEncoding,
+        };
+    }
 };
 
 // Helper functions
@@ -523,8 +571,10 @@ fn parseValidity(parser: *DerParser) !Validity {
     const validity_seq = try parser.parseSequence();
     var validity_parser = DerParser.init(validity_seq);
 
-    const not_before = try validity_parser.parseUtcTime();
-    const not_after = try validity_parser.parseUtcTime();
+    // X.509 allows either UTCTime or GeneralizedTime for validity period
+    // UTCTime is used for dates before 2050, GeneralizedTime for 2050 and beyond
+    const not_before = try validity_parser.parseTime();
+    const not_after = try validity_parser.parseTime();
 
     return Validity{
         .not_before = not_before,
@@ -637,22 +687,94 @@ fn isLeapYear(year: u16) bool {
     return (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0);
 }
 
-/// Check if hostname matches certificate name (supports wildcards)
+/// Check if hostname matches certificate name per RFC 6125
+/// Supports wildcard certificates with proper restrictions
 fn hostnameMatches(hostname: []const u8, cert_name: []const u8) bool {
-    // Exact match
-    if (std.mem.eql(u8, hostname, cert_name)) {
+    // Convert both to lowercase for case-insensitive comparison
+    var hostname_lower: [256]u8 = undefined;
+    var cert_name_lower: [256]u8 = undefined;
+
+    if (hostname.len > hostname_lower.len or cert_name.len > cert_name_lower.len) {
+        return false;
+    }
+
+    const hostname_lc = toLowercase(hostname, &hostname_lower);
+    const cert_name_lc = toLowercase(cert_name, &cert_name_lower);
+
+    // Exact match (case-insensitive)
+    if (std.mem.eql(u8, hostname_lc, cert_name_lc)) {
         return true;
     }
 
-    // Wildcard match (*.example.com)
-    if (cert_name.len >= 2 and cert_name[0] == '*' and cert_name[1] == '.') {
-        const wildcard_domain = cert_name[2..];
+    // RFC 6125: Don't allow wildcards for IP addresses
+    if (isIpAddress(hostname)) {
+        return false;
+    }
 
-        // Find the first dot in hostname
-        if (std.mem.indexOf(u8, hostname, ".")) |dot_pos| {
-            const hostname_domain = hostname[dot_pos + 1 ..];
-            return std.mem.eql(u8, hostname_domain, wildcard_domain);
+    // Wildcard match (*.example.com)
+    // RFC 6125 Section 6.4.3: Wildcard must be in the leftmost label only
+    if (cert_name_lc.len >= 2 and cert_name_lc[0] == '*' and cert_name_lc[1] == '.') {
+        const wildcard_domain = cert_name_lc[2..];
+
+        // Find the first dot in hostname (leftmost label boundary)
+        if (std.mem.indexOf(u8, hostname_lc, ".")) |dot_pos| {
+            // The leftmost label must not be empty
+            if (dot_pos == 0) return false;
+
+            const hostname_domain = hostname_lc[dot_pos + 1 ..];
+
+            // RFC 6125: Wildcard must match exactly one label
+            // The remaining domain must match exactly
+            if (std.mem.eql(u8, hostname_domain, wildcard_domain)) {
+                // Additional check: wildcard_domain must have at least one label
+                // (*.com is not allowed, must be at least *.example.com)
+                if (std.mem.indexOf(u8, wildcard_domain, ".") != null) {
+                    return true;
+                }
+            }
         }
+    }
+
+    // RFC 6125: Partial wildcards like w*.example.com or *w.example.com
+    // We don't support these - they're discouraged by RFC 6125
+    return false;
+}
+
+/// Convert a string to lowercase in-place in the provided buffer
+fn toLowercase(input: []const u8, output: []u8) []u8 {
+    for (input, 0..) |c, i| {
+        output[i] = if (c >= 'A' and c <= 'Z') c + 32 else c;
+    }
+    return output[0..input.len];
+}
+
+/// Check if a string looks like an IP address (IPv4 or IPv6)
+fn isIpAddress(hostname: []const u8) bool {
+    // Quick heuristic checks for IP addresses
+    if (hostname.len == 0) return false;
+
+    // IPv6 bracketed notation [::1]
+    if (hostname.len >= 2 and hostname[0] == '[' and hostname[hostname.len - 1] == ']') {
+        return true;
+    }
+
+    // IPv6: Check if it contains colons (must check before IPv4)
+    if (std.mem.indexOf(u8, hostname, ":") != null) {
+        return true; // Likely IPv6
+    }
+
+    // IPv4: Check if it starts with a digit and contains only digits and dots
+    if (hostname[0] >= '0' and hostname[0] <= '9') {
+        var dot_count: usize = 0;
+        for (hostname) |c| {
+            if (c == '.') {
+                dot_count += 1;
+            } else if (c < '0' or c > '9') {
+                return false; // Not a valid IPv4 if it has other characters
+            }
+        }
+        // IPv4 has exactly 3 dots
+        return dot_count == 3;
     }
 
     return false;
@@ -690,16 +812,32 @@ test "X.509 certificate validation helpers" {
     try std.testing.expect(!validity.isValid(1704067200)); // 2024-01-01
 }
 
-test "X.509 hostname matching" {
-    // Exact match
+test "X.509 hostname matching RFC 6125" {
+    // Exact match (case-insensitive)
     try std.testing.expect(hostnameMatches("example.com", "example.com"));
+    try std.testing.expect(hostnameMatches("Example.COM", "example.com"));
+    try std.testing.expect(hostnameMatches("example.com", "EXAMPLE.COM"));
     try std.testing.expect(!hostnameMatches("example.com", "other.com"));
 
     // Wildcard match
     try std.testing.expect(hostnameMatches("www.example.com", "*.example.com"));
     try std.testing.expect(hostnameMatches("api.example.com", "*.example.com"));
+    try std.testing.expect(hostnameMatches("WWW.Example.COM", "*.example.com")); // Case-insensitive wildcard
     try std.testing.expect(!hostnameMatches("example.com", "*.example.com")); // No subdomain
-    try std.testing.expect(!hostnameMatches("sub.api.example.com", "*.example.com")); // Too many levels
+    try std.testing.expect(!hostnameMatches("sub.api.example.com", "*.example.com")); // Wildcard matches only one label
+
+    // RFC 6125: Wildcards not allowed for IP addresses
+    try std.testing.expect(!hostnameMatches("192.168.1.1", "*.168.1.1"));
+    try std.testing.expect(hostnameMatches("192.168.1.1", "192.168.1.1")); // Exact IP match still works
+
+    // RFC 6125: *.com not allowed (wildcard domain must have at least one label)
+    try std.testing.expect(!hostnameMatches("example.com", "*.com"));
+
+    // IPv6 addresses
+    try std.testing.expect(isIpAddress("::1"));
+    try std.testing.expect(isIpAddress("[::1]"));
+    try std.testing.expect(isIpAddress("2001:db8::1"));
+    try std.testing.expect(!isIpAddress("example.com"));
 }
 
 test "X.509 certificate chain validation concept" {
@@ -715,4 +853,48 @@ test "X.509 certificate chain validation concept" {
     // For now, just test that parsing fails gracefully with invalid data
     const result = Certificate.parse(allocator, &mock_cert_der);
     try std.testing.expectError(DerError.UnexpectedEOF, result);
+}
+
+test "X.509 GeneralizedTime parsing" {
+    // Test GeneralizedTime format (YYYYMMDDHHMMSSZ)
+    var parser = DerParser.init(&[_]u8{
+        0x18, 0x0F, // GeneralizedTime tag (0x18), length 15
+        '2', '0', '5', '0', // 2050
+        '0', '1', // January
+        '0', '1', // 1st
+        '0', '0', // 00 hours
+        '0', '0', // 00 minutes
+        '0', '0', // 00 seconds
+        'Z', // UTC
+    });
+
+    const timestamp = try parser.parseGeneralizedTime();
+
+    // 2050-01-01 00:00:00 UTC
+    // Days from 1970 to 2050 = 80 years worth of days
+    // This is approximately 2524608000 seconds (with leap years)
+    try std.testing.expect(timestamp > 2500000000); // Sanity check: after 2049
+    try std.testing.expect(timestamp < 2600000000); // Sanity check: before 2052
+}
+
+test "X.509 time tag dispatch" {
+    // UTCTime
+    var utc_parser = DerParser.init(&[_]u8{
+        0x17, 0x0D, // UTCTime tag, length 13
+        '2', '3', '0', '1', '0', '1', // 230101 (2023-01-01)
+        '0', '0', '0', '0', '0', '0', // 000000
+        'Z',
+    });
+    const utc_time = try utc_parser.parseTime();
+    try std.testing.expect(utc_time > 1672531000); // Around 2023-01-01
+
+    // GeneralizedTime
+    var gen_parser = DerParser.init(&[_]u8{
+        0x18, 0x0F, // GeneralizedTime tag, length 15
+        '2', '0', '2', '3', '0', '1', '0', '1', // 20230101
+        '0', '0', '0', '0', '0', '0', // 000000
+        'Z',
+    });
+    const gen_time = try gen_parser.parseTime();
+    try std.testing.expect(gen_time > 1672531000); // Around 2023-01-01
 }

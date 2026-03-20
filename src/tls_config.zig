@@ -7,6 +7,7 @@ const std = @import("std");
 const asym = @import("asym.zig");
 const x509 = @import("x509.zig");
 const errors = @import("errors.zig");
+const security = @import("security.zig");
 
 /// TLS protocol versions
 pub const TlsVersion = enum(u16) {
@@ -184,7 +185,13 @@ pub const TlsConfig = struct {
 
     /// Client configuration
     server_name: ?[]const u8 = null,
+
+    /// SECURITY WARNING: Setting this to true disables ALL certificate verification.
+    /// This makes the connection vulnerable to man-in-the-middle attacks.
+    /// In release builds, this requires -Dallow-insecure=true at compile time.
+    /// Only use for testing/development - NEVER in production.
     insecure_skip_verify: bool = false,
+
     root_cas: ?[]Certificate = null,
 
     /// ALPN protocols
@@ -345,8 +352,15 @@ pub const TlsConfig = struct {
     }
 
     /// Verify server certificate against hostname (client-side)
+    ///
+    /// SECURITY NOTE: If insecure_skip_verify is enabled, this function will
+    /// return true without any validation, making the connection vulnerable to MITM.
+    /// In release builds, insecure_skip_verify requires -Dallow-insecure=true.
     pub fn verifyCertificate(self: TlsConfig, cert_der: []const u8, hostname: ?[]const u8) !bool {
         if (self.insecure_skip_verify) {
+            // Check if insecure options are allowed in release builds
+            try security.checkInsecureOption("insecure_skip_verify");
+            std.log.warn("SECURITY WARNING: Certificate verification SKIPPED due to insecure_skip_verify. Connection is vulnerable to MITM attacks.", .{});
             return true;
         }
 
@@ -377,8 +391,10 @@ pub const TlsConfig = struct {
             return error.UntrustedCertificate;
         }
 
-        // If no root CAs configured, accept any valid certificate
-        return true;
+        // SECURITY: No root CAs configured - fail closed
+        // Certificate chain cannot be validated without trust anchors.
+        // Use insecure_skip_verify=true to explicitly bypass (dangerous).
+        return error.NoTrustAnchorsConfigured;
     }
 
     /// Clone the configuration (creates owned copies of all data)

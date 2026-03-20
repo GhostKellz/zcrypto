@@ -19,6 +19,13 @@ pub fn build(b: *std.Build) !void {
     const enable_async = b.option(bool, "async", "Enable async crypto operations (requires zsync)") orelse true;
 
     // ============================================================================
+    // SECURITY FLAGS - Control access to experimental/insecure code paths
+    // ============================================================================
+
+    const allow_experimental_crypto = b.option(bool, "experimental-crypto", "Allow use of incomplete/placeholder crypto implementations (DANGEROUS: not for production)") orelse false;
+    const allow_insecure_options = b.option(bool, "allow-insecure", "Allow insecure options like skip_verify in release builds (DANGEROUS: not for production)") orelse false;
+
+    // ============================================================================
     // DEPENDENCIES - Conditionally include based on features
     // ============================================================================
 
@@ -163,6 +170,10 @@ pub fn build(b: *std.Build) !void {
     build_options.addOption(bool, "enable_enterprise", enable_enterprise);
     build_options.addOption(bool, "enable_zkp", enable_zkp);
     build_options.addOption(bool, "enable_async", enable_async);
+
+    // Security options
+    build_options.addOption(bool, "allow_experimental_crypto", allow_experimental_crypto);
+    build_options.addOption(bool, "allow_insecure_options", allow_insecure_options);
 
     // Create zcrypto imports array, including build_options
     var zcrypto_imports_buffer: [18]std.Build.Module.Import = undefined;

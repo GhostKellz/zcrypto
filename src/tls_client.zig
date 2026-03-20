@@ -12,6 +12,8 @@ const sym = @import("sym.zig");
 const kdf = @import("kdf.zig");
 const util = @import("util.zig");
 const asym = @import("asym.zig");
+const security = @import("security.zig");
+const x509 = @import("x509.zig");
 const net = std.Io.net;
 
 /// TLS alert levels
@@ -510,21 +512,34 @@ pub const TlsClient = struct {
         const hash_alg = self.cipher_suite.?.hashAlgorithm();
         const hash_len = hash_alg.digestSize();
 
-        var transcript_copy = self.transcript;
         const result = try self.allocator.alloc(u8, hash_len);
 
         switch (hash_alg) {
             .sha256 => {
+                var transcript_copy = self.transcript;
                 const final_hash = transcript_copy.final();
                 @memcpy(result[0..32], &final_hash);
             },
-            .sha384, .sha512 => {
-                // For now, use SHA256 for compatibility
-                const final_hash = transcript_copy.final();
-                @memcpy(result[0..@min(32, hash_len)], &final_hash);
-                if (hash_len > 32) {
-                    @memset(result[32..], 0);
-                }
+            .sha384 => {
+                // Use SHA384 transcript hash
+                // Note: Would need to track SHA384 transcript separately for full support
+                // For now, hash the current SHA256 transcript data with SHA384
+                var sha384_hasher = std.crypto.hash.sha2.Sha384.init(.{});
+                var transcript_copy = self.transcript;
+                const sha256_result = transcript_copy.finalResult();
+                sha384_hasher.update(&sha256_result);
+                var sha384_result: [48]u8 = undefined;
+                sha384_hasher.final(&sha384_result);
+                @memcpy(result[0..48], &sha384_result);
+            },
+            .sha512 => {
+                // Use SHA512 transcript hash
+                var sha512_hasher = hash.Sha512.init();
+                var transcript_copy = self.transcript;
+                const sha256_result = transcript_copy.finalResult();
+                sha512_hasher.update(&sha256_result);
+                const sha512_result = sha512_hasher.final();
+                @memcpy(result[0..64], &sha512_result);
             },
         }
 
@@ -549,23 +564,29 @@ pub const TlsClient = struct {
         const finished_key = try kdf.hkdfExpandLabel(self.allocator, &secret, "finished", "", hash_len);
         defer self.allocator.free(finished_key);
 
-        // Compute HMAC of transcript hash
+        // Compute HMAC of transcript hash using the appropriate hash algorithm
         const verify_data = try self.allocator.alloc(u8, hash_len);
 
         switch (hash_alg) {
             .sha256 => {
                 const key_array: [32]u8 = finished_key[0..32].*;
-                const hmac_result = std.crypto.auth.hmac.HmacSha256.create(transcript_hash, &key_array);
+                var hmac_result: [32]u8 = undefined;
+                std.crypto.auth.hmac.sha2.HmacSha256.create(&hmac_result, transcript_hash, &key_array);
                 @memcpy(verify_data, &hmac_result);
             },
-            .sha384, .sha512 => {
-                // For compatibility, use SHA256 HMAC
-                const key_array: [32]u8 = finished_key[0..32].*;
-                const hmac_result = std.crypto.auth.hmac.HmacSha256.create(transcript_hash[0..32], &key_array);
-                @memcpy(verify_data[0..32], &hmac_result);
-                if (hash_len > 32) {
-                    @memset(verify_data[32..], 0);
-                }
+            .sha384 => {
+                // Use HMAC-SHA384 for TLS_AES_256_GCM_SHA384
+                const key_array: [48]u8 = finished_key[0..48].*;
+                var hmac_result: [48]u8 = undefined;
+                std.crypto.auth.hmac.sha2.HmacSha384.create(&hmac_result, transcript_hash, &key_array);
+                @memcpy(verify_data, &hmac_result);
+            },
+            .sha512 => {
+                // Use HMAC-SHA512
+                const key_array: [64]u8 = finished_key[0..64].*;
+                var hmac_result: [64]u8 = undefined;
+                std.crypto.auth.hmac.sha2.HmacSha512.create(&hmac_result, transcript_hash, &key_array);
+                @memcpy(verify_data, &hmac_result);
             },
         }
 
@@ -604,20 +625,312 @@ pub const TlsClient = struct {
         self.server_traffic_keys = try self.deriveTrafficKeys(self.server_traffic_secret.?, false);
     }
 
-    // Stub implementations for remaining handshake messages
+    // TLS 1.3 Handshake Message Processing (RFC 8446)
+
+    /// Receive and validate EncryptedExtensions message (RFC 8446 Section 4.3.1)
+    ///
+    /// This validates the server's encrypted extensions and checks for:
+    /// - Forbidden extensions (those that must only appear in ClientHello/ServerHello)
+    /// - ALPN protocol selection if we requested ALPN
     fn receiveEncryptedExtensions(self: *TlsClient) !void {
-        _ = self;
-        // TODO: Implement
+        const msg = try self.readHandshakeMessage();
+        defer self.allocator.free(msg.data);
+
+        if (msg.msg_type != .encrypted_extensions) {
+            return error.ExpectedEncryptedExtensions;
+        }
+
+        // Update transcript with the full handshake message
+        self.transcript.update(msg.data);
+
+        // Parse extensions length (2 bytes)
+        if (msg.data.len < 2) {
+            return error.InvalidEncryptedExtensions;
+        }
+        const extensions_len = std.mem.readInt(u16, msg.data[0..2], .big);
+        if (msg.data.len < 2 + extensions_len) {
+            return error.InvalidEncryptedExtensions;
+        }
+
+        // Parse and validate extensions
+        var pos: usize = 2;
+        while (pos + 4 <= 2 + extensions_len) {
+            const ext_type = std.mem.readInt(u16, msg.data[pos..][0..2], .big);
+            const ext_len = std.mem.readInt(u16, msg.data[pos + 2 ..][0..2], .big);
+            pos += 4;
+
+            if (pos + ext_len > 2 + extensions_len) {
+                return error.InvalidExtension;
+            }
+
+            const ext_data = msg.data[pos .. pos + ext_len];
+            pos += ext_len;
+
+            // Validate extension types - some are forbidden in EncryptedExtensions
+            switch (ext_type) {
+                // Forbidden extensions (must only appear in ClientHello/ServerHello)
+                @intFromEnum(ExtensionType.supported_versions),
+                @intFromEnum(ExtensionType.key_share),
+                @intFromEnum(ExtensionType.pre_shared_key),
+                @intFromEnum(ExtensionType.psk_key_exchange_modes),
+                @intFromEnum(ExtensionType.cookie),
+                => return error.ForbiddenExtension,
+
+                // ALPN - store selected protocol
+                @intFromEnum(ExtensionType.application_layer_protocol_negotiation) => {
+                    if (ext_len >= 3) {
+                        const alpn_list_len = std.mem.readInt(u16, ext_data[0..2], .big);
+                        if (alpn_list_len > 0 and ext_len >= 3) {
+                            const proto_len = ext_data[2];
+                            if (ext_len >= 3 + proto_len) {
+                                self.selected_alpn = try self.allocator.dupe(u8, ext_data[3 .. 3 + proto_len]);
+                            }
+                        }
+                    }
+                },
+
+                // Server name acknowledgment (no data expected)
+                @intFromEnum(ExtensionType.server_name) => {},
+
+                // Other extensions - allow for extensibility
+                else => {},
+            }
+        }
     }
 
+    /// Receive and validate server Certificate message (RFC 8446 Section 4.4.2)
+    ///
+    /// Parses the certificate chain and performs:
+    /// - Certificate chain parsing
+    /// - Hostname validation (if server_name was sent)
+    /// - Trust anchor evaluation (if root CAs configured)
+    /// - Validity period checks
     fn receiveCertificate(self: *TlsClient) !void {
-        _ = self;
-        // TODO: Implement
+        const msg = try self.readHandshakeMessage();
+        defer self.allocator.free(msg.data);
+
+        if (msg.msg_type != .certificate) {
+            return error.ExpectedCertificate;
+        }
+
+        // Update transcript
+        self.transcript.update(msg.data);
+
+        // Parse Certificate message structure:
+        // - certificate_request_context (1 byte length + data, empty for server cert)
+        // - certificate_list (3 bytes length + entries)
+        if (msg.data.len < 4) {
+            return error.InvalidCertificate;
+        }
+
+        var pos: usize = 0;
+
+        // certificate_request_context length (should be 0 for server certificate)
+        const context_len = msg.data[pos];
+        pos += 1 + context_len;
+
+        if (pos + 3 > msg.data.len) {
+            return error.InvalidCertificate;
+        }
+
+        // certificate_list length (3 bytes)
+        const cert_list_len = std.mem.readInt(u24, msg.data[pos..][0..3], .big);
+        pos += 3;
+
+        if (pos + cert_list_len > msg.data.len) {
+            return error.InvalidCertificate;
+        }
+
+        // Parse certificate entries
+        var certs = std.ArrayList(tls_config.Certificate).init(self.allocator);
+        errdefer {
+            for (certs.items) |cert| {
+                cert.deinit(self.allocator);
+            }
+            certs.deinit();
+        }
+
+        const cert_list_end = pos + cert_list_len;
+        while (pos + 3 < cert_list_end) {
+            // cert_data length (3 bytes)
+            const cert_len = std.mem.readInt(u24, msg.data[pos..][0..3], .big);
+            pos += 3;
+
+            if (pos + cert_len > cert_list_end) {
+                return error.InvalidCertificate;
+            }
+
+            // Certificate DER data
+            const cert_der = msg.data[pos .. pos + cert_len];
+            pos += cert_len;
+
+            // Extensions for this certificate entry (2 bytes length + data)
+            if (pos + 2 > cert_list_end) {
+                return error.InvalidCertificate;
+            }
+            const cert_ext_len = std.mem.readInt(u16, msg.data[pos..][0..2], .big);
+            pos += 2 + cert_ext_len;
+
+            // Store certificate
+            const cert = try tls_config.Certificate.fromDer(self.allocator, cert_der);
+            try certs.append(cert);
+        }
+
+        if (certs.items.len == 0) {
+            return error.EmptyCertificateChain;
+        }
+
+        // Store certificates
+        self.server_certificates = try certs.toOwnedSlice();
+
+        // Validate the end-entity certificate
+        try self.validateServerCertificate();
     }
 
+    /// Validate the server's certificate against configured trust anchors and hostname
+    fn validateServerCertificate(self: *TlsClient) !void {
+        const certs = self.server_certificates orelse return error.NoCertificateReceived;
+        if (certs.len == 0) return error.EmptyCertificateChain;
+
+        // Parse the end-entity (leaf) certificate
+        var leaf_cert = certs[0];
+        const parsed = try leaf_cert.parse(self.allocator);
+
+        // Check if insecure mode is enabled
+        if (self.config.insecure_skip_verify) {
+            // Runtime check for release builds
+            try security.checkInsecureOption("insecure_skip_verify");
+            std.log.warn("SECURITY WARNING: Certificate verification SKIPPED. Connection vulnerable to MITM.", .{});
+            return;
+        }
+
+        // Check certificate validity period
+        if (!parsed.isValid()) {
+            return error.CertificateExpired;
+        }
+
+        // Check hostname if server_name was configured
+        if (self.config.server_name) |hostname| {
+            if (!try parsed.isValidForHostname(hostname)) {
+                return error.HostnameMismatch;
+            }
+        }
+
+        // Verify against trust anchors
+        if (self.config.root_cas) |root_cas| {
+            var trusted = false;
+
+            // For a proper implementation, we'd need to verify the full chain.
+            // For now, check if any root CA directly signed the leaf or any intermediate.
+            for (certs) |*cert| {
+                var cert_parsed = try cert.parse(self.allocator);
+                for (root_cas) |*ca| {
+                    const ca_parsed = try ca.parse(self.allocator);
+                    if (cert_parsed.verifySignature(ca_parsed.public_key_info.public_key) catch false) {
+                        trusted = true;
+                        break;
+                    }
+                }
+                if (trusted) break;
+            }
+
+            if (!trusted) {
+                return error.UntrustedCertificate;
+            }
+        } else {
+            // SECURITY: No root CAs configured - this is a security risk
+            // Fail closed by default unless insecure_skip_verify is set
+            return error.NoTrustAnchorsConfigured;
+        }
+    }
+
+    /// Receive and validate CertificateVerify message (RFC 8446 Section 4.4.3)
+    ///
+    /// Verifies that the server possesses the private key for its certificate by
+    /// checking the signature over the handshake transcript.
     fn receiveCertificateVerify(self: *TlsClient) !void {
-        _ = self;
-        // TODO: Implement
+        const msg = try self.readHandshakeMessage();
+        defer self.allocator.free(msg.data);
+
+        if (msg.msg_type != .certificate_verify) {
+            return error.ExpectedCertificateVerify;
+        }
+
+        // Don't update transcript yet - we need the hash up to (but not including) CertificateVerify
+        // The transcript gets the Certificate message but we verify against that state
+
+        // Parse CertificateVerify structure:
+        // - signature_algorithm (2 bytes)
+        // - signature (2 bytes length + data)
+        if (msg.data.len < 4) {
+            return error.InvalidCertificateVerify;
+        }
+
+        const sig_algorithm = std.mem.readInt(u16, msg.data[0..2], .big);
+        const sig_len = std.mem.readInt(u16, msg.data[2..4], .big);
+
+        if (msg.data.len < 4 + sig_len) {
+            return error.InvalidCertificateVerify;
+        }
+
+        const signature = msg.data[4 .. 4 + sig_len];
+
+        // Get the server's public key from the certificate
+        const certs = self.server_certificates orelse return error.NoCertificateReceived;
+        if (certs.len == 0) return error.EmptyCertificateChain;
+
+        var leaf_cert = certs[0];
+        const parsed = try leaf_cert.parse(self.allocator);
+
+        // Build the content to be signed (RFC 8446 Section 4.4.3):
+        // - 64 bytes of 0x20 (space)
+        // - Context string: "TLS 1.3, server CertificateVerify"
+        // - Single 0x00 byte
+        // - Hash of handshake transcript (up to but not including CertificateVerify)
+        const context_string = "TLS 1.3, server CertificateVerify";
+        const transcript_hash = self.transcript.finalResult();
+
+        var content: [64 + context_string.len + 1 + 32]u8 = undefined;
+        @memset(content[0..64], 0x20); // 64 spaces
+        @memcpy(content[64 .. 64 + context_string.len], context_string);
+        content[64 + context_string.len] = 0x00;
+        @memcpy(content[64 + context_string.len + 1 ..], &transcript_hash);
+
+        // Verify signature based on algorithm
+        const verified = switch (sig_algorithm) {
+            0x0807 => blk: { // ed25519
+                if (parsed.public_key_info.public_key.len != 32) {
+                    break :blk false;
+                }
+                if (signature.len != 64) {
+                    break :blk false;
+                }
+                const public_key: [32]u8 = parsed.public_key_info.public_key[0..32].*;
+                const sig: [64]u8 = signature[0..64].*;
+                break :blk asym.ed25519.verify(&content, sig, public_key);
+            },
+            0x0403 => blk: { // ecdsa_secp256r1_sha256
+                // Would need ECDSA P-256 verification
+                std.log.warn("ECDSA P-256 signature verification not yet implemented", .{});
+                break :blk false;
+            },
+            0x0804 => blk: { // rsa_pss_rsae_sha256
+                // Would need RSA-PSS verification
+                std.log.warn("RSA-PSS signature verification not yet implemented", .{});
+                break :blk false;
+            },
+            else => {
+                std.log.warn("Unsupported signature algorithm: 0x{x:0>4}", .{sig_algorithm});
+                return error.UnsupportedSignatureAlgorithm;
+            },
+        };
+
+        if (!verified) {
+            return error.InvalidCertificateVerifySignature;
+        }
+
+        // NOW update transcript with the CertificateVerify message
+        self.transcript.update(msg.data);
     }
 
     fn receiveFinished(self: *TlsClient) !void {
@@ -724,8 +1037,22 @@ pub const TlsClient = struct {
         data: []u8,
     };
 
+    /// Write a TLS record, encrypting if traffic keys are available
     fn writeRecord(self: *TlsClient, record_type: RecordType, data: []const u8) !void {
-        // Build record header directly
+        // Check if we should encrypt (have client traffic keys)
+        if (self.client_traffic_keys) |*keys| {
+            try self.writeEncryptedRecord(record_type, data, keys);
+        } else if (self.client_handshake_keys) |*keys| {
+            // Use handshake keys if available but not yet transitioned to traffic keys
+            try self.writeEncryptedRecord(record_type, data, keys);
+        } else {
+            // No keys yet - send plaintext (only valid during initial handshake)
+            try self.writePlaintextRecord(record_type, data);
+        }
+    }
+
+    /// Write a plaintext TLS record (only for initial handshake before keys are derived)
+    fn writePlaintextRecord(self: *TlsClient, record_type: RecordType, data: []const u8) !void {
         var header: [5]u8 = undefined;
         header[0] = @intFromEnum(record_type);
         header[1] = 0x03; // Legacy version high byte
@@ -733,7 +1060,6 @@ pub const TlsClient = struct {
         header[3] = @intCast((data.len >> 8) & 0xFF);
         header[4] = @intCast(data.len & 0xFF);
 
-        // Write using new Io API
         var write_buf: [8192]u8 = undefined;
         var w = self.stream.writer(self.io, &write_buf);
         try w.interface.writeAll(&header);
@@ -741,25 +1067,246 @@ pub const TlsClient = struct {
         try w.interface.flush();
     }
 
+    /// Write an encrypted TLS 1.3 record (RFC 8446 Section 5.2)
+    ///
+    /// TLS 1.3 encrypted record format:
+    /// - Outer content type: application_data (0x17)
+    /// - Legacy version: 0x0303
+    /// - Length: ciphertext length + tag length
+    /// - Ciphertext: AEAD(inner_plaintext)
+    /// - inner_plaintext = content || content_type || zeros (padding)
+    fn writeEncryptedRecord(self: *TlsClient, record_type: RecordType, data: []const u8, keys: *TrafficKeys) !void {
+        const cipher_suite = self.cipher_suite orelse return error.NoCipherSuite;
+
+        // Build inner plaintext: data + content type byte
+        // TLS 1.3 puts the real content type at the end of the plaintext
+        const inner_plaintext = try self.allocator.alloc(u8, data.len + 1);
+        defer self.allocator.free(inner_plaintext);
+        @memcpy(inner_plaintext[0..data.len], data);
+        inner_plaintext[data.len] = @intFromEnum(record_type);
+
+        // Construct nonce: XOR IV with sequence number (padded to 12 bytes)
+        var nonce: [12]u8 = undefined;
+        @memcpy(&nonce, keys.iv[0..12]);
+        var seq_bytes: [8]u8 = undefined;
+        std.mem.writeInt(u64, &seq_bytes, keys.sequence, .big);
+        for (0..8) |i| {
+            nonce[4 + i] ^= seq_bytes[i];
+        }
+
+        // Additional authenticated data: record header with outer content type
+        // AAD = record_type || legacy_version || length
+        const ciphertext_len = inner_plaintext.len + 16; // +16 for auth tag
+        var aad: [5]u8 = undefined;
+        aad[0] = @intFromEnum(RecordType.application_data); // Outer type is always application_data
+        aad[1] = 0x03;
+        aad[2] = 0x03;
+        std.mem.writeInt(u16, aad[3..5], @intCast(ciphertext_len), .big);
+
+        // Encrypt based on cipher suite
+        const ciphertext = try self.allocator.alloc(u8, ciphertext_len);
+        errdefer self.allocator.free(ciphertext);
+
+        switch (cipher_suite) {
+            .TLS_AES_128_GCM_SHA256 => {
+                const key: [16]u8 = keys.key[0..16].*;
+                var tag: [16]u8 = undefined;
+                std.crypto.aead.aes_gcm.Aes128Gcm.encrypt(
+                    ciphertext[0..inner_plaintext.len],
+                    &tag,
+                    inner_plaintext,
+                    &aad,
+                    nonce,
+                    key,
+                );
+                @memcpy(ciphertext[inner_plaintext.len..], &tag);
+            },
+            .TLS_AES_256_GCM_SHA384 => {
+                const key: [32]u8 = keys.key[0..32].*;
+                var tag: [16]u8 = undefined;
+                std.crypto.aead.aes_gcm.Aes256Gcm.encrypt(
+                    ciphertext[0..inner_plaintext.len],
+                    &tag,
+                    inner_plaintext,
+                    &aad,
+                    nonce,
+                    key,
+                );
+                @memcpy(ciphertext[inner_plaintext.len..], &tag);
+            },
+            .TLS_CHACHA20_POLY1305_SHA256 => {
+                const key: [32]u8 = keys.key[0..32].*;
+                var tag: [16]u8 = undefined;
+                std.crypto.aead.chacha_poly.ChaCha20Poly1305.encrypt(
+                    ciphertext[0..inner_plaintext.len],
+                    &tag,
+                    inner_plaintext,
+                    &aad,
+                    nonce,
+                    key,
+                );
+                @memcpy(ciphertext[inner_plaintext.len..], &tag);
+            },
+        }
+
+        // Increment sequence number
+        keys.sequence += 1;
+
+        // Write encrypted record
+        var write_buf: [8192]u8 = undefined;
+        var w = self.stream.writer(self.io, &write_buf);
+        try w.interface.writeAll(&aad); // Header (AAD is the header)
+        try w.interface.writeAll(ciphertext);
+        try w.interface.flush();
+
+        self.allocator.free(ciphertext);
+    }
+
+    /// Read a TLS record, decrypting if traffic keys are available
     fn readRecord(self: *TlsClient) !Record {
         var header: [5]u8 = undefined;
 
-        // Read using new Io API
         var read_buf: [8192]u8 = undefined;
         var r = self.stream.reader(self.io, &read_buf);
         try r.interface.readSliceAll(&header);
 
-        const record_type = std.meta.intToEnum(RecordType, header[0]) catch {
+        const outer_type = std.meta.intToEnum(RecordType, header[0]) catch {
             return error.UnknownRecordType;
         };
         const length = std.mem.readInt(u16, header[3..5], .big);
 
-        const data = try self.allocator.alloc(u8, length);
-        try r.interface.readSliceAll(data);
+        const record_data = try self.allocator.alloc(u8, length);
+        errdefer self.allocator.free(record_data);
+        try r.interface.readSliceAll(record_data);
+
+        // Check if we should decrypt
+        if (self.server_traffic_keys) |*keys| {
+            return self.decryptRecord(&header, record_data, keys);
+        } else if (self.server_handshake_keys) |*keys| {
+            // Check if this looks like an encrypted record
+            if (outer_type == .application_data and length > 16) {
+                return self.decryptRecord(&header, record_data, keys);
+            }
+        }
+
+        // Return plaintext record
+        return Record{
+            .record_type = outer_type,
+            .data = record_data,
+        };
+    }
+
+    /// Decrypt a TLS 1.3 record (RFC 8446 Section 5.2)
+    ///
+    /// SECURITY: Auth tag is verified BEFORE plaintext is exposed.
+    /// If verification fails, no plaintext data is returned.
+    fn decryptRecord(self: *TlsClient, header: *const [5]u8, ciphertext: []u8, keys: *TrafficKeys) !Record {
+        const cipher_suite = self.cipher_suite orelse return error.NoCipherSuite;
+
+        if (ciphertext.len < 17) { // At least 1 byte content + 16 byte tag
+            return error.RecordTooShort;
+        }
+
+        const tag_start = ciphertext.len - 16;
+        var tag: [16]u8 = undefined;
+        @memcpy(&tag, ciphertext[tag_start..]);
+        const encrypted_content = ciphertext[0..tag_start];
+
+        // Construct nonce
+        var nonce: [12]u8 = undefined;
+        @memcpy(&nonce, keys.iv[0..12]);
+        var seq_bytes: [8]u8 = undefined;
+        std.mem.writeInt(u64, &seq_bytes, keys.sequence, .big);
+        for (0..8) |i| {
+            nonce[4 + i] ^= seq_bytes[i];
+        }
+
+        // AAD is the record header
+        const aad = header;
+
+        // Allocate plaintext buffer
+        const plaintext = try self.allocator.alloc(u8, encrypted_content.len);
+        errdefer self.allocator.free(plaintext);
+
+        // Decrypt and verify auth tag - MUST verify before exposing plaintext
+        const decrypt_success = switch (cipher_suite) {
+            .TLS_AES_128_GCM_SHA256 => blk: {
+                const key: [16]u8 = keys.key[0..16].*;
+                std.crypto.aead.aes_gcm.Aes128Gcm.decrypt(
+                    plaintext,
+                    encrypted_content,
+                    tag,
+                    aad,
+                    nonce,
+                    key,
+                ) catch break :blk false;
+                break :blk true;
+            },
+            .TLS_AES_256_GCM_SHA384 => blk: {
+                const key: [32]u8 = keys.key[0..32].*;
+                std.crypto.aead.aes_gcm.Aes256Gcm.decrypt(
+                    plaintext,
+                    encrypted_content,
+                    tag,
+                    aad,
+                    nonce,
+                    key,
+                ) catch break :blk false;
+                break :blk true;
+            },
+            .TLS_CHACHA20_POLY1305_SHA256 => blk: {
+                const key: [32]u8 = keys.key[0..32].*;
+                std.crypto.aead.chacha_poly.ChaCha20Poly1305.decrypt(
+                    plaintext,
+                    encrypted_content,
+                    tag,
+                    aad,
+                    nonce,
+                    key,
+                ) catch break :blk false;
+                break :blk true;
+            },
+        };
+
+        if (!decrypt_success) {
+            self.allocator.free(plaintext);
+            // Free the ciphertext buffer since it was allocated by caller
+            self.allocator.free(ciphertext);
+            return error.DecryptionFailed;
+        }
+
+        // Increment sequence number after successful decryption
+        keys.sequence += 1;
+
+        // Free the original ciphertext buffer
+        self.allocator.free(ciphertext);
+
+        // Extract inner content type (last byte of plaintext)
+        // Remove any padding zeros from the end
+        var content_end = plaintext.len;
+        while (content_end > 0 and plaintext[content_end - 1] == 0) {
+            content_end -= 1;
+        }
+
+        if (content_end == 0) {
+            self.allocator.free(plaintext);
+            return error.InvalidRecord;
+        }
+
+        // Last non-zero byte is the content type
+        const inner_type = std.meta.intToEnum(RecordType, plaintext[content_end - 1]) catch {
+            self.allocator.free(plaintext);
+            return error.UnknownRecordType;
+        };
+
+        // Return the actual content (excluding type byte)
+        const content = try self.allocator.alloc(u8, content_end - 1);
+        @memcpy(content, plaintext[0 .. content_end - 1]);
+        self.allocator.free(plaintext);
 
         return Record{
-            .record_type = record_type,
-            .data = data,
+            .record_type = inner_type,
+            .data = content,
         };
     }
 

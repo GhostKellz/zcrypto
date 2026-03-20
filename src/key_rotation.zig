@@ -20,6 +20,9 @@ pub const KeyRotationError = error{
     RotationInProgress,
     NoKeysAvailable,
     InvalidKeyId,
+    ExportDenied,
+    ExportNotAllowed,
+    KeyNotExportable,
 };
 
 /// Key types supported by the rotation framework
@@ -30,6 +33,57 @@ pub const KeyType = enum {
     AES256GCM,
     HMAC,
     Custom,
+};
+
+/// Key export policy - controls how and when keys can be exported
+pub const ExportPolicy = struct {
+    /// Allow export of private keys (dangerous - should be false in production)
+    allow_private_key_export: bool,
+
+    /// Allow export of symmetric keys
+    allow_symmetric_key_export: bool,
+
+    /// Require explicit export flag on key metadata
+    require_exportable_flag: bool,
+
+    /// Maximum number of exports per key (0 = unlimited)
+    max_exports_per_key: u32,
+
+    /// Log all export operations (for audit)
+    audit_exports: bool,
+
+    /// Disabled policy - blocks all exports (recommended for production)
+    pub fn disabled() ExportPolicy {
+        return ExportPolicy{
+            .allow_private_key_export = false,
+            .allow_symmetric_key_export = false,
+            .require_exportable_flag = true,
+            .max_exports_per_key = 0,
+            .audit_exports = true,
+        };
+    }
+
+    /// Testing policy - allows exports for testing only
+    pub fn testing() ExportPolicy {
+        return ExportPolicy{
+            .allow_private_key_export = true,
+            .allow_symmetric_key_export = true,
+            .require_exportable_flag = false,
+            .max_exports_per_key = 0,
+            .audit_exports = false,
+        };
+    }
+
+    /// Backup policy - allows export with restrictions
+    pub fn backup() ExportPolicy {
+        return ExportPolicy{
+            .allow_private_key_export = true,
+            .allow_symmetric_key_export = true,
+            .require_exportable_flag = true,
+            .max_exports_per_key = 1, // Only one export allowed
+            .audit_exports = true,
+        };
+    }
 };
 
 /// Key rotation policy
@@ -92,9 +146,16 @@ pub const KeyMetadata = struct {
     usage_count: u64,
     is_active: bool,
     generation: u32,
+    exportable: bool, // Whether this key can be exported
+    export_count: u32, // Number of times this key has been exported
 
     /// Create new key metadata
     pub fn init(key_type: KeyType, policy: RotationPolicy) KeyMetadata {
+        return initWithExportable(key_type, policy, false);
+    }
+
+    /// Create new key metadata with explicit exportable flag
+    pub fn initWithExportable(key_type: KeyType, policy: RotationPolicy, exportable: bool) KeyMetadata {
         const current_time = @as(u64, @intCast(util.getCurrentUnixTime() orelse 0));
         var id: [16]u8 = undefined;
         rand.fill(&id);
@@ -107,6 +168,8 @@ pub const KeyMetadata = struct {
             .usage_count = 0,
             .is_active = true,
             .generation = 0,
+            .exportable = exportable,
+            .export_count = 0,
         };
     }
 
@@ -248,15 +311,22 @@ pub const KeyManager = struct {
     keys: std.HashMap([16]u8, KeyEntry, std.hash_map.AutoContext([16]u8), std.hash_map.default_max_load_percentage),
     active_keys: std.HashMap(KeyType, [16]u8, std.hash_map.AutoContext(KeyType), std.hash_map.default_max_load_percentage),
     policy: RotationPolicy,
+    export_policy: ExportPolicy,
     allocator: std.mem.Allocator,
     last_rotation_check: u64,
 
-    /// Initialize key manager
+    /// Initialize key manager with default export policy (disabled - safe default)
     pub fn init(allocator: std.mem.Allocator, policy: RotationPolicy) KeyManager {
+        return initWithExportPolicy(allocator, policy, ExportPolicy.disabled());
+    }
+
+    /// Initialize key manager with explicit export policy
+    pub fn initWithExportPolicy(allocator: std.mem.Allocator, policy: RotationPolicy, export_policy: ExportPolicy) KeyManager {
         return KeyManager{
             .keys = std.HashMap([16]u8, KeyEntry, std.hash_map.AutoContext([16]u8), std.hash_map.default_max_load_percentage).init(allocator),
             .active_keys = std.HashMap(KeyType, [16]u8, std.hash_map.AutoContext(KeyType), std.hash_map.default_max_load_percentage).init(allocator),
             .policy = policy,
+            .export_policy = export_policy,
             .allocator = allocator,
             .last_rotation_check = 0,
         };
@@ -401,19 +471,72 @@ pub const KeyManager = struct {
         };
     }
 
-    /// Export key for external use (be careful with this!)
-    pub fn exportKey(self: *KeyManager, key_id: [16]u8) ?[]const u8 {
-        if (self.keys.get(key_id)) |key_entry| {
-            return switch (key_entry.key) {
-                .Ed25519 => |key| @as([]const u8, &key.private_key),
-                .X25519 => |key| @as([]const u8, &key.private_key),
-                .ChaCha20Poly1305 => |key| @as([]const u8, &key),
-                .AES256GCM => |key| @as([]const u8, &key),
-                .HMAC => |key| @as([]const u8, &key),
-                .Custom => |data| data,
-            };
+    /// Export key for external use - POLICY CONTROLLED
+    /// Returns error if export policy does not allow the operation
+    pub fn exportKey(self: *KeyManager, key_id: [16]u8) KeyRotationError![]const u8 {
+        const key_entry = self.keys.getPtr(key_id) orelse return KeyRotationError.InvalidKeyId;
+
+        // Check if key is marked as exportable (if required by policy)
+        if (self.export_policy.require_exportable_flag and !key_entry.metadata.exportable) {
+            return KeyRotationError.KeyNotExportable;
         }
-        return null;
+
+        // Check export count limit
+        if (self.export_policy.max_exports_per_key > 0 and
+            key_entry.metadata.export_count >= self.export_policy.max_exports_per_key)
+        {
+            return KeyRotationError.ExportDenied;
+        }
+
+        // Check policy based on key type
+        const is_symmetric = switch (key_entry.key) {
+            .ChaCha20Poly1305, .AES256GCM, .HMAC => true,
+            else => false,
+        };
+
+        const is_private_key = switch (key_entry.key) {
+            .Ed25519, .X25519 => true,
+            else => false,
+        };
+
+        if (is_symmetric and !self.export_policy.allow_symmetric_key_export) {
+            return KeyRotationError.ExportNotAllowed;
+        }
+
+        if (is_private_key and !self.export_policy.allow_private_key_export) {
+            return KeyRotationError.ExportNotAllowed;
+        }
+
+        // Increment export count
+        key_entry.metadata.export_count += 1;
+
+        // Return key material
+        return switch (key_entry.key) {
+            .Ed25519 => |key| @as([]const u8, &key.private_key),
+            .X25519 => |key| @as([]const u8, &key.private_key),
+            .ChaCha20Poly1305 => |key| @as([]const u8, &key),
+            .AES256GCM => |key| @as([]const u8, &key),
+            .HMAC => |key| @as([]const u8, &key),
+            .Custom => |data| data,
+        };
+    }
+
+    /// Export key with explicit policy override (for testing/backup scenarios)
+    /// SECURITY WARNING: Use with extreme caution
+    pub fn exportKeyWithPolicy(self: *KeyManager, key_id: [16]u8, override_policy: ExportPolicy) KeyRotationError![]const u8 {
+        const original_policy = self.export_policy;
+        self.export_policy = override_policy;
+        defer self.export_policy = original_policy;
+        return self.exportKey(key_id);
+    }
+
+    /// Mark a key as exportable (must be done before export if require_exportable_flag is set)
+    pub fn markKeyExportable(self: *KeyManager, key_id: [16]u8) KeyRotationError!void {
+        if (self.keys.getPtr(key_id)) |key_entry| {
+            key_entry.metadata.exportable = true;
+        } else {
+            return KeyRotationError.InvalidKeyId;
+        }
     }
 
     /// Force rotation for all keys
@@ -605,4 +728,73 @@ test "protocol integrations" {
     try ProtocolIntegrations.Gossip.rotateSigningKeys(&key_manager);
     const gossip_key = try ProtocolIntegrations.Gossip.getSigningKey(&key_manager);
     try std.testing.expect(gossip_key.public_key.len == 32);
+}
+
+test "export policy enforcement" {
+    const allocator = std.testing.allocator;
+    const policy = RotationPolicy.testing();
+
+    // Test with disabled export policy (default)
+    {
+        var key_manager = KeyManager.init(allocator, policy);
+        defer key_manager.deinit();
+
+        const key_entry = try key_manager.generateKey(.ChaCha20Poly1305);
+
+        // Export should fail with disabled policy (key not marked exportable)
+        const result = key_manager.exportKey(key_entry.metadata.id);
+        try std.testing.expectError(KeyRotationError.KeyNotExportable, result);
+    }
+
+    // Test with testing export policy (permissive)
+    {
+        var key_manager = KeyManager.initWithExportPolicy(allocator, policy, ExportPolicy.testing());
+        defer key_manager.deinit();
+
+        const key_entry = try key_manager.generateKey(.ChaCha20Poly1305);
+
+        // Export should succeed with testing policy
+        const exported = try key_manager.exportKey(key_entry.metadata.id);
+        try std.testing.expectEqual(@as(usize, 32), exported.len);
+    }
+
+    // Test export count limit
+    {
+        var backup_policy = ExportPolicy.backup();
+        backup_policy.require_exportable_flag = false; // Disable for this test
+
+        var key_manager = KeyManager.initWithExportPolicy(allocator, policy, backup_policy);
+        defer key_manager.deinit();
+
+        const key_entry = try key_manager.generateKey(.AES256GCM);
+
+        // First export should succeed
+        _ = try key_manager.exportKey(key_entry.metadata.id);
+
+        // Second export should fail (max_exports_per_key = 1)
+        const result = key_manager.exportKey(key_entry.metadata.id);
+        try std.testing.expectError(KeyRotationError.ExportDenied, result);
+    }
+
+    // Test markKeyExportable
+    {
+        var key_manager = KeyManager.init(allocator, policy);
+        defer key_manager.deinit();
+
+        // Enable symmetric export but require exportable flag
+        key_manager.export_policy.allow_symmetric_key_export = true;
+
+        const key_entry = try key_manager.generateKey(.HMAC);
+
+        // Should fail initially
+        const result1 = key_manager.exportKey(key_entry.metadata.id);
+        try std.testing.expectError(KeyRotationError.KeyNotExportable, result1);
+
+        // Mark as exportable
+        try key_manager.markKeyExportable(key_entry.metadata.id);
+
+        // Now should succeed
+        const exported = try key_manager.exportKey(key_entry.metadata.id);
+        try std.testing.expectEqual(@as(usize, 32), exported.len);
+    }
 }

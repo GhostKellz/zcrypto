@@ -15,6 +15,7 @@ const rand = @import("rand.zig");
 const zcrypto = @import("root.zig");
 const pq = @import("pq.zig");
 const quic = @import("quic.zig");
+const security = @import("security.zig");
 
 /// FFI Result structure for consistent error handling
 const CryptoResult = extern struct {
@@ -44,18 +45,162 @@ const FFI_ERROR_ENCRYPTION_FAILED = 7;
 const FFI_ERROR_DECRYPTION_FAILED = 8;
 const FFI_ERROR_POST_QUANTUM_FAILED = 9;
 const FFI_ERROR_QUIC_FAILED = 10;
+const FFI_ERROR_NULL_POINTER = 11;
+const FFI_ERROR_INVALID_HANDLE = 12;
+const FFI_ERROR_HANDLE_TABLE_FULL = 13;
+
+// ============================================================================
+// OPAQUE HANDLE SYSTEM FOR QUIC CONTEXTS
+// ============================================================================
+
+/// Maximum number of concurrent QUIC contexts
+const MAX_QUIC_CONTEXTS = 256;
+
+/// Magic number for handle validation
+const QUIC_HANDLE_MAGIC: u32 = 0x51554943; // "QUIC" in ASCII
+
+/// Opaque handle for QUIC crypto context
+pub const QuicHandle = extern struct {
+    magic: u32,
+    index: u32,
+    generation: u32,
+    _reserved: u32,
+};
+
+/// Internal QUIC context slot
+const QuicContextSlot = struct {
+    context: ?quic.QuicCrypto,
+    generation: u32,
+    in_use: bool,
+};
+
+/// Global QUIC context table (thread-local for safety)
+var quic_context_table: [MAX_QUIC_CONTEXTS]QuicContextSlot = init_context_table();
+var quic_context_lock: std.Thread.Mutex = .{};
+
+fn init_context_table() [MAX_QUIC_CONTEXTS]QuicContextSlot {
+    var table: [MAX_QUIC_CONTEXTS]QuicContextSlot = undefined;
+    for (&table) |*slot| {
+        slot.* = QuicContextSlot{
+            .context = null,
+            .generation = 0,
+            .in_use = false,
+        };
+    }
+    return table;
+}
+
+/// Allocate a new QUIC context handle
+fn allocQuicHandle(ctx: quic.QuicCrypto) ?QuicHandle {
+    quic_context_lock.lock();
+    defer quic_context_lock.unlock();
+
+    for (&quic_context_table, 0..) |*slot, i| {
+        if (!slot.in_use) {
+            slot.context = ctx;
+            slot.generation +%= 1;
+            slot.in_use = true;
+            return QuicHandle{
+                .magic = QUIC_HANDLE_MAGIC,
+                .index = @intCast(i),
+                .generation = slot.generation,
+                ._reserved = 0,
+            };
+        }
+    }
+    return null;
+}
+
+/// Get QUIC context from handle (validates handle)
+fn getQuicContext(handle: QuicHandle) ?*quic.QuicCrypto {
+    if (handle.magic != QUIC_HANDLE_MAGIC) return null;
+    if (handle.index >= MAX_QUIC_CONTEXTS) return null;
+
+    quic_context_lock.lock();
+    defer quic_context_lock.unlock();
+
+    const slot = &quic_context_table[handle.index];
+    if (!slot.in_use) return null;
+    if (slot.generation != handle.generation) return null;
+
+    return if (slot.context) |*ctx| ctx else null;
+}
+
+/// Free a QUIC context handle
+fn freeQuicHandle(handle: QuicHandle) bool {
+    if (handle.magic != QUIC_HANDLE_MAGIC) return false;
+    if (handle.index >= MAX_QUIC_CONTEXTS) return false;
+
+    quic_context_lock.lock();
+    defer quic_context_lock.unlock();
+
+    const slot = &quic_context_table[handle.index];
+    if (!slot.in_use) return false;
+    if (slot.generation != handle.generation) return false;
+
+    // Securely zero the context before freeing
+    if (slot.context) |*ctx| {
+        const ctx_bytes = std.mem.asBytes(ctx);
+        std.crypto.secureZero(u8, ctx_bytes);
+    }
+    slot.context = null;
+    slot.in_use = false;
+    return true;
+}
+
+// ============================================================================
+// INPUT VALIDATION HELPERS
+// ============================================================================
+
+/// Validate pointer is not null
+fn validatePtr(ptr: anytype) bool {
+    return @intFromPtr(ptr) != 0;
+}
+
+/// Validate input slice parameters
+fn validateInputSlice(ptr: [*]const u8, len: u32, max_len: u32) bool {
+    if (@intFromPtr(ptr) == 0 and len > 0) return false;
+    if (len > max_len) return false;
+    return true;
+}
+
+/// Validate output buffer parameters
+fn validateOutputBuffer(ptr: [*]u8, capacity: u32, required: u32) bool {
+    if (@intFromPtr(ptr) == 0) return false;
+    if (capacity < required) return false;
+    return true;
+}
+
+/// Maximum allowed input size (16 MB)
+const MAX_INPUT_SIZE: u32 = 16 * 1024 * 1024;
 
 // ============================================================================
 // HASH FUNCTIONS
 // ============================================================================
 
 /// SHA-256 hash function
-/// @param input: Input data to hash
+/// @param input: Input data to hash (may be null if input_len is 0)
 /// @param input_len: Length of input data
-/// @param output: Output buffer (must be at least 32 bytes)
-/// @return CryptoResult with success/failure status
-pub export fn zcrypto_sha256(input: [*]const u8, input_len: u32, output: [*]u8) callconv(.c) CryptoResult {
-    if (input_len == 0) return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+/// @param output: Output buffer for hash digest
+/// @param output_len: Capacity of output buffer (must be >= 32)
+/// @return CryptoResult with success/failure status and data_len=32 on success
+pub export fn zcrypto_sha256(input: [*]const u8, input_len: u32, output: [*]u8, output_len: u32) callconv(.c) CryptoResult {
+    // Validate output buffer
+    if (!validateOutputBuffer(output, output_len, 32)) {
+        return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
+    }
+
+    // Validate input (allow empty input for hashing empty data)
+    if (!validateInputSlice(input, input_len, MAX_INPUT_SIZE)) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+
+    // Handle empty input case
+    if (input_len == 0) {
+        const digest = zcrypto.hash.sha256("");
+        @memcpy(output[0..32], &digest);
+        return CryptoResult.successWithLen(32);
+    }
 
     const input_slice = input[0..input_len];
     const digest = zcrypto.hash.sha256(input_slice);
@@ -64,13 +209,29 @@ pub export fn zcrypto_sha256(input: [*]const u8, input_len: u32, output: [*]u8) 
     return CryptoResult.successWithLen(32);
 }
 
-/// Blake2b hash function (using existing implementation)
-/// @param input: Input data to hash
+/// Blake2b hash function (512-bit output)
+/// @param input: Input data to hash (may be null if input_len is 0)
 /// @param input_len: Length of input data
-/// @param output: Output buffer (must be at least 64 bytes)
-/// @return CryptoResult with success/failure status
-pub export fn zcrypto_blake2b(input: [*]const u8, input_len: u32, output: [*]u8) callconv(.c) CryptoResult {
-    if (input_len == 0) return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+/// @param output: Output buffer for hash digest
+/// @param output_len: Capacity of output buffer (must be >= 64)
+/// @return CryptoResult with success/failure status and data_len=64 on success
+pub export fn zcrypto_blake2b(input: [*]const u8, input_len: u32, output: [*]u8, output_len: u32) callconv(.c) CryptoResult {
+    // Validate output buffer
+    if (!validateOutputBuffer(output, output_len, 64)) {
+        return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
+    }
+
+    // Validate input
+    if (!validateInputSlice(input, input_len, MAX_INPUT_SIZE)) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+
+    // Handle empty input case
+    if (input_len == 0) {
+        const digest = zcrypto.hash.blake2b("");
+        @memcpy(output[0..64], &digest);
+        return CryptoResult.successWithLen(64);
+    }
 
     const input_slice = input[0..input_len];
     const digest = zcrypto.hash.blake2b(input_slice);
@@ -84,10 +245,20 @@ pub export fn zcrypto_blake2b(input: [*]const u8, input_len: u32, output: [*]u8)
 // ============================================================================
 
 /// Generate Ed25519 key pair
-/// @param public_key: Output buffer for public key (32 bytes)
-/// @param private_key: Output buffer for private key (64 bytes)
+/// @param public_key: Output buffer for public key
+/// @param public_key_len: Capacity of public_key buffer (must be >= 32)
+/// @param private_key: Output buffer for private key
+/// @param private_key_len: Capacity of private_key buffer (must be >= 64)
 /// @return CryptoResult with success/failure status
-pub export fn zcrypto_ed25519_keygen(public_key: [*]u8, private_key: [*]u8) callconv(.c) CryptoResult {
+pub export fn zcrypto_ed25519_keygen(public_key: [*]u8, public_key_len: u32, private_key: [*]u8, private_key_len: u32) callconv(.c) CryptoResult {
+    // Validate output buffers
+    if (!validateOutputBuffer(public_key, public_key_len, 32)) {
+        return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
+    }
+    if (!validateOutputBuffer(private_key, private_key_len, 64)) {
+        return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
+    }
+
     const keypair = zcrypto.asym.ed25519.generate();
 
     @memcpy(public_key[0..32], &keypair.public_key);
@@ -98,13 +269,26 @@ pub export fn zcrypto_ed25519_keygen(public_key: [*]u8, private_key: [*]u8) call
 /// Ed25519 signature
 /// @param message: Message to sign
 /// @param message_len: Length of message
-/// @param private_key: Private key (64 bytes)
-/// @param signature: Output buffer for signature (64 bytes)
-/// @return CryptoResult with success/failure status
-pub export fn zcrypto_ed25519_sign(message: [*]const u8, message_len: u32, private_key: [*]const u8, signature: [*]u8) callconv(.c) CryptoResult {
-    if (message_len == 0) return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+/// @param private_key: Private key (32 or 64 bytes)
+/// @param private_key_len: Length of private key
+/// @param signature: Output buffer for signature
+/// @param signature_len: Capacity of signature buffer (must be >= 64)
+/// @return CryptoResult with success/failure status and data_len=64 on success
+pub export fn zcrypto_ed25519_sign(message: [*]const u8, message_len: u32, private_key: [*]const u8, private_key_len: u32, signature: [*]u8, signature_len: u32) callconv(.c) CryptoResult {
+    // Validate inputs
+    if (!validateInputSlice(message, message_len, MAX_INPUT_SIZE)) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+    if (!validatePtr(private_key) or (private_key_len != 32 and private_key_len != 64)) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+    if (!validateOutputBuffer(signature, signature_len, 64)) {
+        return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
+    }
 
-    const message_slice = message[0..message_len];
+    // Allow signing empty messages
+    const message_slice = if (message_len > 0) message[0..message_len] else "";
+
     const priv_key_bytes = private_key[0..32];
     var secret_key_data: [64]u8 = undefined;
     @memcpy(secret_key_data[0..32], priv_key_bytes);
@@ -112,12 +296,18 @@ pub export fn zcrypto_ed25519_sign(message: [*]const u8, message_len: u32, priva
     const secret_key = std.crypto.sign.Ed25519.SecretKey{ .bytes = secret_key_data };
 
     const keypair = std.crypto.sign.Ed25519.KeyPair.fromSecretKey(secret_key) catch {
+        // Securely zero sensitive data on error
+        std.crypto.secureZero(u8, &secret_key_data);
         return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
     };
 
     const sig = keypair.sign(message_slice, null) catch {
+        std.crypto.secureZero(u8, &secret_key_data);
         return CryptoResult.failure(FFI_ERROR_SIGNATURE_FAILED);
     };
+
+    // Zero sensitive data before returning
+    std.crypto.secureZero(u8, &secret_key_data);
 
     @memcpy(signature[0..64], &sig.toBytes());
     return CryptoResult.successWithLen(64);
@@ -126,13 +316,24 @@ pub export fn zcrypto_ed25519_sign(message: [*]const u8, message_len: u32, priva
 /// Ed25519 signature verification
 /// @param message: Message that was signed
 /// @param message_len: Length of message
-/// @param signature: Signature to verify (64 bytes)
-/// @param public_key: Public key (32 bytes)
-/// @return CryptoResult with success=verification result
-pub export fn zcrypto_ed25519_verify(message: [*]const u8, message_len: u32, signature: [*]const u8, public_key: [*]const u8) callconv(.c) CryptoResult {
-    if (message_len == 0) return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+/// @param signature: Signature to verify (must be 64 bytes)
+/// @param signature_len: Length of signature (must be 64)
+/// @param public_key: Public key (must be 32 bytes)
+/// @param public_key_len: Length of public key (must be 32)
+/// @return CryptoResult with success=verification passed
+pub export fn zcrypto_ed25519_verify(message: [*]const u8, message_len: u32, signature: [*]const u8, signature_len: u32, public_key: [*]const u8, public_key_len: u32) callconv(.c) CryptoResult {
+    // Validate inputs
+    if (!validateInputSlice(message, message_len, MAX_INPUT_SIZE)) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+    if (!validatePtr(signature) or signature_len != 64) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+    if (!validatePtr(public_key) or public_key_len != 32) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
 
-    const message_slice = message[0..message_len];
+    const message_slice = if (message_len > 0) message[0..message_len] else "";
     const sig: [64]u8 = signature[0..64].*;
     const pub_key_bytes = public_key[0..32];
     const public_key_struct = std.crypto.sign.Ed25519.PublicKey{ .bytes = pub_key_bytes[0..32].* };
@@ -292,14 +493,20 @@ pub export fn zcrypto_hybrid_x25519_ml_kem_exchange(our_classical_private: [*]co
 }
 
 // ============================================================================
-// QUIC CRYPTOGRAPHY
+// QUIC CRYPTOGRAPHY (Secure Handle-Based API)
 // ============================================================================
 
-/// Initialize QUIC crypto context
+/// Initialize QUIC crypto context and return opaque handle
 /// @param cipher_suite: Cipher suite ID (0=AES-128-GCM, 1=AES-256-GCM, 2=ChaCha20-Poly1305, 3=PQ-Hybrid)
-/// @param context: Output buffer for crypto context (opaque, implementation-defined size)
+/// @param handle_out: Output buffer for opaque handle (16 bytes)
+/// @param handle_out_len: Capacity of handle buffer (must be >= 16)
 /// @return CryptoResult with success/failure status
-pub export fn zcrypto_quic_init(cipher_suite: u32, context: [*]u8) callconv(.c) CryptoResult {
+pub export fn zcrypto_quic_init(cipher_suite: u32, handle_out: [*]u8, handle_out_len: u32) callconv(.c) CryptoResult {
+    // Validate output buffer
+    if (!validateOutputBuffer(handle_out, handle_out_len, @sizeOf(QuicHandle))) {
+        return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
+    }
+
     const cs = switch (cipher_suite) {
         0 => quic.CipherSuite.TLS_AES_128_GCM_SHA256,
         1 => quic.CipherSuite.TLS_AES_256_GCM_SHA384,
@@ -310,33 +517,61 @@ pub export fn zcrypto_quic_init(cipher_suite: u32, context: [*]u8) callconv(.c) 
 
     const crypto = quic.QuicCrypto.init(cs);
 
-    // Store the crypto context in the provided buffer
-    // Note: In real implementation, we'd need proper serialization
-    const context_bytes = std.mem.asBytes(&crypto);
-    @memcpy(context[0..context_bytes.len], context_bytes);
+    // Allocate handle for the context
+    const handle = allocQuicHandle(crypto) orelse {
+        return CryptoResult.failure(FFI_ERROR_HANDLE_TABLE_FULL);
+    };
 
-    return CryptoResult.successWithLen(@intCast(context_bytes.len));
+    // Copy handle to output buffer
+    const handle_bytes = std.mem.asBytes(&handle);
+    @memcpy(handle_out[0..@sizeOf(QuicHandle)], handle_bytes);
+
+    return CryptoResult.successWithLen(@sizeOf(QuicHandle));
+}
+
+/// Free QUIC crypto context
+/// @param handle: Opaque handle from zcrypto_quic_init (16 bytes)
+/// @return CryptoResult with success/failure status
+pub export fn zcrypto_quic_free(handle: [*]const u8) callconv(.c) CryptoResult {
+    if (!validatePtr(handle)) {
+        return CryptoResult.failure(FFI_ERROR_NULL_POINTER);
+    }
+
+    const h = std.mem.bytesToValue(QuicHandle, handle[0..@sizeOf(QuicHandle)]);
+
+    if (!freeQuicHandle(h)) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_HANDLE);
+    }
+
+    return CryptoResult.SUCCESS;
 }
 
 /// Derive QUIC initial keys from connection ID
-/// @param context: QUIC crypto context
+/// @param handle: Opaque handle from zcrypto_quic_init (16 bytes)
 /// @param connection_id: Connection ID bytes
-/// @param connection_id_len: Length of connection ID
+/// @param connection_id_len: Length of connection ID (1-20 bytes per RFC 9000)
 /// @return CryptoResult with success/failure status
-pub export fn zcrypto_quic_derive_initial_keys(context: [*]u8, connection_id: [*]const u8, connection_id_len: u32) callconv(.c) CryptoResult {
-    if (connection_id_len == 0) return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+pub export fn zcrypto_quic_derive_initial_keys(handle: [*]const u8, connection_id: [*]const u8, connection_id_len: u32) callconv(.c) CryptoResult {
+    // Validate handle
+    if (!validatePtr(handle)) {
+        return CryptoResult.failure(FFI_ERROR_NULL_POINTER);
+    }
 
-    // Note: In real implementation, we'd properly deserialize the context
-    var crypto = std.mem.bytesToValue(quic.QuicCrypto, context[0..@sizeOf(quic.QuicCrypto)]);
+    // Validate connection ID (RFC 9000: 0-20 bytes, but we require at least 1)
+    if (!validateInputSlice(connection_id, connection_id_len, 20) or connection_id_len == 0) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
 
-    const cid_slice = connection_id[0..connection_id_len];
-    crypto.deriveInitialKeys(cid_slice) catch {
-        return CryptoResult.failure(FFI_ERROR_QUIC_FAILED);
+    const h = std.mem.bytesToValue(QuicHandle, handle[0..@sizeOf(QuicHandle)]);
+
+    const ctx = getQuicContext(h) orelse {
+        return CryptoResult.failure(FFI_ERROR_INVALID_HANDLE);
     };
 
-    // Store updated context back
-    const context_bytes = std.mem.asBytes(&crypto);
-    @memcpy(context[0..context_bytes.len], context_bytes);
+    const cid_slice = connection_id[0..connection_id_len];
+    ctx.deriveInitialKeys(cid_slice) catch {
+        return CryptoResult.failure(FFI_ERROR_QUIC_FAILED);
+    };
 
     return CryptoResult.SUCCESS;
 }
@@ -385,19 +620,39 @@ pub export fn zcrypto_quic_pq_key_exchange(classical_public: [*]u8, pq_public: [
     return CryptoResult.SUCCESS;
 }
 
-/// Encrypt QUIC packet in-place for zero-copy
-/// @param context: QUIC crypto context
+/// Encrypt QUIC packet in-place using AEAD
+/// @param handle: Opaque handle from zcrypto_quic_init (16 bytes)
 /// @param level: Encryption level (0=initial, 1=early_data, 2=handshake, 3=application)
 /// @param is_server: Whether this is server-side encryption
-/// @param packet_number: Packet number
-/// @param packet: Packet buffer (header + payload)
-/// @param packet_len: Total packet length
-/// @param header_len: Header length
-/// @return CryptoResult with success/failure status
-pub export fn zcrypto_quic_encrypt_packet_inplace(context: [*]const u8, level: u32, is_server: bool, packet_number: u64, packet: [*]u8, packet_len: u32, header_len: u32) callconv(.c) CryptoResult {
-    if (header_len >= packet_len) return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+/// @param packet_number: Packet number for nonce construction
+/// @param packet: Packet buffer (header + payload + space for 16-byte tag)
+/// @param packet_len: Total buffer length (must include space for tag)
+/// @param header_len: Header length (payload starts at header_len)
+/// @return CryptoResult with encrypted_len (payload + tag) or failure
+///
+/// IMPORTANT: The packet buffer must have at least header_len + payload_len + 16 bytes
+/// to accommodate the authentication tag. On success, data_len contains the
+/// encrypted payload length including the 16-byte authentication tag.
+pub export fn zcrypto_quic_encrypt_packet_inplace(handle: [*]const u8, level: u32, is_server: bool, packet_number: u64, packet: [*]u8, packet_len: u32, header_len: u32) callconv(.c) CryptoResult {
+    // Validate handle
+    if (!validatePtr(handle)) {
+        return CryptoResult.failure(FFI_ERROR_NULL_POINTER);
+    }
 
-    const crypto = std.mem.bytesToValue(quic.QuicCrypto, context[0..@sizeOf(quic.QuicCrypto)]);
+    // Validate packet parameters
+    // Need at least header + 1 byte payload + 16 byte tag
+    if (!validatePtr(packet) or packet_len < header_len + 17) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+    if (header_len >= packet_len) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+
+    const h = std.mem.bytesToValue(QuicHandle, handle[0..@sizeOf(QuicHandle)]);
+
+    const ctx = getQuicContext(h) orelse {
+        return CryptoResult.failure(FFI_ERROR_INVALID_HANDLE);
+    };
 
     const enc_level = switch (level) {
         0 => quic.EncryptionLevel.initial,
@@ -409,33 +664,52 @@ pub export fn zcrypto_quic_encrypt_packet_inplace(context: [*]const u8, level: u
 
     const packet_slice = packet[0..packet_len];
 
-    quic.ZeroCopy.encryptInPlace(
-        &crypto,
+    const encrypted_len = quic.ZeroCopy.encryptInPlace(
+        ctx,
         enc_level,
         is_server,
         packet_number,
         packet_slice,
         header_len,
     ) catch {
-        return CryptoResult.failure(FFI_ERROR_QUIC_FAILED);
+        return CryptoResult.failure(FFI_ERROR_ENCRYPTION_FAILED);
     };
 
-    return CryptoResult.SUCCESS;
+    return CryptoResult.successWithLen(@intCast(encrypted_len));
 }
 
-/// Decrypt QUIC packet in-place for zero-copy
-/// @param context: QUIC crypto context
-/// @param level: Encryption level
+/// Decrypt QUIC packet in-place with AEAD authentication
+/// @param handle: Opaque handle from zcrypto_quic_init (16 bytes)
+/// @param level: Encryption level (0=initial, 1=early_data, 2=handshake, 3=application)
 /// @param is_server: Whether this is server-side decryption
-/// @param packet_number: Packet number
-/// @param packet: Packet buffer (header + ciphertext)
-/// @param packet_len: Total packet length
+/// @param packet_number: Packet number for nonce construction
+/// @param packet: Packet buffer (header + ciphertext + tag)
+/// @param packet_len: Total packet length including tag
 /// @param header_len: Header length
-/// @return CryptoResult with payload length or failure
-pub export fn zcrypto_quic_decrypt_packet_inplace(context: [*]const u8, level: u32, is_server: bool, packet_number: u64, packet: [*]u8, packet_len: u32, header_len: u32) callconv(.c) CryptoResult {
-    if (header_len >= packet_len) return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+/// @return CryptoResult with decrypted payload_len (excluding tag) or failure
+///
+/// SECURITY: This function verifies the authentication tag BEFORE exposing
+/// any plaintext. Tampered packets will return FFI_ERROR_DECRYPTION_FAILED.
+pub export fn zcrypto_quic_decrypt_packet_inplace(handle: [*]const u8, level: u32, is_server: bool, packet_number: u64, packet: [*]u8, packet_len: u32, header_len: u32) callconv(.c) CryptoResult {
+    // Validate handle
+    if (!validatePtr(handle)) {
+        return CryptoResult.failure(FFI_ERROR_NULL_POINTER);
+    }
 
-    const crypto = std.mem.bytesToValue(quic.QuicCrypto, context[0..@sizeOf(quic.QuicCrypto)]);
+    // Validate packet parameters
+    // Need at least header + 16 byte tag
+    if (!validatePtr(packet) or packet_len < header_len + 16) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+    if (header_len >= packet_len) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+
+    const h = std.mem.bytesToValue(QuicHandle, handle[0..@sizeOf(QuicHandle)]);
+
+    const ctx = getQuicContext(h) orelse {
+        return CryptoResult.failure(FFI_ERROR_INVALID_HANDLE);
+    };
 
     const enc_level = switch (level) {
         0 => quic.EncryptionLevel.initial,
@@ -448,14 +722,14 @@ pub export fn zcrypto_quic_decrypt_packet_inplace(context: [*]const u8, level: u
     const packet_slice = packet[0..packet_len];
 
     const payload_len = quic.ZeroCopy.decryptInPlace(
-        &crypto,
+        ctx,
         enc_level,
         is_server,
         packet_number,
         packet_slice,
         header_len,
     ) catch {
-        return CryptoResult.failure(FFI_ERROR_QUIC_FAILED);
+        return CryptoResult.failure(FFI_ERROR_DECRYPTION_FAILED);
     };
 
     return CryptoResult.successWithLen(@intCast(payload_len));
@@ -465,71 +739,203 @@ pub export fn zcrypto_quic_decrypt_packet_inplace(context: [*]const u8, level: u
 // KEY DERIVATION
 // ============================================================================
 
-/// HKDF-Extract (placeholder - will implement with proper KDF API)
-/// @param salt: Salt value
+/// HKDF-Extract using SHA-256
+/// @param salt: Salt value (may be null for zero salt)
 /// @param salt_len: Salt length
 /// @param ikm: Input key material
 /// @param ikm_len: IKM length
-/// @param prk: Output pseudorandom key (32 bytes)
-/// @return CryptoResult with success/failure status
-pub export fn zcrypto_hkdf_extract(salt: [*]const u8, salt_len: u32, ikm: [*]const u8, ikm_len: u32, prk: [*]u8) callconv(.c) CryptoResult {
-    _ = salt;
-    _ = salt_len;
-    _ = ikm;
-    _ = ikm_len;
-    _ = prk;
-    // TODO: Implement when KDF API is updated
-    return CryptoResult.failure(FFI_ERROR_CRYPTO_FAILED);
+/// @param prk: Output pseudorandom key buffer
+/// @param prk_len: Capacity of prk buffer (must be >= 32)
+/// @return CryptoResult with success/failure status and data_len=32
+pub export fn zcrypto_hkdf_extract(salt: [*]const u8, salt_len: u32, ikm: [*]const u8, ikm_len: u32, prk: [*]u8, prk_len: u32) callconv(.c) CryptoResult {
+    // Validate output buffer
+    if (!validateOutputBuffer(prk, prk_len, 32)) {
+        return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
+    }
+
+    // Validate IKM
+    if (!validateInputSlice(ikm, ikm_len, MAX_INPUT_SIZE)) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+
+    const HkdfSha256 = std.crypto.kdf.hkdf.HkdfSha256;
+
+    // Handle salt - use empty slice if null/zero length
+    const salt_slice: []const u8 = if (salt_len > 0 and @intFromPtr(salt) != 0)
+        salt[0..salt_len]
+    else
+        &[_]u8{};
+
+    const ikm_slice: []const u8 = if (ikm_len > 0) ikm[0..ikm_len] else &[_]u8{};
+
+    const extracted = HkdfSha256.extract(salt_slice, ikm_slice);
+    @memcpy(prk[0..32], &extracted);
+
+    return CryptoResult.successWithLen(32);
 }
 
-/// HKDF-Expand-Label (placeholder - will implement with proper KDF API)
-/// @param prk: Pseudorandom key
-/// @param prk_len: PRK length
-/// @param label: Label string
-/// @param label_len: Label length
-/// @param context: Context data
-/// @param context_len: Context length
-/// @param okm: Output key material
-/// @param okm_len: Desired OKM length
-/// @return CryptoResult with success/failure status
-pub export fn zcrypto_hkdf_expand_label(prk: [*]const u8, prk_len: u32, label: [*]const u8, label_len: u32, context: [*]const u8, context_len: u32, okm: [*]u8, okm_len: u32) callconv(.c) CryptoResult {
-    _ = prk;
-    _ = prk_len;
-    _ = label;
-    _ = label_len;
-    _ = context;
-    _ = context_len;
-    _ = okm;
-    _ = okm_len;
-    // TODO: Implement when KDF API is updated
-    return CryptoResult.failure(FFI_ERROR_CRYPTO_FAILED);
+/// HKDF-Expand using SHA-256
+/// @param prk: Pseudorandom key (32 bytes)
+/// @param prk_len: PRK length (must be 32)
+/// @param info: Context/info string
+/// @param info_len: Info length
+/// @param okm: Output key material buffer
+/// @param okm_len: Desired OKM length (max 255*32 = 8160)
+/// @return CryptoResult with success/failure status and data_len=okm_len
+pub export fn zcrypto_hkdf_expand(prk: [*]const u8, prk_len: u32, info: [*]const u8, info_len: u32, okm: [*]u8, okm_len: u32) callconv(.c) CryptoResult {
+    // Validate PRK
+    if (!validatePtr(prk) or prk_len != 32) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+
+    // Validate info
+    if (!validateInputSlice(info, info_len, 1024)) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+
+    // Validate output (max HKDF output is 255 * hash_len)
+    if (!validateOutputBuffer(okm, okm_len, okm_len) or okm_len > 255 * 32) {
+        return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
+    }
+
+    const HkdfSha256 = std.crypto.kdf.hkdf.HkdfSha256;
+
+    const prk_array: [32]u8 = prk[0..32].*;
+    const info_slice: []const u8 = if (info_len > 0) info[0..info_len] else &[_]u8{};
+
+    HkdfSha256.expand(okm[0..okm_len], info_slice, prk_array);
+
+    return CryptoResult.successWithLen(okm_len);
 }
 
 // ============================================================================
 // SYMMETRIC ENCRYPTION
 // ============================================================================
 
-/// AES-256-GCM encryption (placeholder - will implement with proper SYM API)
-/// @param key: Encryption key (32 bytes)
-/// @param nonce: Nonce (12 bytes)
-/// @param aad: Additional authenticated data
+/// AES-256-GCM encryption
+/// @param key: Encryption key (must be 32 bytes)
+/// @param key_len: Key length (must be 32)
+/// @param nonce: Nonce (must be 12 bytes)
+/// @param nonce_len: Nonce length (must be 12)
+/// @param aad: Additional authenticated data (may be null if aad_len is 0)
 /// @param aad_len: AAD length
 /// @param plaintext: Data to encrypt
 /// @param plaintext_len: Plaintext length
-/// @param ciphertext: Output buffer for ciphertext + tag
-/// @param ciphertext_capacity: Capacity of ciphertext buffer
-/// @return CryptoResult with encrypted length or failure
-pub export fn zcrypto_aes256_gcm_encrypt(key: [*]const u8, nonce: [*]const u8, aad: [*]const u8, aad_len: u32, plaintext: [*]const u8, plaintext_len: u32, ciphertext: [*]u8, ciphertext_capacity: u32) callconv(.c) CryptoResult {
-    _ = key;
-    _ = nonce;
-    _ = aad;
-    _ = aad_len;
-    _ = plaintext;
-    _ = plaintext_len;
-    _ = ciphertext;
-    _ = ciphertext_capacity;
-    // TODO: Implement when SYM API is updated
-    return CryptoResult.failure(FFI_ERROR_ENCRYPTION_FAILED);
+/// @param ciphertext: Output buffer for ciphertext + 16-byte tag
+/// @param ciphertext_capacity: Capacity of ciphertext buffer (must be >= plaintext_len + 16)
+/// @return CryptoResult with encrypted length (plaintext_len + 16) or failure
+pub export fn zcrypto_aes256_gcm_encrypt(key: [*]const u8, key_len: u32, nonce: [*]const u8, nonce_len: u32, aad: [*]const u8, aad_len: u32, plaintext: [*]const u8, plaintext_len: u32, ciphertext: [*]u8, ciphertext_capacity: u32) callconv(.c) CryptoResult {
+    // Validate key
+    if (!validatePtr(key) or key_len != 32) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+
+    // Validate nonce
+    if (!validatePtr(nonce) or nonce_len != 12) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+
+    // Validate AAD
+    if (!validateInputSlice(aad, aad_len, MAX_INPUT_SIZE)) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+
+    // Validate plaintext
+    if (!validateInputSlice(plaintext, plaintext_len, MAX_INPUT_SIZE)) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+
+    // Validate output buffer (needs space for ciphertext + 16-byte tag)
+    const required_output = plaintext_len + 16;
+    if (!validateOutputBuffer(ciphertext, ciphertext_capacity, required_output)) {
+        return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
+    }
+
+    const Aes256Gcm = std.crypto.aead.aes_gcm.Aes256Gcm;
+
+    const key_array: [32]u8 = key[0..32].*;
+    const nonce_array: [12]u8 = nonce[0..12].*;
+    const aad_slice: []const u8 = if (aad_len > 0 and @intFromPtr(aad) != 0) aad[0..aad_len] else &[_]u8{};
+    const plaintext_slice: []const u8 = if (plaintext_len > 0) plaintext[0..plaintext_len] else &[_]u8{};
+
+    var tag: [16]u8 = undefined;
+    Aes256Gcm.encrypt(
+        ciphertext[0..plaintext_len],
+        &tag,
+        plaintext_slice,
+        aad_slice,
+        nonce_array,
+        key_array,
+    );
+
+    // Append tag to ciphertext
+    @memcpy(ciphertext[plaintext_len..][0..16], &tag);
+
+    return CryptoResult.successWithLen(required_output);
+}
+
+/// AES-256-GCM decryption
+/// @param key: Decryption key (must be 32 bytes)
+/// @param key_len: Key length (must be 32)
+/// @param nonce: Nonce (must be 12 bytes)
+/// @param nonce_len: Nonce length (must be 12)
+/// @param aad: Additional authenticated data (may be null if aad_len is 0)
+/// @param aad_len: AAD length
+/// @param ciphertext: Ciphertext + 16-byte tag
+/// @param ciphertext_len: Ciphertext length including tag (must be >= 16)
+/// @param plaintext: Output buffer for decrypted data
+/// @param plaintext_capacity: Capacity of plaintext buffer (must be >= ciphertext_len - 16)
+/// @return CryptoResult with decrypted length or failure (auth tag verification failed)
+pub export fn zcrypto_aes256_gcm_decrypt(key: [*]const u8, key_len: u32, nonce: [*]const u8, nonce_len: u32, aad: [*]const u8, aad_len: u32, ciphertext: [*]const u8, ciphertext_len: u32, plaintext: [*]u8, plaintext_capacity: u32) callconv(.c) CryptoResult {
+    // Validate key
+    if (!validatePtr(key) or key_len != 32) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+
+    // Validate nonce
+    if (!validatePtr(nonce) or nonce_len != 12) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+
+    // Validate AAD
+    if (!validateInputSlice(aad, aad_len, MAX_INPUT_SIZE)) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+
+    // Validate ciphertext (must include at least 16-byte tag)
+    if (!validatePtr(ciphertext) or ciphertext_len < 16) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+
+    // Validate output buffer
+    const payload_len = ciphertext_len - 16;
+    if (!validateOutputBuffer(plaintext, plaintext_capacity, payload_len)) {
+        return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
+    }
+
+    const Aes256Gcm = std.crypto.aead.aes_gcm.Aes256Gcm;
+
+    const key_array: [32]u8 = key[0..32].*;
+    const nonce_array: [12]u8 = nonce[0..12].*;
+    const aad_slice: []const u8 = if (aad_len > 0 and @intFromPtr(aad) != 0) aad[0..aad_len] else &[_]u8{};
+    const encrypted = ciphertext[0..payload_len];
+    const tag: [16]u8 = ciphertext[payload_len..][0..16].*;
+
+    // Decrypt with authentication verification
+    Aes256Gcm.decrypt(
+        plaintext[0..payload_len],
+        encrypted,
+        tag,
+        aad_slice,
+        nonce_array,
+        key_array,
+    ) catch {
+        // Authentication failed - zero output and return error
+        std.crypto.secureZero(u8, plaintext[0..payload_len]);
+        return CryptoResult.failure(FFI_ERROR_DECRYPTION_FAILED);
+    };
+
+    return CryptoResult.successWithLen(payload_len);
 }
 
 // ============================================================================
@@ -649,6 +1055,146 @@ test "FFI exports compilation" {
     try std.testing.expect(result.success);
 }
 
+test "FFI hash functions with buffer validation" {
+    // Test SHA-256
+    const input = "Hello, World!";
+    var sha256_output: [32]u8 = undefined;
+
+    const sha256_result = zcrypto_sha256(input.ptr, input.len, &sha256_output, 32);
+    try std.testing.expect(sha256_result.success);
+    try std.testing.expectEqual(@as(u32, 32), sha256_result.data_len);
+
+    // Test insufficient buffer
+    var small_buffer: [16]u8 = undefined;
+    const small_result = zcrypto_sha256(input.ptr, input.len, &small_buffer, 16);
+    try std.testing.expect(!small_result.success);
+    try std.testing.expectEqual(@as(u32, FFI_ERROR_INSUFFICIENT_BUFFER), small_result.error_code);
+
+    // Test Blake2b
+    var blake2b_output: [64]u8 = undefined;
+    const blake2b_result = zcrypto_blake2b(input.ptr, input.len, &blake2b_output, 64);
+    try std.testing.expect(blake2b_result.success);
+    try std.testing.expectEqual(@as(u32, 64), blake2b_result.data_len);
+}
+
+test "FFI HKDF operations" {
+    // Test HKDF-Extract
+    const salt = "salt value";
+    const ikm = "input key material";
+    var prk: [32]u8 = undefined;
+
+    const extract_result = zcrypto_hkdf_extract(salt.ptr, salt.len, ikm.ptr, ikm.len, &prk, 32);
+    try std.testing.expect(extract_result.success);
+    try std.testing.expectEqual(@as(u32, 32), extract_result.data_len);
+
+    // PRK should not be all zeros
+    var all_zero = true;
+    for (prk) |byte| {
+        if (byte != 0) {
+            all_zero = false;
+            break;
+        }
+    }
+    try std.testing.expect(!all_zero);
+
+    // Test HKDF-Expand
+    const info = "context info";
+    var okm: [64]u8 = undefined;
+
+    const expand_result = zcrypto_hkdf_expand(&prk, 32, info.ptr, info.len, &okm, 64);
+    try std.testing.expect(expand_result.success);
+    try std.testing.expectEqual(@as(u32, 64), expand_result.data_len);
+
+    // OKM should not be all zeros
+    all_zero = true;
+    for (okm) |byte| {
+        if (byte != 0) {
+            all_zero = false;
+            break;
+        }
+    }
+    try std.testing.expect(!all_zero);
+}
+
+test "FFI AES-256-GCM encryption/decryption" {
+    const key = [_]u8{0x42} ** 32;
+    const nonce = [_]u8{0x01} ** 12;
+    const aad = "additional authenticated data";
+    const plaintext = "Secret message to encrypt!";
+
+    // Encrypt
+    var ciphertext: [plaintext.len + 16]u8 = undefined;
+    const encrypt_result = zcrypto_aes256_gcm_encrypt(
+        &key,
+        32,
+        &nonce,
+        12,
+        aad.ptr,
+        aad.len,
+        plaintext.ptr,
+        plaintext.len,
+        &ciphertext,
+        ciphertext.len,
+    );
+    try std.testing.expect(encrypt_result.success);
+    try std.testing.expectEqual(@as(u32, plaintext.len + 16), encrypt_result.data_len);
+
+    // Ciphertext should be different from plaintext
+    try std.testing.expect(!std.mem.eql(u8, plaintext, ciphertext[0..plaintext.len]));
+
+    // Decrypt
+    var decrypted: [plaintext.len]u8 = undefined;
+    const decrypt_result = zcrypto_aes256_gcm_decrypt(
+        &key,
+        32,
+        &nonce,
+        12,
+        aad.ptr,
+        aad.len,
+        &ciphertext,
+        ciphertext.len,
+        &decrypted,
+        decrypted.len,
+    );
+    try std.testing.expect(decrypt_result.success);
+    try std.testing.expectEqual(@as(u32, plaintext.len), decrypt_result.data_len);
+    try std.testing.expectEqualSlices(u8, plaintext, &decrypted);
+
+    // Test tampering detection
+    var tampered = ciphertext;
+    tampered[10] ^= 0xFF;
+    const tamper_result = zcrypto_aes256_gcm_decrypt(
+        &key,
+        32,
+        &nonce,
+        12,
+        aad.ptr,
+        aad.len,
+        &tampered,
+        tampered.len,
+        &decrypted,
+        decrypted.len,
+    );
+    try std.testing.expect(!tamper_result.success);
+    try std.testing.expectEqual(@as(u32, FFI_ERROR_DECRYPTION_FAILED), tamper_result.error_code);
+}
+
+test "FFI input validation" {
+    var output: [64]u8 = undefined;
+
+    // Test null pointer handling (zero-length with null is ok for some functions)
+    // Test oversized input rejection
+    const result = zcrypto_sha256(@ptrFromInt(1), MAX_INPUT_SIZE + 1, &output, 64);
+    try std.testing.expect(!result.success);
+    try std.testing.expectEqual(@as(u32, FFI_ERROR_INVALID_INPUT), result.error_code);
+
+    // Test insufficient output buffer
+    var small_output: [8]u8 = undefined;
+    const small_result = zcrypto_sha256("test".ptr, 4, &small_output, 8);
+    try std.testing.expect(!small_result.success);
+    try std.testing.expectEqual(@as(u32, FFI_ERROR_INSUFFICIENT_BUFFER), small_result.error_code);
+}
+
 test "FFI ML-KEM-768 operations" {
     var public_key: [pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE]u8 = undefined;
     var private_key: [pq.ml_kem.ML_KEM_768.PRIVATE_KEY_SIZE]u8 = undefined;
@@ -702,25 +1248,38 @@ test "FFI hybrid operations" {
     try std.testing.expect(!all_zero);
 }
 
-test "FFI QUIC crypto" {
-    var context: [1024]u8 = undefined; // Larger buffer for context
+test "FFI QUIC crypto with opaque handles" {
+    var handle: [16]u8 = undefined;
 
-    // Initialize QUIC crypto with post-quantum suite
-    const init_result = zcrypto_quic_init(3, &context); // PQ-Hybrid
+    // Initialize QUIC crypto with AES-128-GCM suite
+    const init_result = zcrypto_quic_init(0, &handle, 16); // AES-128-GCM
     try std.testing.expect(init_result.success);
+    try std.testing.expectEqual(@as(u32, 16), init_result.data_len);
+
+    // Derive initial keys from connection ID
+    const connection_id = [_]u8{ 0x83, 0x94, 0xc8, 0xf0, 0x3e, 0x51, 0x57, 0x08 };
+    const derive_result = zcrypto_quic_derive_initial_keys(&handle, &connection_id, connection_id.len);
+    try std.testing.expect(derive_result.success);
 
     // Test packet encryption/decryption
-    var packet = [_]u8{ 0xc0, 0x00, 0x00, 0x00, 0x01 } ++ "Hello QUIC v0.5.0!".*;
+    // Buffer: header (5) + payload (18) + tag (16) = 39 bytes
+    const header = [_]u8{ 0xc0, 0x00, 0x00, 0x00, 0x01 };
+    const payload = "Hello QUIC v0.5.0!";
     const header_len = 5;
-    const packet_number = 42;
+    const payload_len = 18;
+    const packet_number: u64 = 42;
+
+    var packet: [header_len + payload_len + 16]u8 = undefined;
+    @memcpy(packet[0..header_len], &header);
+    @memcpy(packet[header_len .. header_len + payload_len], payload);
 
     // Store original for comparison
-    var original_payload: [18]u8 = undefined;
-    @memcpy(&original_payload, packet[header_len..]);
+    var original_payload: [payload_len]u8 = undefined;
+    @memcpy(&original_payload, packet[header_len .. header_len + payload_len]);
 
     // Encrypt in-place
     const encrypt_result = zcrypto_quic_encrypt_packet_inplace(
-        &context,
+        &handle,
         0, // initial level
         false, // client
         packet_number,
@@ -729,13 +1288,14 @@ test "FFI QUIC crypto" {
         header_len,
     );
     try std.testing.expect(encrypt_result.success);
+    try std.testing.expectEqual(@as(u32, payload_len + 16), encrypt_result.data_len);
 
-    // Payload should be different
-    try std.testing.expect(!std.mem.eql(u8, &original_payload, packet[header_len..]));
+    // Payload should be different after encryption
+    try std.testing.expect(!std.mem.eql(u8, &original_payload, packet[header_len .. header_len + payload_len]));
 
     // Decrypt in-place
     const decrypt_result = zcrypto_quic_decrypt_packet_inplace(
-        &context,
+        &handle,
         0, // initial level
         false, // client
         packet_number,
@@ -744,9 +1304,29 @@ test "FFI QUIC crypto" {
         header_len,
     );
     try std.testing.expect(decrypt_result.success);
+    try std.testing.expectEqual(@as(u32, payload_len), decrypt_result.data_len);
 
-    // Should match original
-    try std.testing.expect(std.mem.eql(u8, &original_payload, packet[header_len..]));
+    // Should match original after decryption
+    try std.testing.expectEqualSlices(u8, &original_payload, packet[header_len .. header_len + payload_len]);
+
+    // Test tampering detection - encrypt again, then tamper
+    @memcpy(packet[header_len .. header_len + payload_len], payload);
+    _ = zcrypto_quic_encrypt_packet_inplace(&handle, 0, false, packet_number + 1, &packet, packet.len, header_len);
+
+    // Tamper with ciphertext
+    packet[header_len + 5] ^= 0xFF;
+    const tamper_result = zcrypto_quic_decrypt_packet_inplace(&handle, 0, false, packet_number + 1, &packet, packet.len, header_len);
+    try std.testing.expect(!tamper_result.success);
+    try std.testing.expectEqual(@as(u32, FFI_ERROR_DECRYPTION_FAILED), tamper_result.error_code);
+
+    // Free the context
+    const free_result = zcrypto_quic_free(&handle);
+    try std.testing.expect(free_result.success);
+
+    // Verify handle is invalidated
+    const invalid_result = zcrypto_quic_derive_initial_keys(&handle, &connection_id, connection_id.len);
+    try std.testing.expect(!invalid_result.success);
+    try std.testing.expectEqual(@as(u32, FFI_ERROR_INVALID_HANDLE), invalid_result.error_code);
 }
 
 test "FFI library features" {

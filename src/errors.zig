@@ -59,6 +59,40 @@ pub const TlsError = error{
     KeyScheduleError,
     /// Session resumption failed
     SessionResumptionFailed,
+    /// Expected EncryptedExtensions message
+    ExpectedEncryptedExtensions,
+    /// Invalid EncryptedExtensions message format
+    InvalidEncryptedExtensions,
+    /// Forbidden extension in EncryptedExtensions
+    ForbiddenExtension,
+    /// Expected Certificate message
+    ExpectedCertificate,
+    /// Expected CertificateVerify message
+    ExpectedCertificateVerify,
+    /// Invalid CertificateVerify message format
+    InvalidCertificateVerify,
+    /// CertificateVerify signature verification failed
+    InvalidCertificateVerifySignature,
+    /// No certificate received from server
+    NoCertificateReceived,
+    /// Empty certificate chain received
+    EmptyCertificateChain,
+    /// Missing server private key for signing
+    MissingPrivateKey,
+    /// Invalid private key size
+    InvalidPrivateKeySize,
+    /// Unsupported private key type
+    UnsupportedKeyType,
+    /// No cipher suite selected
+    NoCipherSuite,
+    /// Record too short for valid TLS data
+    RecordTooShort,
+    /// Decryption failed (auth tag verification failed)
+    DecryptionFailed,
+    /// Invalid record format
+    InvalidRecord,
+    /// No traffic secret available
+    NoTrafficSecret,
 };
 
 /// X.509 certificate errors
@@ -89,6 +123,10 @@ pub const X509Error = error{
     InvalidPublicKey,
     /// Unsupported signature algorithm
     UnsupportedSignatureAlgorithm,
+    /// Certificate not trusted (not signed by any root CA)
+    UntrustedCertificate,
+    /// No trust anchors (root CAs) configured
+    NoTrustAnchorsConfigured,
 };
 
 /// Network and I/O errors

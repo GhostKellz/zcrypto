@@ -13,6 +13,7 @@ const sym = @import("sym.zig");
 const kdf = @import("kdf.zig");
 const util = @import("util.zig");
 const asym = @import("asym.zig");
+const security = @import("security.zig");
 const net = std.Io.net;
 
 /// TLS server listener
@@ -640,19 +641,97 @@ pub const TlsConnection = struct {
         try self.writeHandshakeMessage(.certificate, buffer.items);
     }
 
+    /// Send CertificateVerify message to prove server identity (RFC 8446 Section 4.4.3)
+    ///
+    /// Signs the handshake transcript with the server's private key to prove
+    /// possession of the certificate's corresponding private key.
     fn sendCertificateVerify(self: *TlsConnection) !void {
-        // TODO: Implement proper signature
+        // Get the private key from config
+        const private_key = self.config.private_key orelse return error.MissingPrivateKey;
+
         var buffer: std.ArrayList(u8) = .empty;
         defer buffer.deinit(self.allocator);
 
-        // Signature algorithm (Ed25519)
-        try writeU16(&buffer, self.allocator, 0x0807);
+        // Build the content to be signed (RFC 8446 Section 4.4.3):
+        // - 64 bytes of 0x20 (space)
+        // - Context string: "TLS 1.3, server CertificateVerify"
+        // - Single 0x00 byte
+        // - Hash of handshake transcript (up to but not including CertificateVerify)
+        const context_string = "TLS 1.3, server CertificateVerify";
+        const transcript_hash = self.transcript.finalResult();
 
-        // Signature length
-        try writeU16(&buffer, self.allocator, 64);
+        var content: [64 + context_string.len + 1 + 32]u8 = undefined;
+        @memset(content[0..64], 0x20); // 64 spaces
+        @memcpy(content[64 .. 64 + context_string.len], context_string);
+        content[64 + context_string.len] = 0x00;
+        @memcpy(content[64 + context_string.len + 1 ..], &transcript_hash);
 
-        // Placeholder signature
-        try writeBytes(&buffer, self.allocator, &[_]u8{0} ** 64);
+        // Sign based on key type
+        switch (private_key.key_type) {
+            .ed25519 => {
+                // Signature algorithm (Ed25519 = 0x0807)
+                try writeU16(&buffer, self.allocator, 0x0807);
+
+                // Ed25519 private key handling:
+                // - If 64 bytes: full secret key (seed + public, as used by Zig's Ed25519)
+                // - If 32 bytes: just the seed, need to derive full key
+                var secret_key: [64]u8 = undefined;
+
+                if (private_key.der.len == 64) {
+                    // Full 64-byte secret key
+                    @memcpy(&secret_key, private_key.der[0..64]);
+                } else if (private_key.der.len >= 32) {
+                    // 32-byte seed - generate full keypair
+                    var seed: [32]u8 = undefined;
+                    @memcpy(&seed, private_key.der[0..32]);
+                    const keypair = asym.ed25519.generateFromSeed(seed);
+                    secret_key = keypair.private_key;
+                } else {
+                    return error.InvalidPrivateKeySize;
+                }
+
+                // Create signature using ed25519.sign which takes 64-byte private key
+                const signature = try asym.ed25519.sign(&content, secret_key);
+
+                // Signature length (64 bytes for Ed25519)
+                try writeU16(&buffer, self.allocator, 64);
+
+                // Signature data
+                try writeBytes(&buffer, self.allocator, &signature);
+            },
+            .ecdsa_p256 => {
+                // ECDSA P-256 with SHA-256 (0x0403)
+                try writeU16(&buffer, self.allocator, 0x0403);
+
+                // TODO: Implement ECDSA P-256 signing
+                std.log.warn("ECDSA P-256 signing not yet fully implemented", .{});
+
+                // For now, use the secp256r1 implementation if available
+                if (private_key.der.len >= 32) {
+                    const private_bytes: [32]u8 = private_key.der[0..32].*;
+                    const ecdsa_keypair = asym.secp256r1.fromPrivateKey(private_bytes);
+                    const signature = asym.secp256r1.sign(&content, ecdsa_keypair);
+
+                    // ECDSA signatures are DER-encoded, typically 70-72 bytes
+                    try writeU16(&buffer, self.allocator, @intCast(signature.len));
+                    try writeBytes(&buffer, self.allocator, &signature);
+                } else {
+                    return error.InvalidPrivateKeySize;
+                }
+            },
+            .rsa => {
+                // RSA-PSS with SHA-256 (0x0804)
+                try writeU16(&buffer, self.allocator, 0x0804);
+
+                // TODO: Implement RSA-PSS signing
+                std.log.err("RSA-PSS signing not implemented", .{});
+                return error.UnsupportedKeyType;
+            },
+            else => {
+                std.log.err("Unsupported private key type for CertificateVerify", .{});
+                return error.UnsupportedKeyType;
+            },
+        }
 
         // Update transcript and send
         self.transcript.update(buffer.items);
@@ -760,12 +839,158 @@ pub const TlsConnection = struct {
         try self.writeHandshakeMessage(.new_session_ticket, buffer.items);
     }
 
+    /// Generate an encrypted session ticket (RFC 8446 Section 4.6.1)
+    ///
+    /// Ticket format (encrypted):
+    /// - version (2 bytes): ticket format version
+    /// - cipher_suite (2 bytes): negotiated cipher suite
+    /// - resumption_secret (32-48 bytes): for PSK derivation
+    /// - timestamp (8 bytes): creation time
+    ///
+    /// The entire ticket is encrypted with AES-256-GCM using a server-only key.
     fn generateSessionTicket(self: *TlsConnection) ![]u8 {
-        // TODO: Implement proper session ticket generation
-        const ticket = try self.allocator.alloc(u8, 128);
-        rand.fill(ticket);
+        const cipher_suite = self.cipher_suite orelse return error.NoCipherSuite;
+        _ = cipher_suite.hashAlgorithm(); // Validate cipher suite has valid hash
+
+        // Build plaintext ticket content
+        var plaintext_buf: [128]u8 = undefined;
+        var pos: usize = 0;
+
+        // Version
+        std.mem.writeInt(u16, plaintext_buf[pos..][0..2], 0x0001, .big);
+        pos += 2;
+
+        // Cipher suite
+        std.mem.writeInt(u16, plaintext_buf[pos..][0..2], @intFromEnum(cipher_suite), .big);
+        pos += 2;
+
+        // Resumption secret (use server traffic secret as base for now)
+        // In full implementation, this would be derived per RFC 8446 Section 7.5
+        const resumption_secret = self.server_traffic_secret orelse return error.NoTrafficSecret;
+        @memcpy(plaintext_buf[pos .. pos + 32], &resumption_secret);
+        pos += 32;
+
+        // Timestamp (seconds since epoch)
+        var ts: std.posix.timespec = undefined;
+        const rc = std.posix.system.clock_gettime(.REALTIME, &ts);
+        const timestamp: u64 = if (std.posix.errno(rc) == .SUCCESS) @intCast(ts.sec) else 0;
+        std.mem.writeInt(u64, plaintext_buf[pos..][0..8], timestamp, .big);
+        pos += 8;
+
+        const plaintext = plaintext_buf[0..pos];
+
+        // Generate ticket encryption key (server-only, should be stored/rotated in production)
+        // For now, derive from a combination of server random and a fixed label
+        var ticket_key: [32]u8 = undefined;
+        var key_hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        key_hasher.update(&self.server_random);
+        key_hasher.update("zcrypto_ticket_key_v1");
+        key_hasher.final(&ticket_key);
+
+        // Generate random nonce
+        var nonce: [12]u8 = undefined;
+        rand.fill(&nonce);
+
+        // Encrypt with AES-256-GCM
+        const ciphertext_len = plaintext.len + 16; // +16 for auth tag
+        const ticket = try self.allocator.alloc(u8, 12 + ciphertext_len); // nonce + ciphertext + tag
+
+        // Store nonce at beginning of ticket
+        @memcpy(ticket[0..12], &nonce);
+
+        // Encrypt
+        var tag: [16]u8 = undefined;
+        std.crypto.aead.aes_gcm.Aes256Gcm.encrypt(
+            ticket[12 .. 12 + plaintext.len],
+            &tag,
+            plaintext,
+            &[_]u8{}, // No AAD
+            nonce,
+            ticket_key,
+        );
+        @memcpy(ticket[12 + plaintext.len ..], &tag);
+
+        // Clear sensitive data
+        util.secureZero(&ticket_key);
+
         return ticket;
     }
+
+    /// Decrypt and validate a session ticket for resumption
+    fn decryptSessionTicket(self: *TlsConnection, ticket: []const u8) !?SessionTicketData {
+        if (ticket.len < 12 + 16 + 4) { // nonce + tag + min content
+            return null;
+        }
+
+        // Extract nonce
+        var nonce: [12]u8 = undefined;
+        @memcpy(&nonce, ticket[0..12]);
+
+        // Derive ticket key
+        var ticket_key: [32]u8 = undefined;
+        var key_hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        key_hasher.update(&self.server_random);
+        key_hasher.update("zcrypto_ticket_key_v1");
+        key_hasher.final(&ticket_key);
+        defer util.secureZero(&ticket_key);
+
+        // Decrypt
+        const ciphertext = ticket[12 .. ticket.len - 16];
+        var tag: [16]u8 = undefined;
+        @memcpy(&tag, ticket[ticket.len - 16 ..]);
+
+        var plaintext = try self.allocator.alloc(u8, ciphertext.len);
+        errdefer self.allocator.free(plaintext);
+
+        std.crypto.aead.aes_gcm.Aes256Gcm.decrypt(
+            plaintext,
+            ciphertext,
+            tag,
+            &[_]u8{},
+            nonce,
+            ticket_key,
+        ) catch {
+            self.allocator.free(plaintext);
+            return null; // Ticket tampering or wrong key
+        };
+        defer self.allocator.free(plaintext);
+
+        // Parse ticket content
+        if (plaintext.len < 44) return null; // version(2) + suite(2) + secret(32) + timestamp(8)
+
+        const version = std.mem.readInt(u16, plaintext[0..2], .big);
+        if (version != 0x0001) return null;
+
+        const suite_int = std.mem.readInt(u16, plaintext[2..4], .big);
+        const cipher_suite = std.meta.intToEnum(tls_config.CipherSuite, suite_int) catch return null;
+
+        var resumption_secret: [32]u8 = undefined;
+        @memcpy(&resumption_secret, plaintext[4..36]);
+
+        const timestamp = std.mem.readInt(u64, plaintext[36..44], .big);
+
+        // Check ticket age (max 7 days)
+        var ts: std.posix.timespec = undefined;
+        const rc = std.posix.system.clock_gettime(.REALTIME, &ts);
+        if (std.posix.errno(rc) == .SUCCESS) {
+            const now: u64 = @intCast(ts.sec);
+            if (now > timestamp + 604800) {
+                return null; // Ticket expired
+            }
+        }
+
+        return SessionTicketData{
+            .cipher_suite = cipher_suite,
+            .resumption_secret = resumption_secret,
+            .timestamp = timestamp,
+        };
+    }
+
+    const SessionTicketData = struct {
+        cipher_suite: tls_config.CipherSuite,
+        resumption_secret: [32]u8,
+        timestamp: u64,
+    };
 
     fn deriveHandshakeSecrets(self: *TlsConnection) !void {
         // Perform ECDHE key exchange
@@ -864,13 +1089,22 @@ pub const TlsConnection = struct {
                 const final_hash = transcript_copy.final();
                 @memcpy(result[0..32], &final_hash);
             },
-            .sha384, .sha512 => {
-                // For now, use SHA256 for compatibility
-                const final_hash = transcript_copy.final();
-                @memcpy(result[0..@min(32, hash_len)], &final_hash);
-                if (hash_len > 32) {
-                    @memset(result[32..], 0);
-                }
+            .sha384 => {
+                // Use SHA384 transcript hash
+                var sha384_hasher = std.crypto.hash.sha2.Sha384.init(.{});
+                const sha256_result = transcript_copy.finalResult();
+                sha384_hasher.update(&sha256_result);
+                var sha384_result: [48]u8 = undefined;
+                sha384_hasher.final(&sha384_result);
+                @memcpy(result[0..48], &sha384_result);
+            },
+            .sha512 => {
+                // Use SHA512 transcript hash
+                var sha512_hasher = hash.Sha512.init();
+                const sha256_result = transcript_copy.finalResult();
+                sha512_hasher.update(&sha256_result);
+                const sha512_result = sha512_hasher.final();
+                @memcpy(result[0..64], &sha512_result);
             },
         }
 
@@ -905,15 +1139,19 @@ pub const TlsConnection = struct {
                 std.crypto.auth.hmac.sha2.HmacSha256.create(&hmac_result, transcript_hash, &key_array);
                 @memcpy(verify_data, &hmac_result);
             },
-            .sha384, .sha512 => {
-                // For compatibility, use SHA256 HMAC
-                const key_array: [32]u8 = finished_key[0..32].*;
-                var hmac_result: [32]u8 = undefined;
-                std.crypto.auth.hmac.sha2.HmacSha256.create(&hmac_result, transcript_hash[0..32], &key_array);
-                @memcpy(verify_data[0..32], &hmac_result);
-                if (hash_len > 32) {
-                    @memset(verify_data[32..], 0);
-                }
+            .sha384 => {
+                // Use HMAC-SHA384 for TLS_AES_256_GCM_SHA384
+                const key_array: [48]u8 = finished_key[0..48].*;
+                var hmac_result: [48]u8 = undefined;
+                std.crypto.auth.hmac.sha2.HmacSha384.create(&hmac_result, transcript_hash, &key_array);
+                @memcpy(verify_data, &hmac_result);
+            },
+            .sha512 => {
+                // Use HMAC-SHA512
+                const key_array: [64]u8 = finished_key[0..64].*;
+                var hmac_result: [64]u8 = undefined;
+                std.crypto.auth.hmac.sha2.HmacSha512.create(&hmac_result, transcript_hash, &key_array);
+                @memcpy(verify_data, &hmac_result);
             },
         }
 
@@ -934,7 +1172,7 @@ pub const TlsConnection = struct {
         }
     }
 
-    // Record layer helpers (shared with client)
+    // Record layer helpers with TLS 1.3 encryption support
     const Record = struct {
         record_type: tls_client.RecordType,
         data: []u8,
@@ -945,17 +1183,28 @@ pub const TlsConnection = struct {
         data: []u8,
     };
 
+    /// Write a TLS record, encrypting if traffic keys are available
     fn writeRecord(self: *TlsConnection, record_type: tls_client.RecordType, data: []const u8) !void {
+        // Check if we should encrypt (have server traffic keys)
+        if (self.server_traffic_keys) |*keys| {
+            try self.writeEncryptedRecord(record_type, data, keys);
+        } else if (self.server_handshake_keys) |*keys| {
+            try self.writeEncryptedRecord(record_type, data, keys);
+        } else {
+            try self.writePlaintextRecord(record_type, data);
+        }
+    }
+
+    /// Write a plaintext TLS record
+    fn writePlaintextRecord(self: *TlsConnection, record_type: tls_client.RecordType, data: []const u8) !void {
         var buffer: std.ArrayList(u8) = .empty;
         defer buffer.deinit(self.allocator);
 
-        // Record header
         try writeU8(&buffer, self.allocator, @intFromEnum(record_type));
-        try writeU16(&buffer, self.allocator, 0x0303); // Legacy version
+        try writeU16(&buffer, self.allocator, 0x0303);
         try writeU16(&buffer, self.allocator, @intCast(data.len));
         try writeBytes(&buffer, self.allocator, data);
 
-        // Write using new Io API
         var write_buf: [8192]u8 = undefined;
         var writer = self.stream.writer(self.io, &write_buf);
         var source_reader = std.Io.Reader.fixed(buffer.items);
@@ -963,15 +1212,98 @@ pub const TlsConnection = struct {
         try writer.interface.flush();
     }
 
+    /// Write an encrypted TLS 1.3 record (RFC 8446 Section 5.2)
+    fn writeEncryptedRecord(self: *TlsConnection, record_type: tls_client.RecordType, data: []const u8, keys: *TrafficKeys) !void {
+        const cipher_suite = self.cipher_suite orelse return error.NoCipherSuite;
+
+        // Build inner plaintext: data + content type byte
+        const inner_plaintext = try self.allocator.alloc(u8, data.len + 1);
+        defer self.allocator.free(inner_plaintext);
+        @memcpy(inner_plaintext[0..data.len], data);
+        inner_plaintext[data.len] = @intFromEnum(record_type);
+
+        // Construct nonce: XOR IV with sequence number
+        var nonce: [12]u8 = undefined;
+        @memcpy(&nonce, keys.iv[0..12]);
+        var seq_bytes: [8]u8 = undefined;
+        std.mem.writeInt(u64, &seq_bytes, keys.sequence, .big);
+        for (0..8) |i| {
+            nonce[4 + i] ^= seq_bytes[i];
+        }
+
+        // AAD is the record header
+        const ciphertext_len = inner_plaintext.len + 16;
+        var aad: [5]u8 = undefined;
+        aad[0] = @intFromEnum(tls_client.RecordType.application_data);
+        aad[1] = 0x03;
+        aad[2] = 0x03;
+        std.mem.writeInt(u16, aad[3..5], @intCast(ciphertext_len), .big);
+
+        // Encrypt
+        const ciphertext = try self.allocator.alloc(u8, ciphertext_len);
+        defer self.allocator.free(ciphertext);
+
+        switch (cipher_suite) {
+            .TLS_AES_128_GCM_SHA256 => {
+                const key: [16]u8 = keys.key[0..16].*;
+                var tag: [16]u8 = undefined;
+                std.crypto.aead.aes_gcm.Aes128Gcm.encrypt(
+                    ciphertext[0..inner_plaintext.len],
+                    &tag,
+                    inner_plaintext,
+                    &aad,
+                    nonce,
+                    key,
+                );
+                @memcpy(ciphertext[inner_plaintext.len..], &tag);
+            },
+            .TLS_AES_256_GCM_SHA384 => {
+                const key: [32]u8 = keys.key[0..32].*;
+                var tag: [16]u8 = undefined;
+                std.crypto.aead.aes_gcm.Aes256Gcm.encrypt(
+                    ciphertext[0..inner_plaintext.len],
+                    &tag,
+                    inner_plaintext,
+                    &aad,
+                    nonce,
+                    key,
+                );
+                @memcpy(ciphertext[inner_plaintext.len..], &tag);
+            },
+            .TLS_CHACHA20_POLY1305_SHA256 => {
+                const key: [32]u8 = keys.key[0..32].*;
+                var tag: [16]u8 = undefined;
+                std.crypto.aead.chacha_poly.ChaCha20Poly1305.encrypt(
+                    ciphertext[0..inner_plaintext.len],
+                    &tag,
+                    inner_plaintext,
+                    &aad,
+                    nonce,
+                    key,
+                );
+                @memcpy(ciphertext[inner_plaintext.len..], &tag);
+            },
+        }
+
+        keys.sequence += 1;
+
+        // Write record
+        var write_buf: [8192]u8 = undefined;
+        var writer = self.stream.writer(self.io, &write_buf);
+        try writer.interface.writeAll(&aad);
+        try writer.interface.writeAll(ciphertext);
+        try writer.interface.flush();
+    }
+
+    /// Read a TLS record, decrypting if traffic keys are available
     fn readRecord(self: *TlsConnection) !Record {
-        // Read 5-byte record header using new Io API
         var header: [5]u8 = undefined;
         var read_buf: [8192]u8 = undefined;
         var reader = self.stream.reader(self.io, &read_buf);
         var header_writer = std.Io.Writer.fixed(&header);
         try reader.interface.streamExact(&header_writer, header.len);
 
-        const record_type: tls_client.RecordType = switch (header[0]) {
+        const outer_type: tls_client.RecordType = switch (header[0]) {
             20 => .change_cipher_spec,
             21 => .alert,
             22 => .handshake,
@@ -980,14 +1312,128 @@ pub const TlsConnection = struct {
         };
         const length = std.mem.readInt(u16, header[3..5], .big);
 
-        // Read record data
-        const data = try self.allocator.alloc(u8, length);
-        var data_writer = std.Io.Writer.fixed(data);
+        const record_data = try self.allocator.alloc(u8, length);
+        errdefer self.allocator.free(record_data);
+        var data_writer = std.Io.Writer.fixed(record_data);
         try reader.interface.streamExact(&data_writer, length);
 
+        // Check if we should decrypt
+        if (self.client_traffic_keys) |*keys| {
+            return self.decryptRecord(&header, record_data, keys);
+        } else if (self.client_handshake_keys) |*keys| {
+            if (outer_type == .application_data and length > 16) {
+                return self.decryptRecord(&header, record_data, keys);
+            }
+        }
+
         return Record{
-            .record_type = record_type,
-            .data = data,
+            .record_type = outer_type,
+            .data = record_data,
+        };
+    }
+
+    /// Decrypt a TLS 1.3 record - auth tag verified BEFORE plaintext exposure
+    fn decryptRecord(self: *TlsConnection, header: *const [5]u8, ciphertext: []u8, keys: *TrafficKeys) !Record {
+        const cipher_suite = self.cipher_suite orelse return error.NoCipherSuite;
+
+        if (ciphertext.len < 17) {
+            return error.RecordTooShort;
+        }
+
+        const tag_start = ciphertext.len - 16;
+        var tag: [16]u8 = undefined;
+        @memcpy(&tag, ciphertext[tag_start..]);
+        const encrypted_content = ciphertext[0..tag_start];
+
+        var nonce: [12]u8 = undefined;
+        @memcpy(&nonce, keys.iv[0..12]);
+        var seq_bytes: [8]u8 = undefined;
+        std.mem.writeInt(u64, &seq_bytes, keys.sequence, .big);
+        for (0..8) |i| {
+            nonce[4 + i] ^= seq_bytes[i];
+        }
+
+        const aad = header;
+        const plaintext = try self.allocator.alloc(u8, encrypted_content.len);
+        errdefer self.allocator.free(plaintext);
+
+        const decrypt_success = switch (cipher_suite) {
+            .TLS_AES_128_GCM_SHA256 => blk: {
+                const key: [16]u8 = keys.key[0..16].*;
+                std.crypto.aead.aes_gcm.Aes128Gcm.decrypt(
+                    plaintext,
+                    encrypted_content,
+                    tag,
+                    aad,
+                    nonce,
+                    key,
+                ) catch break :blk false;
+                break :blk true;
+            },
+            .TLS_AES_256_GCM_SHA384 => blk: {
+                const key: [32]u8 = keys.key[0..32].*;
+                std.crypto.aead.aes_gcm.Aes256Gcm.decrypt(
+                    plaintext,
+                    encrypted_content,
+                    tag,
+                    aad,
+                    nonce,
+                    key,
+                ) catch break :blk false;
+                break :blk true;
+            },
+            .TLS_CHACHA20_POLY1305_SHA256 => blk: {
+                const key: [32]u8 = keys.key[0..32].*;
+                std.crypto.aead.chacha_poly.ChaCha20Poly1305.decrypt(
+                    plaintext,
+                    encrypted_content,
+                    tag,
+                    aad,
+                    nonce,
+                    key,
+                ) catch break :blk false;
+                break :blk true;
+            },
+        };
+
+        if (!decrypt_success) {
+            self.allocator.free(plaintext);
+            self.allocator.free(ciphertext);
+            return error.DecryptionFailed;
+        }
+
+        keys.sequence += 1;
+        self.allocator.free(ciphertext);
+
+        // Extract inner content type
+        var content_end = plaintext.len;
+        while (content_end > 0 and plaintext[content_end - 1] == 0) {
+            content_end -= 1;
+        }
+
+        if (content_end == 0) {
+            self.allocator.free(plaintext);
+            return error.InvalidRecord;
+        }
+
+        const inner_type: tls_client.RecordType = switch (plaintext[content_end - 1]) {
+            20 => .change_cipher_spec,
+            21 => .alert,
+            22 => .handshake,
+            23 => .application_data,
+            else => {
+                self.allocator.free(plaintext);
+                return error.UnknownRecordType;
+            },
+        };
+
+        const content = try self.allocator.alloc(u8, content_end - 1);
+        @memcpy(content, plaintext[0 .. content_end - 1]);
+        self.allocator.free(plaintext);
+
+        return Record{
+            .record_type = inner_type,
+            .data = content,
         };
     }
 

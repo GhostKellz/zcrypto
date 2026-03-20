@@ -2,46 +2,99 @@
 //!
 //! Cryptographically secure random number generation backed by OS entropy.
 //! All functions use secure sources and are suitable for cryptographic use.
+//!
+//! Security features:
+//! - Uses OS-provided CSPRNG (getrandom, arc4random, RtlGenRandom)
+//! - Rejection sampling for unbiased range generation
+//! - Explicit error propagation for entropy failures
 
 const std = @import("std");
 const builtin = @import("builtin");
 
+/// Errors that can occur during random number generation
+pub const RngError = error{
+    /// Failed to obtain entropy from the operating system
+    EntropyFailure,
+    /// The requested range is invalid (e.g., max is 0)
+    InvalidRange,
+    /// /dev/urandom is not available
+    NoEntropySource,
+};
+
 /// Fill a buffer with secure random bytes using OS entropy
-fn osRandom(buf: []u8) void {
+/// Returns error if entropy cannot be obtained
+fn osRandomChecked(buf: []u8) RngError!void {
     switch (builtin.os.tag) {
         .linux => {
             var filled: usize = 0;
+            var retries: usize = 0;
+            const max_retries = 10;
+
             while (filled < buf.len) {
                 const rc = std.os.linux.getrandom(buf.ptr + filled, buf.len - filled, 0);
-                if (std.os.linux.errno(rc) == .SUCCESS) {
+                const errno = std.os.linux.errno(rc);
+
+                if (errno == .SUCCESS) {
                     filled += rc;
+                    retries = 0;
+                } else if (errno == .INTR) {
+                    // Interrupted, retry
+                    retries += 1;
+                    if (retries >= max_retries) return RngError.EntropyFailure;
+                } else {
+                    // Other error (EAGAIN, ENOSYS, etc.)
+                    return RngError.EntropyFailure;
                 }
             }
         },
         .macos, .ios, .tvos, .watchos => {
-            // Use arc4random_buf on Darwin
+            // arc4random_buf never fails on Darwin
             std.c.arc4random_buf(buf.ptr, buf.len);
         },
         .windows => {
-            // Use RtlGenRandom on Windows
-            _ = std.os.windows.ntdll.RtlGenRandom(buf.ptr, @intCast(buf.len));
+            // RtlGenRandom returns BOOLEAN
+            const success = std.os.windows.ntdll.RtlGenRandom(buf.ptr, @intCast(buf.len));
+            if (success == 0) return RngError.EntropyFailure;
         },
         else => {
             // Fallback: read from /dev/urandom
-            const fd = std.posix.openat(std.posix.AT.FDCWD, "/dev/urandom", .{ .ACCMODE = .RDONLY }, 0) catch unreachable;
+            const fd = std.posix.openat(std.posix.AT.FDCWD, "/dev/urandom", .{ .ACCMODE = .RDONLY }, 0) catch {
+                return RngError.NoEntropySource;
+            };
             defer _ = std.posix.system.close(fd);
+
             var filled: usize = 0;
             while (filled < buf.len) {
-                const n = std.posix.read(fd, buf[filled..]) catch unreachable;
+                const n = std.posix.read(fd, buf[filled..]) catch {
+                    return RngError.EntropyFailure;
+                };
+                if (n == 0) return RngError.EntropyFailure; // EOF on /dev/urandom is unexpected
                 filled += n;
             }
         },
     }
 }
 
+/// Fill a buffer with secure random bytes using OS entropy
+/// Panics if entropy cannot be obtained (use fillChecked for error handling)
+fn osRandom(buf: []u8) void {
+    osRandomChecked(buf) catch |err| {
+        @panic(switch (err) {
+            RngError.EntropyFailure => "Failed to obtain entropy from OS",
+            RngError.NoEntropySource => "No entropy source available",
+            RngError.InvalidRange => "Invalid range",
+        });
+    };
+}
+
 /// Fill a buffer with secure random bytes (matches documentation API)
 pub fn fillBytes(buf: []u8) void {
     osRandom(buf);
+}
+
+/// Fill a buffer with secure random bytes with error handling
+pub fn fillChecked(buf: []u8) RngError!void {
+    return osRandomChecked(buf);
 }
 
 /// Fill a buffer with secure random bytes (legacy name)
@@ -70,10 +123,50 @@ pub fn randomU64() u64 {
     return std.mem.readInt(u64, &buf, .little);
 }
 
-/// Generate a random integer in range [0, max)
+/// Generate a random integer in range [0, max) using rejection sampling
+/// This eliminates modulo bias for cryptographically fair distribution
 pub fn randomRange(comptime T: type, max: T) T {
-    const val = randomU64();
-    return @intCast(val % @as(u64, @intCast(max)));
+    if (max == 0) return 0;
+
+    const max_u64: u64 = @intCast(max);
+
+    // Use rejection sampling to eliminate modulo bias
+    // We calculate the largest multiple of max that fits in u64
+    // limit = floor((2^64 - 1) / max) * max
+    // Any value >= limit would cause bias, so we reject those
+    const remainder = std.math.maxInt(u64) % max_u64;
+    const limit = std.math.maxInt(u64) - remainder;
+
+    var val: u64 = undefined;
+    while (true) {
+        val = randomU64();
+        // Accept values below the limit (no bias)
+        if (val <= limit) break;
+    }
+    return @intCast(val % max_u64);
+}
+
+/// Generate a random integer in range [0, max) with error handling
+pub fn randomRangeChecked(comptime T: type, max: T) RngError!T {
+    if (max == 0) return RngError.InvalidRange;
+
+    const max_u64: u64 = @intCast(max);
+    const remainder = std.math.maxInt(u64) % max_u64;
+    const limit = std.math.maxInt(u64) - remainder;
+
+    var buf: [8]u8 = undefined;
+    var attempts: usize = 0;
+    const max_attempts = 256; // Prevent infinite loop on pathological cases
+
+    while (attempts < max_attempts) {
+        try osRandomChecked(&buf);
+        const val = std.mem.readInt(u64, &buf, .little);
+        if (val <= limit) {
+            return @intCast(val % max_u64);
+        }
+        attempts += 1;
+    }
+    return RngError.EntropyFailure; // Should never happen with good RNG
 }
 
 /// Generate a random integer in range [min, max]

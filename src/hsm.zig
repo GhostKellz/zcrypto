@@ -11,6 +11,7 @@ const testing = std.testing;
 const hash = @import("hash.zig");
 const sym = @import("sym.zig");
 const util = @import("util.zig");
+const security = @import("security.zig");
 
 /// Check if a file exists using OS-level syscall
 fn fileExists(path: []const u8) bool {
@@ -125,7 +126,14 @@ pub const TPMProvider = struct {
     }
 
     /// Generate hardware random numbers using TPM RNG
+    ///
+    /// SECURITY WARNING: This is a placeholder using timestamp-seeded PRNG.
+    /// This is NOT cryptographically secure and NOT from actual TPM hardware.
+    /// Requires -Dexperimental-crypto=true to compile.
     pub fn generateRandom(self: *TPMProvider, buffer: []u8) !void {
+        comptime security.requireExperimentalCrypto("TPM generateRandom");
+        security.warnExperimentalCrypto("TPM generateRandom - using timestamp-seeded PRNG, NOT real TPM");
+
         if (!self.is_available) {
             return HSMError.TPMNotAvailable;
         }
@@ -144,16 +152,22 @@ pub const TPMProvider = struct {
     }
 
     /// Create a persistent key in TPM
+    ///
+    /// SECURITY WARNING: This uses placeholder RNG and does NOT actually create
+    /// a TPM-protected key. Requires -Dexperimental-crypto=true to compile.
     pub fn createKey(self: *TPMProvider, key_type: HSMKeyHandle.KeyType, key_size: u16) !HSMKeyHandle {
+        comptime security.requireExperimentalCrypto("TPM createKey");
+        security.warnExperimentalCrypto("TPM createKey - using placeholder, NOT real TPM key creation");
+
         if (!self.is_available) {
             return HSMError.TPMNotAvailable;
         }
 
         _ = key_size; // TODO: Use key_size for key generation parameters
 
-        // Generate unique key ID
+        // Generate unique key ID using OS random (since TPM random requires experimental flag)
         var key_id: u32 = undefined;
-        try self.generateRandom(std.mem.asBytes(&key_id));
+        rand.fill(std.mem.asBytes(&key_id));
 
         return HSMKeyHandle{
             .id = key_id,
@@ -167,7 +181,14 @@ pub const TPMProvider = struct {
     }
 
     /// Perform key derivation using TPM
+    ///
+    /// SECURITY WARNING: This uses a hardcoded dummy key (0x42 repeated).
+    /// The parent_key and salt parameters are IGNORED.
+    /// Requires -Dexperimental-crypto=true to compile.
     pub fn deriveKey(self: *TPMProvider, parent_key: HSMKeyHandle, salt: []const u8, info: []const u8, output: []u8) !void {
+        comptime security.requireExperimentalCrypto("TPM deriveKey");
+        security.warnExperimentalCrypto("TPM deriveKey - using hardcoded dummy key, NOT real TPM derivation");
+
         if (!self.is_available) {
             return HSMError.TPMNotAvailable;
         }
@@ -183,7 +204,14 @@ pub const TPMProvider = struct {
     }
 
     /// Get TPM attestation quote
+    ///
+    /// SECURITY WARNING: This returns a hardcoded placeholder string.
+    /// The nonce is IGNORED - this is NOT a real attestation quote.
+    /// Requires -Dexperimental-crypto=true to compile.
     pub fn getAttestationQuote(self: *TPMProvider, nonce: []const u8, quote_buffer: []u8) !usize {
+        comptime security.requireExperimentalCrypto("TPM getAttestationQuote");
+        security.warnExperimentalCrypto("TPM getAttestationQuote - returning fake quote, NOT real TPM attestation");
+
         if (!self.is_available) {
             return HSMError.TPMNotAvailable;
         }
@@ -281,7 +309,14 @@ pub const PKCS11Provider = struct {
     }
 
     /// Perform HSM-based signature
+    ///
+    /// SECURITY WARNING: This returns a hardcoded placeholder string, NOT a real signature.
+    /// The data is IGNORED. This signature will NOT verify against any public key.
+    /// Requires -Dexperimental-crypto=true to compile.
     pub fn sign(self: *PKCS11Provider, key: HSMKeyHandle, data: []const u8, signature: []u8) !usize {
+        comptime security.requireExperimentalCrypto("PKCS11 HSM sign");
+        security.warnExperimentalCrypto("PKCS11 HSM sign - returning fake signature, NOT real HSM operation");
+
         if (!self.is_loaded) {
             return HSMError.HSMNotAvailable;
         }
@@ -301,7 +336,14 @@ pub const PKCS11Provider = struct {
     }
 
     /// Encrypt data using HSM
+    ///
+    /// SECURITY WARNING: This uses XOR with 0x55 which provides NO real encryption.
+    /// This is trivially reversible and NOT secure.
+    /// Requires -Dexperimental-crypto=true to compile.
     pub fn encrypt(self: *PKCS11Provider, key: HSMKeyHandle, plaintext: []const u8, ciphertext: []u8) !usize {
+        comptime security.requireExperimentalCrypto("PKCS11 HSM encrypt");
+        security.warnExperimentalCrypto("PKCS11 HSM encrypt - using XOR placeholder, NOT real HSM encryption");
+
         if (!self.is_loaded) {
             return HSMError.HSMNotAvailable;
         }
@@ -378,7 +420,14 @@ pub const SecureEnclaveProvider = struct {
     }
 
     /// Perform secure enclave operation
+    ///
+    /// SECURITY WARNING: This is a placeholder using XOR which provides NO real security.
+    /// This does NOT actually use secure enclave hardware.
+    /// Requires -Dexperimental-crypto=true to compile.
     pub fn secureOperation(self: *SecureEnclaveProvider, operation: []const u8, input: []const u8, output: []u8) !usize {
+        comptime security.requireExperimentalCrypto("SecureEnclave secureOperation");
+        security.warnExperimentalCrypto("SecureEnclave secureOperation - using XOR placeholder, NOT real enclave");
+
         if (!self.is_available) {
             return HSMError.HSMNotAvailable;
         }
@@ -439,17 +488,54 @@ pub const HSMInterface = struct {
     }
 
     /// Get hardware random bytes from best available source
+    ///
+    /// SECURITY WARNING: TPM random requires -Dexperimental-crypto=true.
+    /// Falls back to OS entropy (rand.fill) when TPM is not available.
     pub fn getHardwareRandom(self: *HSMInterface, buffer: []u8) !void {
-        if (self.tpm) |*tpm| {
-            return tpm.generateRandom(buffer);
-        }
-
-        // Fallback to system entropy
+        // TPM random requires experimental flag and is a placeholder
+        // Fall back to OS entropy which is cryptographically secure
+        _ = self;
         rand.fill(buffer);
     }
 
+    /// Get hardware random using TPM (requires experimental crypto flag)
+    ///
+    /// SECURITY WARNING: This is a placeholder using timestamp-seeded PRNG.
+    /// Requires -Dexperimental-crypto=true to compile.
+    pub fn getTPMRandom(self: *HSMInterface, buffer: []u8) !void {
+        comptime security.requireExperimentalCrypto("HSMInterface getTPMRandom");
+
+        if (self.tpm) |*tpm| {
+            return tpm.generateRandom(buffer);
+        }
+        return HSMError.TPMNotAvailable;
+    }
+
     /// Generate key using best available HSM
+    ///
+    /// SECURITY WARNING: TPM and PKCS#11 key generation are placeholders.
+    /// Requires -Dexperimental-crypto=true for TPM/PKCS#11 paths.
+    /// Secure enclave path may be used without experimental flag.
     pub fn generateKey(self: *HSMInterface, key_type: HSMKeyHandle.KeyType, key_size: u16) !HSMKeyHandle {
+        _ = key_type; // Key type is passed through to enclave
+
+        // Secure enclave doesn't require experimental flag (it's a real API even if detection may be imperfect)
+        if (self.enclave != null and self.enclave.?.is_available) {
+            return self.enclave.?.generateSecureKey(key_size);
+        }
+
+        // TPM and PKCS#11 require experimental flag since they use placeholders
+        // Return error to indicate HSM not available without experimental crypto
+        return HSMError.HSMNotAvailable;
+    }
+
+    /// Generate key using HSM with experimental placeholders enabled
+    ///
+    /// SECURITY WARNING: TPM and PKCS#11 key generation are PLACEHOLDERS.
+    /// Requires -Dexperimental-crypto=true to compile.
+    pub fn generateKeyExperimental(self: *HSMInterface, key_type: HSMKeyHandle.KeyType, key_size: u16) !HSMKeyHandle {
+        comptime security.requireExperimentalCrypto("HSMInterface generateKeyExperimental");
+
         // Prefer TPM for symmetric keys, PKCS#11 for asymmetric
         if (key_type == .symmetric and self.tpm != null) {
             return self.tpm.?.createKey(key_type, key_size);
@@ -493,16 +579,14 @@ test "TPM provider initialization" {
     std.log.info("TPM available: {}", .{tpm.is_available});
 }
 
-test "hardware random generation" {
+test "hardware random generation via OS entropy" {
+    // Note: getHardwareRandom now always uses OS entropy (rand.fill)
+    // TPM random is separated into getTPMRandom and requires experimental flag
     var hsm = try HSMInterface.init(std.testing.allocator, null);
     defer hsm.deinit(std.testing.allocator);
 
     var random_bytes: [32]u8 = undefined;
-    hsm.getHardwareRandom(&random_bytes) catch |err| {
-        // Skip test if TPM hardware is not available (common in CI environments)
-        if (err == HSMError.TPMNotAvailable) return;
-        return err;
-    };
+    try hsm.getHardwareRandom(&random_bytes);
 
     // Verify randomness (basic sanity check)
     var all_zero = true;
@@ -535,4 +619,20 @@ test "secure enclave detection" {
     };
 
     try testing.expect(enclave.enclave_type == expected_type);
+}
+
+test "HSM key generation without experimental returns error" {
+    var hsm = try HSMInterface.init(std.testing.allocator, null);
+    defer hsm.deinit(std.testing.allocator);
+
+    // Without experimental flag, generateKey should return HSMNotAvailable
+    // for TPM/PKCS#11 paths (enclave may work if available)
+    const result = hsm.generateKey(.symmetric, 256);
+
+    // The result depends on enclave availability
+    // On x86_64, enclave detection returns not available, so we expect error
+    if (builtin.cpu.arch == .x86_64) {
+        try testing.expectError(HSMError.HSMNotAvailable, result);
+    }
+    // On other architectures with enclave, it might succeed
 }

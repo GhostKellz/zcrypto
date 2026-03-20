@@ -21,6 +21,9 @@ pub const CryptoError = error{
     InvalidInput,
 };
 
+// Security guards (always available - controls access to experimental/insecure code)
+pub const security = @import("security.zig");
+
 // Core cryptographic modules (always available)
 pub const hash = @import("hash.zig");
 pub const auth = @import("auth.zig");
@@ -40,6 +43,7 @@ pub const ghostchain = @import("ghostchain.zig");
 
 // Always available modules
 pub const quic_crypto = @import("quic_crypto.zig");
+pub const quic = @import("quic.zig");
 pub const key_rotation = @import("key_rotation.zig");
 
 // Feature modules (may be available based on build configuration)
@@ -78,6 +82,7 @@ test {
     _ = bip;
     _ = batch;
     _ = quic_crypto;
+    _ = quic;
     _ = key_rotation;
     _ = blake3;
     _ = merkle;
