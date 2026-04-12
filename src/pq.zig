@@ -1,4 +1,4 @@
-//! Post-Quantum Cryptography Module for zcrypto v0.4.0
+//! Post-Quantum Cryptography Module for zcrypto v1.0.0
 //!
 //! Implements NIST-standardized post-quantum algorithms:
 //! - FIPS 203: ML-KEM (Module-Lattice-Based Key-Encapsulation Mechanism)

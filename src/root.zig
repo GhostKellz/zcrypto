@@ -68,7 +68,20 @@ pub const x25519 = kex.X25519;
 pub const ed25519 = kex.Ed25519;
 
 // Version information
-pub const version = "0.9.8";
+pub const version = "1.0.0";
+
+pub const build_config = struct {
+    pub const tls_enabled = build_options.enable_tls;
+    pub const post_quantum_enabled = build_options.enable_post_quantum;
+    pub const hardware_accel_enabled = build_options.enable_hardware_accel;
+    pub const blockchain_enabled = build_options.enable_blockchain;
+    pub const vpn_enabled = build_options.enable_vpn;
+    pub const wasm_enabled = build_options.enable_wasm;
+    pub const enterprise_enabled = build_options.enable_enterprise;
+    pub const zkp_enabled = build_options.enable_zkp;
+    pub const async_enabled = build_options.enable_async;
+    pub const experimental_crypto_enabled = build_options.allow_experimental_crypto;
+};
 
 test {
     // Import all core module tests

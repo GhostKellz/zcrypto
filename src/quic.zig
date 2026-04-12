@@ -1,4 +1,4 @@
-//! QUIC Cryptography Module for zcrypto v0.4.0
+//! QUIC Cryptography Module for zcrypto v1.0.0
 //!
 //! Provides cryptographic operations specifically designed for QUIC protocol:
 //! - QUIC-specific key derivation (RFC 9001)

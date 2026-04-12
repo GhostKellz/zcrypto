@@ -280,8 +280,9 @@ pub fn main() !void {
 ## Build and Run
 
 ```bash
-# Save this as examples/basic.zig and run:
-zig run examples/basic.zig
+# Run the repository demo targets instead:
+zig build run
+zig build run-advanced -Dhardware-accel=true
 ```
 
 These examples demonstrate the core cryptographic primitives available in all zcrypto builds. For feature-specific examples (TLS, post-quantum, etc.), see the respective feature documentation.

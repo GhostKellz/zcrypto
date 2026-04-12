@@ -424,25 +424,34 @@ pub const QuicConnection = struct {
         };
     }
 
-    pub fn encryptPacket(self: *QuicConnection, packet: []u8, packet_number: u64) !usize {
+    pub fn encryptPacket(self: *QuicConnection, packet: []u8, payload_len: usize, packet_number: u64) !usize {
+        if (payload_len == 0 or payload_len >= packet.len) return QuicCrypto.Error.InsufficientBuffer;
+
+        const ciphertext_end = 1 + payload_len;
+        const tag_end = ciphertext_end + self.cipher_suite.tagSize();
+        if (tag_end > packet.len) return QuicCrypto.Error.InsufficientBuffer;
+        if (tag_end < 20) return QuicCrypto.Error.InsufficientBuffer;
+
         // Construct nonce from packet number
         var nonce: [12]u8 = std.mem.zeroes([12]u8);
         std.mem.writeInt(u64, nonce[4..12], packet_number, .big);
 
         // Encrypt payload
         var tag: [16]u8 = undefined;
-        const payload_len = try self.aead.sealInPlace(&nonce, packet[1..], "", &tag);
+        _ = try self.aead.sealInPlace(&nonce, packet[1..ciphertext_end], "", &tag);
 
         // Append tag
-        @memcpy(packet[1 + payload_len .. 1 + payload_len + 16], &tag);
+        @memcpy(packet[ciphertext_end..tag_end], &tag);
 
         // Apply header protection
-        try self.header_protection.apply(packet, 1 + payload_len - 16);
+        try self.header_protection.apply(packet[0..tag_end], tag_end - 16);
 
-        return 1 + payload_len + 16;
+        return tag_end;
     }
 
     pub fn decryptPacket(self: *QuicConnection, packet: []u8, packet_number: u64) !usize {
+        if (packet.len < 20) return QuicCrypto.Error.InsufficientBuffer;
+
         // Remove header protection first
         try self.header_protection.remove(packet, packet.len - 16 - 4);
 
@@ -534,7 +543,7 @@ test "SSH/QUIC secret derivation" {
 }
 
 test "QuicConnection from SSH secrets" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -566,4 +575,24 @@ test "QuicConnection from SSH secrets" {
     // Secrets should be stored correctly
     try testing.expectEqualSlices(u8, &client_secret, &client_conn.client_secret);
     try testing.expectEqualSlices(u8, &server_secret, &server_conn.server_secret);
+}
+
+test "QuicConnection encrypts packet with reserved tag space" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const connection_id = [_]u8{ 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0 };
+    var conn = try QuicConnection.initFromConnectionId(allocator, &connection_id, .chacha20_poly1305);
+
+    var packet: [64]u8 = undefined;
+    @memset(&packet, 0);
+    packet[0] = 0x40;
+
+    const payload = [_]u8{0x42} ** 32;
+    @memcpy(packet[1 .. 1 + payload.len], &payload);
+
+    const encrypted_len = try conn.encryptPacket(packet[0..], payload.len, 42);
+    try testing.expect(encrypted_len == 1 + payload.len + 16);
+    try testing.expect(!std.mem.eql(u8, &payload, packet[1 .. 1 + payload.len]));
 }

@@ -9,13 +9,13 @@ pub fn build(b: *std.Build) !void {
     // ============================================================================
 
     const enable_tls = b.option(bool, "tls", "Enable TLS 1.3 and QUIC support") orelse true;
-    const enable_post_quantum = b.option(bool, "post-quantum", "Enable post-quantum cryptography (ML-KEM, ML-DSA)") orelse true;
+    const enable_post_quantum = b.option(bool, "post-quantum", "Enable experimental post-quantum cryptography (requires -Dexperimental-crypto=true)") orelse false;
     const enable_hardware_accel = b.option(bool, "hardware-accel", "Enable hardware acceleration (SIMD, AES-NI)") orelse true;
-    const enable_blockchain = b.option(bool, "blockchain", "Enable blockchain crypto (BLS, Schnorr)") orelse true;
+    const enable_blockchain = b.option(bool, "blockchain", "Enable experimental blockchain crypto helpers (requires -Dexperimental-crypto=true)") orelse false;
     const enable_vpn = b.option(bool, "vpn", "Enable VPN-specific crypto features") orelse true;
     const enable_wasm = b.option(bool, "wasm", "Enable WebAssembly support") orelse true;
-    const enable_enterprise = b.option(bool, "enterprise", "Enable enterprise features (HSM, formal verification)") orelse true;
-    const enable_zkp = b.option(bool, "zkp", "Enable zero-knowledge proofs") orelse true;
+    const enable_enterprise = b.option(bool, "enterprise", "Enable experimental enterprise features (requires -Dexperimental-crypto=true)") orelse false;
+    const enable_zkp = b.option(bool, "zkp", "Enable experimental zero-knowledge proofs (requires -Dexperimental-crypto=true)") orelse false;
     const enable_async = b.option(bool, "async", "Enable async crypto operations (requires zsync)") orelse true;
 
     // ============================================================================
@@ -24,6 +24,10 @@ pub fn build(b: *std.Build) !void {
 
     const allow_experimental_crypto = b.option(bool, "experimental-crypto", "Allow use of incomplete/placeholder crypto implementations (DANGEROUS: not for production)") orelse false;
     const allow_insecure_options = b.option(bool, "allow-insecure", "Allow insecure options like skip_verify in release builds (DANGEROUS: not for production)") orelse false;
+
+    if ((enable_post_quantum or enable_blockchain or enable_enterprise or enable_zkp) and !allow_experimental_crypto) {
+        return error.ExperimentalCryptoRequiresOptIn;
+    }
 
     // ============================================================================
     // DEPENDENCIES - Conditionally include based on features

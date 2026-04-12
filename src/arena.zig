@@ -374,7 +374,7 @@ pub const CryptoBufferPool = struct {
         const buffers = try allocator.alloc([]u8, count);
         errdefer allocator.free(buffers);
 
-        var available: std.ArrayList(usize) = .{};
+        var available: std.ArrayList(usize) = .empty;
         errdefer available.deinit(allocator);
 
         // Pre-allocate all buffers

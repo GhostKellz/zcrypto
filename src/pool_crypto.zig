@@ -258,7 +258,7 @@ pub const CryptoPool = struct {
 
     /// Clean up expired contexts
     fn cleanupExpired(self: *CryptoPool) !void {
-        var to_remove: std.ArrayList(u64) = .{};
+        var to_remove: std.ArrayList(u64) = .empty;
         defer to_remove.deinit(self.allocator);
 
         var iterator = self.contexts.iterator();

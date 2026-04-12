@@ -56,7 +56,7 @@ pub const GroupContext = struct {
 
     pub fn encode(self: *const GroupContext, allocator: std.mem.Allocator) ![]u8 {
         // Simplified encoding
-        var list = std.ArrayList(u8).init();
+        var list = std.ArrayList(u8).init(allocator);
         try list.appendSlice(allocator, std.mem.asBytes(&self.version));
         try list.appendSlice(allocator, std.mem.asBytes(&self.cipher_suite));
         try list.appendSlice(allocator, self.group_id);
@@ -365,6 +365,7 @@ pub const Group = struct {
 
     /// Add a new member to the group
     pub fn addMember(self: *Group, key_package: KeyPackage) !Proposal {
+        _ = self;
         return Proposal{
             .proposal_type = .add,
             .content = .{ .add = .{ .key_package = key_package } },
@@ -626,7 +627,7 @@ const MessageSecrets = struct {
 };
 
 test "MLS group creation and member addition" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
 
     const allocator = gpa.allocator();
@@ -674,7 +675,7 @@ test "MLS group creation and member addition" {
 }
 
 test "MLS message encryption/decryption" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
 
     const allocator = gpa.allocator();

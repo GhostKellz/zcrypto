@@ -4,6 +4,7 @@
 //! with post-quantum enhancements for future-proofing
 
 const std = @import("std");
+const rand = @import("../rand.zig");
 const pq = @import("../pq.zig");
 const asym = @import("../asym.zig");
 const kdf = @import("../kdf.zig");
@@ -349,6 +350,8 @@ pub const PQSignal = struct {
         bob_pq_public: [pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE]u8,
         bob_onetime_public: ?[32]u8,
     ) !struct { shared_secret: [64]u8, associated_data: [64]u8 } {
+        _ = alice_pq_keypair;
+
         // Classical X3DH
         const classical_result = try X3DH.keyExchange(
             alice_identity,
@@ -401,7 +404,7 @@ test "Signal Protocol X3DH" {
 }
 
 test "Double Ratchet encryption/decryption" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
 
     var shared_secret: [32]u8 = undefined;

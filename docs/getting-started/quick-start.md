@@ -1,6 +1,6 @@
 # Quick Start
 
-Get started with zcrypto v0.9.0 in minutes.
+Get started with zcrypto v1.0.0 in minutes.
 
 ## 📦 Installation
 
@@ -8,7 +8,7 @@ Get started with zcrypto v0.9.0 in minutes.
 
 ```bash
 # Add to your project
-zig fetch --save https://github.com/ghostkellz/zcrypto/archive/refs/heads/main.tar.gz
+zig fetch --save https://github.com/ghostkellz/zcrypto/archive/refs/tags/v1.0.0.tar.gz
 ```
 
 ### build.zig
@@ -20,7 +20,7 @@ const zcrypto = b.lazyDependency("zcrypto", .{
     .optimize = optimize,
     // Configure features as needed
     .tls = true,
-    .hardware_accel = true,
+    .@"hardware-accel" = true,
 });
 
 // In your executable/library
@@ -76,15 +76,15 @@ const zcrypto = @import("zcrypto");
 
 pub fn main() !void {
     // Generate keypair
-    const keypair = try zcrypto.asym.generateEd25519Keypair();
+    const keypair = zcrypto.asym.ed25519.generate();
 
     const message = "Sign this message";
 
     // Sign
-    const signature = try zcrypto.asym.signEd25519(keypair.secret_key, message);
+    const signature = try zcrypto.asym.signEd25519(message, keypair.private_key);
 
     // Verify
-    const valid = zcrypto.asym.verifyEd25519(keypair.public_key, message, signature);
+    const valid = zcrypto.asym.verifyEd25519(message, signature, keypair.public_key);
     std.debug.print("Signature valid: {}\n", .{valid});
 }
 ```
@@ -129,36 +129,21 @@ pub fn main() !void {
 }
 ```
 
-## 🌌 Post-Quantum Crypto (when enabled)
+## 🌌 Post-Quantum Crypto (experimental, when enabled)
 
 ```zig
 const zcrypto = @import("zcrypto");
 
 pub fn main() !void {
-    const allocator = std.heap.page_allocator;
+    const keypair = try zcrypto.kyber.generateKeypair();
+    const encapsulation = try zcrypto.kyber.encapsulate(keypair.public_key);
+    const shared_secret = try zcrypto.kyber.decapsulate(keypair.private_key, encapsulation.ciphertext);
 
-    // ML-KEM key exchange
-    const keypair = try zcrypto.post_quantum.ML_KEM_768.generateKeypair(allocator);
-    defer allocator.free(keypair.public_key);
-    defer allocator.free(keypair.secret_key);
-
-    // Encapsulate shared secret
-    const encapsulation = try zcrypto.post_quantum.ML_KEM_768.encapsulate(allocator, keypair.public_key);
-    defer allocator.free(encapsulation.ciphertext);
-
-    // Decapsulate on other side
-    const shared_secret = try zcrypto.post_quantum.ML_KEM_768.decapsulate(
-        allocator,
-        encapsulation.ciphertext,
-        keypair.secret_key
-    );
-    defer allocator.free(shared_secret);
-
-    std.debug.print("Shared secret established: {x}\n", .{
-        std.fmt.fmtSliceHexLower(&shared_secret)
-    });
+    std.debug.print("Shared secret established: {x}\n", .{std.fmt.fmtSliceHexLower(&shared_secret)});
 }
 ```
+
+Build this example with `-Dpost-quantum=true -Dexperimental-crypto=true`.
 
 ## 🔄 Async Operations (when enabled)
 
@@ -192,7 +177,7 @@ pub fn main() !void {
 ## 🎯 Next Steps
 
 - **[Build Configuration](build-config.md)** - Customize features for your use case
-- **[API Reference](../api/core.md)** - Complete API documentation
+- **[API Reference](../api/core.md)** - Stable core API documentation
 - **[Examples](../examples/basic.md)** - More detailed examples
 - **[Integration](../integration.md)** - Real-world integration guides
 

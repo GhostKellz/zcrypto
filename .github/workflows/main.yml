@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  verify:
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
@@ -17,8 +17,13 @@ jobs:
         run: zig version
 
       - name: Format Check
-        run: zig fmt --check src/
+        run: zig fmt --check src/ examples/ docs/
 
-      - name: Build
+      - name: Default Build
         run: zig build -Doptimize=ReleaseSafe
 
+      - name: Test Suite
+        run: zig build test
+
+      - name: Reduced Feature Build
+        run: zig build -Dtls=false -Dpost-quantum=false -Dhardware-accel=false -Dasync=false

@@ -1,26 +1,26 @@
-<div align="center">
-  <img src="assets/icons/zcrypto.png" alt="Zcrypto Logo" width="200"/>
+<p align="center">
+  <img src="assets/icons/zcrypto.png" alt="Zcrypto Logo" width="200" />
+</p>
 
-  [![Crypto](https://img.shields.io/badge/Crypto-Library-blue.svg)](https://github.com/ghostkellz/zcrypto)
-  [![Zig](https://img.shields.io/badge/Zig-v0.16-orange.svg)](https://ziglang.org/)
-  [![Blockchain](https://img.shields.io/badge/Blockchain-Ready-green.svg)](https://github.com/ghostkellz/zcrypto)
-  [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-  [![Build](https://img.shields.io/badge/Build-Passing-brightgreen.svg)](https://github.com/ghostkellz/zcrypto)
-  [![PostQuantum](https://img.shields.io/badge/Post--Quantum-ML--KEM%20%7C%20ML--DSA-purple.svg)](https://github.com/ghostkellz/zcrypto)
-</div>
+<p align="center">
+  <img src="https://img.shields.io/badge/Zig-F7A41D?style=for-the-badge&logo=zig&logoColor=white" alt="Zig">
+  <img src="https://img.shields.io/badge/Cryptography-1F6FEB?style=for-the-badge&logo=letsencrypt&logoColor=white" alt="Cryptography">
+  <img src="https://img.shields.io/badge/QUIC-0F766E?style=for-the-badge&logo=googlechrome&logoColor=white" alt="QUIC">
+  <img src="https://img.shields.io/badge/TLS-2563EB?style=for-the-badge&logo=letsencrypt&logoColor=white" alt="TLS">
+  <img src="https://img.shields.io/badge/Post--Quantum-7C3AED?style=for-the-badge&logo=shield&logoColor=white" alt="Post-Quantum">
+  <img src="https://img.shields.io/badge/License-MIT-F59E0B?style=for-the-badge" alt="License">
+</p>
 
 # Zcrypto: A Modern Cryptography Library for Zig
 
-**Zcrypto v0.9.5** is a fast, safe, and modular cryptography library written entirely in Zig. It features optional compilation with 9 feature flags, enabling builds from 3MB (embedded) to 35MB (full-featured) depending on your needs.
+**Zcrypto v1.0.0** is a modular cryptography library written in Zig. The stable `1.0.0` scope centers on the core primitives, QUIC helpers, and feature-gated transport/runtime integrations that are currently verified in this repository.
 
 ---
 
 ## 🛡️ Core Principles
 
-⚠️ **EXPERIMENTAL LIBRARY - FOR LAB/PERSONAL USE** ⚠️
-This is an experimental library under active development. It is
-intended for research, learning, and personal projects. The API is subject
-to change!
+⚠️ **Mixed Stability Surface** ⚠️
+The core API in this release is intended to be stable. Several optional modules remain experimental and require explicit build-time opt-in via `-Dexperimental-crypto=true`.
 
 * **Memory-safe by design:** Leveraging Zig's explicit control and compile-time safety features.
 * **Modular architecture:** Enable only the features you need with build-time flags.
@@ -30,7 +30,7 @@ to change!
 
 ---
 
-## ⚙️ Modular Features (v0.9.5)
+## ⚙️ Modular Features (v1.0.0)
 
 Zcrypto supports selective compilation with feature flags:
 
@@ -38,12 +38,12 @@ Zcrypto supports selective compilation with feature flags:
 |---------|------|-------------|
 | **Core** | ~3MB | Hash, symmetric crypto, signatures, key exchange |
 | **+ TLS/QUIC** | +8MB | TLS 1.3, QUIC crypto, X.509 certificates |
-| **+ Post-Quantum** | +5MB | ML-KEM, ML-DSA, quantum-resistant algorithms |
+| **+ Post-Quantum** | +5MB | Experimental ML-KEM / ML-DSA APIs |
 | **+ Hardware Accel** | +2MB | AES-NI, AVX2, SIMD optimizations |
-| **+ Blockchain** | +3MB | Schnorr signatures, ZK rollups |
+| **+ Blockchain** | +3MB | Experimental blockchain helpers |
 | **+ VPN** | +4MB | WireGuard, IPsec, IKEv2 protocols |
-| **+ Enterprise** | +3MB | HSM integration, key rotation |
-| **+ ZKP** | +6MB | Bulletproofs, Groth16, SNARKs |
+| **+ Enterprise** | +3MB | Experimental HSM / formal-analysis helpers |
+| **+ ZKP** | +6MB | Experimental zero-knowledge proof APIs |
 | **+ Async** | +2MB | Async crypto with zsync integration |
 
 **Build Size Examples:**
@@ -67,14 +67,14 @@ Zcrypto supports selective compilation with feature flags:
 
 ### 🔧 Optional Features
 
-* **TLS/QUIC** - Complete TLS 1.3 and QUIC crypto implementation
-* **Post-Quantum** - ML-KEM (FIPS 203), ML-DSA (FIPS 204)
+* **TLS/QUIC** - QUIC helpers and TLS-related utilities
+* **Post-Quantum** - Experimental ML-KEM and ML-DSA APIs
 * **Hardware Acceleration** - AES-NI, AVX2, SIMD optimizations
-* **Blockchain** - Schnorr signatures, BIP32 HD wallets
+* **Blockchain** - Experimental blockchain-oriented helpers
 * **VPN** - WireGuard, IPsec, IKEv2 protocol implementations
 * **WebAssembly** - Browser-compatible crypto operations
-* **Enterprise** - HSM integration, automated key rotation
-* **Zero-Knowledge Proofs** - Bulletproofs, Groth16, SNARKs
+* **Enterprise** - Experimental HSM and analysis helpers
+* **Zero-Knowledge Proofs** - Experimental proof-system APIs
 * **Async Operations** - Concurrent crypto with zsync runtime
 
 ---
@@ -84,7 +84,7 @@ Zcrypto supports selective compilation with feature flags:
 ### Installation
 
 ```bash
-zig fetch --save https://github.com/ghostkellz/zcrypto/archive/refs/heads/main.tar.gz
+zig fetch --save https://github.com/ghostkellz/zcrypto/archive/refs/tags/v1.0.0.tar.gz
 ```
 
 ### Basic Usage (Core Only)
@@ -99,12 +99,14 @@ std.debug.print("SHA-256: {x}\n", .{std.fmt.fmtSliceHexLower(&hash)});
 // Encryption
 const key = [_]u8{0x01} ** 32;
 const encrypted = try zcrypto.sym.encryptAesGcm(allocator, "secret", &key);
+defer allocator.free(encrypted);
 const decrypted = try zcrypto.sym.decryptAesGcm(allocator, encrypted, &key);
+defer allocator.free(decrypted);
 
 // Signatures
-const keypair = try zcrypto.asym.generateEd25519Keypair();
-const signature = try zcrypto.asym.signEd25519(keypair.secret_key, "message");
-const valid = zcrypto.asym.verifyEd25519(keypair.public_key, "message", signature);
+const keypair = zcrypto.asym.ed25519.generate();
+const signature = try zcrypto.asym.signEd25519("message", keypair.private_key);
+const valid = zcrypto.asym.verifyEd25519("message", signature, keypair.public_key);
 ```
 
 ### Modular Build Configuration
@@ -116,8 +118,8 @@ const zcrypto = b.lazyDependency("zcrypto", .{
     .optimize = optimize,
     // Enable only needed features
     .tls = true,
-    .post_quantum = true,
-    .hardware_accel = true,
+    .@"post-quantum" = false,
+    .@"hardware-accel" = true,
     // Other features default to false
 });
 
@@ -130,7 +132,7 @@ exe.root_module.addImport("zcrypto", zcrypto.module("zcrypto"));
 
 - **[Quick Start](docs/getting-started/quick-start.md)** - Get started in minutes
 - **[Build Configuration](docs/getting-started/build-config.md)** - Feature flags and optimization
-- **[API Reference](docs/api/core.md)** - Complete API documentation
+- **[API Reference](docs/api/core.md)** - Stable core API documentation
 - **[Features](docs/features/README.md)** - Optional feature guides
 - **[Examples](docs/examples/README.md)** - Working code examples
 - **[Contributing](docs/contributing/README.md)** - Development guidelines
@@ -140,11 +142,14 @@ exe.root_module.addImport("zcrypto", zcrypto.module("zcrypto"));
 ## 🔍 Example Projects
 
 ```bash
-# Build examples with custom features
-zig build examples -Dtls=true -Dpost_quantum=true
+# Build the default targets
+zig build
 
-# Run specific example
-zig build run-example -- tls-client
+# Run the demo
+zig build run
+
+# Run the advanced example with PQ + hardware enabled
+zig build run-advanced -Dpost-quantum=true -Dexperimental-crypto=true -Dhardware-accel=true
 ```
 
 ---
@@ -153,24 +158,23 @@ zig build run-example -- tls-client
 
 * **Embedded/IoT:** Core crypto in ~3MB binaries
 * **Web Services:** TLS + async for secure APIs
-* **Blockchain:** Full ZKP and hardware acceleration
+* **Blockchain Research:** Experimental helpers with explicit opt-in
 * **VPN Servers:** Complete protocol implementations
-* **Enterprise:** HSM integration and key management
-* **Privacy Apps:** Post-quantum and zero-knowledge proofs
+* **Enterprise Research:** Experimental HSM and verification helpers
+* **Privacy Research:** Experimental post-quantum and proof-system APIs
 
 ---
 
 ## 🚀 Roadmap
 
-### ✅ Completed (v0.9.5)
+### ✅ Completed (v1.0.0)
 * ✅ Modular build system with 9 feature flags
 * ✅ 70-91% binary size reduction for selective builds
 * ✅ Structured documentation in `docs/` directory
 * ✅ Hardware acceleration (AES-NI, AVX2, SIMD)
-* ✅ Post-quantum cryptography (ML-KEM, ML-DSA)
-* ✅ TLS 1.3 and QUIC crypto implementation
-* ✅ Enterprise features (HSM, key rotation)
-* ✅ Zero-knowledge proofs (Bulletproofs, Groth16)
+* ✅ Stable core primitives and feature-gated build system
+* ✅ QUIC helpers and TLS-related support code
+* ✅ Honest separation between stable and experimental surfaces
 
 ### 🔮 Future Plans
 * [ ] Additional post-quantum schemes (Falcon, SPHINCS+)
@@ -198,4 +202,3 @@ MIT or dual MIT/Apache2 for maximum compatibility.
 ---
 
 **Zcrypto**: Modular cryptography at the speed of Zig.
-

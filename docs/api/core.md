@@ -1,6 +1,6 @@
 # Core API Reference
 
-Core cryptographic primitives available in all zcrypto builds.
+Core cryptographic primitives available in all stable zcrypto builds.
 
 ## Hash Functions
 
@@ -39,29 +39,18 @@ Computes SHA-512 hash of input data.
 ### Blake2b
 
 ```zig
-pub fn blake2b(data: []const u8, key: ?[]const u8, out_len: usize) ![]u8
+pub fn blake2b(data: []const u8) [64]u8
 ```
 
-Computes Blake2b hash with optional key and variable output length.
-
-**Parameters:**
-- `data`: Input bytes to hash
-- `key`: Optional key for keyed hashing (max 64 bytes)
-- `out_len`: Desired output length (1-64 bytes)
-
-**Returns:** Hash digest of specified length
-
-**Errors:**
-- `error.InvalidKeyLength` if key > 64 bytes
-- `error.InvalidOutputLength` if out_len not in 1-64
+Computes a 64-byte Blake2b hash of the input data.
 
 ## Symmetric Encryption
 
 ### AES-GCM
 
 ```zig
-pub fn encryptAesGcm(allocator: std.mem.Allocator, plaintext: []const u8, key: []const u8, nonce: ?[]const u8, aad: ?[]const u8) ![]u8
-pub fn decryptAesGcm(allocator: std.mem.Allocator, ciphertext: []const u8, key: []const u8, nonce: ?[]const u8, aad: ?[]const u8) ![]u8
+pub fn encryptAesGcm(allocator: std.mem.Allocator, plaintext: []const u8, key: *const [32]u8) ![]u8
+pub fn decryptAesGcm(allocator: std.mem.Allocator, ciphertext_with_nonce: []const u8, key: *const [32]u8) ![]u8
 ```
 
 Authenticated encryption with AES-GCM.
@@ -69,9 +58,7 @@ Authenticated encryption with AES-GCM.
 **Parameters:**
 - `allocator`: Memory allocator
 - `plaintext/ciphertext`: Data to encrypt/decrypt
-- `key`: 16, 24, or 32-byte AES key
-- `nonce`: Optional 12-byte nonce (random if not provided)
-- `aad`: Optional additional authenticated data
+- `key`: 32-byte AES-256-GCM key
 
 **Returns:** Encrypted ciphertext / decrypted plaintext
 
@@ -80,8 +67,8 @@ Authenticated encryption with AES-GCM.
 ### ChaCha20-Poly1305
 
 ```zig
-pub fn encryptChaCha20Poly1305(allocator: std.mem.Allocator, plaintext: []const u8, key: []const u8, nonce: ?[]const u8, aad: ?[]const u8) ![]u8
-pub fn decryptChaCha20Poly1305(allocator: std.mem.Allocator, ciphertext: []const u8, key: []const u8, nonce: ?[]const u8, aad: ?[]const u8) ![]u8
+pub fn encryptChaCha20(allocator: std.mem.Allocator, plaintext: []const u8, key: *const [32]u8) ![]u8
+pub fn decryptChaCha20(allocator: std.mem.Allocator, ciphertext_with_nonce: []const u8, key: *const [32]u8) ![]u8
 ```
 
 Authenticated encryption with ChaCha20-Poly1305.
@@ -89,9 +76,7 @@ Authenticated encryption with ChaCha20-Poly1305.
 **Parameters:**
 - `allocator`: Memory allocator
 - `plaintext/ciphertext`: Data to encrypt/decrypt
-- `key`: 32-byte ChaCha20 key
-- `nonce`: Optional 12-byte nonce (random if not provided)
-- `aad`: Optional additional authenticated data
+- `key`: 32-byte ChaCha20-Poly1305 key
 
 **Returns:** Encrypted ciphertext / decrypted plaintext
 
@@ -132,7 +117,7 @@ Computes HMAC-SHA512 of data with key.
 ### HKDF-SHA256
 
 ```zig
-pub fn hkdfSha256(allocator: std.mem.Allocator, ikm: []const u8, salt: ?[]const u8, info: []const u8, out_len: usize) ![]u8
+pub fn hkdfSha256(allocator: std.mem.Allocator, ikm: []const u8, salt: []const u8, info: []const u8, out_len: usize) ![]u8
 ```
 
 HKDF key derivation using SHA-256.
@@ -140,7 +125,7 @@ HKDF key derivation using SHA-256.
 **Parameters:**
 - `allocator`: Memory allocator
 - `ikm`: Input keying material
-- `salt`: Optional salt (random if not provided)
+- `salt`: Salt bytes
 - `info`: Context-specific info string
 - `out_len`: Desired output length
 
@@ -198,53 +183,59 @@ Generates deterministic random bytes from seed.
 ### Ed25519
 
 ```zig
-pub const Ed25519Keypair = struct {
+pub const Ed25519KeyPair = struct {
     public_key: [32]u8,
-    secret_key: [32]u8,
+    private_key: [64]u8,
 };
 
-pub fn generateEd25519Keypair() !Ed25519Keypair
-pub fn signEd25519(secret_key: [32]u8, message: []const u8) ![64]u8
-pub fn verifyEd25519(public_key: [32]u8, message: []const u8, signature: [64]u8) bool
+pub fn signEd25519(message: []const u8, private_key: [64]u8) ![64]u8
+pub fn verifyEd25519(message: []const u8, signature: [64]u8, public_key: [32]u8) bool
+
+pub const zcrypto.asym.ed25519 = struct {
+    pub fn generate() KeyPair
+}
 ```
 
 Ed25519 digital signatures.
 
 **Key Generation:**
-- `generateEd25519Keypair()`: Generate new keypair
+- `zcrypto.asym.ed25519.generate()`: Generate new keypair
 
 **Signing:**
-- `secret_key`: 32-byte secret key
+- `private_key`: 64-byte private key
 - `message`: Message to sign
 - Returns: 64-byte signature
 
 **Verification:**
-- `public_key`: 32-byte public key
 - `message`: Original message
 - `signature`: 64-byte signature
+- `public_key`: 32-byte public key
 - Returns: `true` if signature is valid
 
 ### X25519
 
 ```zig
-pub const X25519Keypair = struct {
+pub const X25519KeyPair = struct {
     public_key: [32]u8,
-    secret_key: [32]u8,
+    private_key: [32]u8,
 };
 
-pub fn generateX25519Keypair() !X25519Keypair
-pub fn x25519(shared_secret: [32]u8, public_key: [32]u8, secret_key: [32]u8) [32]u8
+pub fn dhX25519(private_key: [32]u8, public_key: [32]u8) ![32]u8
+
+pub const zcrypto.asym.x25519 = struct {
+    pub fn generate() KeyPair
+    pub fn dh(private_key: [32]u8, public_key: [32]u8) ![32]u8
+}
 ```
 
 X25519 key exchange.
 
 **Key Generation:**
-- `generateX25519Keypair()`: Generate new keypair
+- `zcrypto.asym.x25519.generate()`: Generate new keypair
 
 **Key Exchange:**
-- `shared_secret`: Output buffer for shared secret
+- `private_key`: Your private key
 - `public_key`: Peer's public key
-- `secret_key`: Your secret key
 - Returns: Shared secret
 
 ## Key Exchange

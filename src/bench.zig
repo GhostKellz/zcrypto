@@ -165,15 +165,16 @@ pub fn main() !void {
         }
     }.run);
 
-    // QUIC/TLS benchmarks
-    std.debug.print("\n🌐 QUIC/TLS Operations:\n", .{});
+    if (zcrypto.build_config.tls_enabled) {
+        std.debug.print("\n🌐 QUIC/TLS Operations:\n", .{});
 
-    const cid = [_]u8{ 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0 };
-    try benchmark("QUIC Initial Secrets", ITERATIONS, struct {
-        fn run() !void {
-            _ = zcrypto.tls.deriveInitialSecrets(&cid, true);
-        }
-    }.run);
+        const cid = [_]u8{ 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0 };
+        try benchmark("QUIC Initial Secrets", ITERATIONS, struct {
+            fn run() !void {
+                _ = zcrypto.tls.deriveInitialSecrets(&cid, true);
+            }
+        }.run);
+    }
 
     std.debug.print("\n🏆 Benchmark completed!\n", .{});
 }

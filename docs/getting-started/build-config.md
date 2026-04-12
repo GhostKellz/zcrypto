@@ -1,6 +1,6 @@
 # Build Configuration
 
-zcrypto v0.9.0 introduces a **modular build system** that allows you to include only the cryptographic features you need, significantly reducing binary size and compilation time.
+zcrypto v1.0.0 uses a **modular build system** that lets you include only the features you need. Experimental crypto families also require explicit opt-in.
 
 ## 🎯 Feature Flags
 
@@ -13,8 +13,8 @@ zig build -Dtls=false -Dpost-quantum=false -Dhardware-accel=false
 # Enable TLS + hardware acceleration (web server)
 zig build -Dtls=true -Dhardware-accel=true -Dpost-quantum=false
 
-# Enable everything (full-featured)
-zig build  # All features enabled by default
+# Enable experimental PQ support explicitly
+zig build -Dpost-quantum=true -Dexperimental-crypto=true
 ```
 
 ## 📋 Available Feature Flags
@@ -22,13 +22,13 @@ zig build  # All features enabled by default
 | Flag | Default | Description | Impact |
 |------|---------|-------------|---------|
 | `tls` | `true` | TLS 1.3 and QUIC support | ~8KB |
-| `post-quantum` | `true` | ML-KEM/ML-DSA algorithms | ~5KB |
+| `post-quantum` | `false` | Experimental ML-KEM/ML-DSA algorithms | ~5KB |
 | `hardware-accel` | `true` | SIMD/AES-NI optimizations | ~3KB |
-| `blockchain` | `true` | BLS/Schnorr signatures | ~4KB |
+| `blockchain` | `false` | Experimental blockchain helpers | ~4KB |
 | `vpn` | `true` | VPN-specific crypto | ~3KB |
 | `wasm` | `true` | WebAssembly support | ~2KB |
-| `enterprise` | `true` | HSM/Formal verification | ~6KB |
-| `zkp` | `true` | Zero-knowledge proofs | ~7KB |
+| `enterprise` | `false` | Experimental HSM / analysis helpers | ~6KB |
+| `zkp` | `false` | Experimental zero-knowledge proofs | ~7KB |
 | `async` | `true` | zsync async operations | ~4KB |
 
 ## 📊 Build Size Comparison
@@ -51,15 +51,15 @@ const zcrypto = b.lazyDependency("zcrypto", .{
     .optimize = optimize,
     // Enable only TLS and hardware acceleration
     .tls = true,
-    .hardware_accel = true,
+    .@"hardware-accel" = true,
     // Disable everything else
-    .post_quantum = false,
+    .@"post-quantum" = false,
     .blockchain = false,
     .vpn = false,
     .wasm = false,
     .enterprise = false,
     .zkp = false,
-    .async = false,
+    .@"async" = false,
 });
 
 const exe = b.addExecutable(.{
@@ -78,14 +78,14 @@ const zcrypto = b.lazyDependency("zcrypto", .{
     .target = target,
     .optimize = .ReleaseSmall,
     .tls = false,
-    .post_quantum = false,
-    .hardware_accel = false,
+    .@"post-quantum" = false,
+    .@"hardware-accel" = false,
     .blockchain = false,
     .vpn = false,
     .wasm = false,
     .enterprise = false,
     .zkp = false,
-    .async = false,
+    .@"async" = false,
 });
 ```
 
@@ -97,8 +97,8 @@ const zcrypto = b.lazyDependency("zcrypto", .{
     .target = .{ .cpu_arch = .wasm32, .os_tag = .freestanding },
     .optimize = .ReleaseSmall,
     .tls = false,
-    .post_quantum = false,
-    .hardware_accel = false,
+    .@"post-quantum" = false,
+    .@"hardware-accel" = false,
     .enterprise = false,
     .zkp = false,
 });
@@ -126,9 +126,10 @@ const hardware = zcrypto.hardware; // SIMD operations
 
 - **Core crypto is always included** - hash, symmetric crypto, basic primitives
 - **Features are additive** - enabling a feature doesn't disable others
+- **Experimental modules require opt-in** - `post-quantum`, `blockchain`, `enterprise`, and `zkp` also require `-Dexperimental-crypto=true`
 - **Dependencies are automatic** - zsync is only required when `async=true`
 - **Cross-platform** - Feature detection works on all supported platforms
-- **Zero overhead** - Disabled features are completely excluded from compilation
+- **Feature-aware entrypoints** - disabled features no longer break the shipped demo/example targets
 
 ## 🔍 Runtime Feature Detection
 
@@ -151,7 +152,7 @@ if (features.aes_ni) {
 // Old way (v0.8.x) - everything included
 const zcrypto = @import("zcrypto");
 
-// New way (v0.9.0) - selective features
+// New way (v1.0.0) - selective features
 const zcrypto = @import("zcrypto");
 const tls = zcrypto.tls;  // Only available if -Dtls=true
 ```
@@ -180,7 +181,7 @@ if (@import("builtin").is_test) {
 1. **Start minimal** - Enable only what you need
 2. **Profile regularly** - Measure binary size and performance
 3. **Use feature flags** - Different builds for different deployment targets
-4. **Test thoroughly** - Ensure all required features are enabled in CI/CD
+4. **Test thoroughly** - Ensure all required features are verified in your local release checks
 
 ## 📞 Support
 

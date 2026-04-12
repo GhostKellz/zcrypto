@@ -1,6 +1,6 @@
 # zcrypto Documentation
 
-**zcrypto v0.9.5** - Post-quantum ready cryptography library for Zig
+**zcrypto v1.0.0** - Modular cryptography library for Zig with a stable core API and explicit experimental feature gates
 
 ## Quick Navigation
 
@@ -10,7 +10,7 @@
 
 ### API Reference
 - [Core API](api/core.md) - Hash, symmetric, asymmetric, KDF, random
-- [Full Reference](api/reference.md) - Complete API with post-quantum, protocols, QUIC
+- [Full Reference](api/reference.md) - Full API surface, including experimental modules
 
 ### Features
 - [Feature Overview](features/README.md) - Modular feature system
@@ -30,11 +30,10 @@
 | `zcrypto.hash` | SHA-2/3, Blake2/3, SHAKE, HMAC |
 | `zcrypto.sym` | AES-GCM, ChaCha20-Poly1305 |
 | `zcrypto.asym` | Ed25519, X25519, secp256k1/r1 |
-| `zcrypto.pq` | ML-KEM, ML-DSA (post-quantum) |
+| `zcrypto.pq` | Experimental post-quantum APIs |
 | `zcrypto.kdf` | HKDF, PBKDF2, Argon2 |
-| `zcrypto.protocols` | Signal, Noise, MLS |
-| `zcrypto.zkp` | Groth16, Bulletproofs |
-| `zcrypto.quic` | QUIC crypto (incl. PQ) |
+| `zcrypto.zkp` | Experimental proof-system APIs |
+| `zcrypto.quic` | QUIC cryptographic helpers |
 
 ## Build Sizes
 

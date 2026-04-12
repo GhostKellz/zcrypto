@@ -542,7 +542,7 @@ test "Groth16 field arithmetic" {
 }
 
 test "Groth16 circuit and witness" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
 
     const allocator = gpa.allocator();
@@ -563,7 +563,7 @@ test "Groth16 circuit and witness" {
 }
 
 test "Groth16 setup, prove, verify" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
 
     const allocator = gpa.allocator();
@@ -596,7 +596,7 @@ test "Groth16 setup, prove, verify" {
 }
 
 test "Proof serialization" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
 
     const allocator = gpa.allocator();

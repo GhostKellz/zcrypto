@@ -81,7 +81,7 @@ pub const ConstantTimeVerifier = struct {
     pub fn verify(comptime T: type, comptime func: anytype, inputs: []const T) !VerificationResult {
         const start_time = (try util.getTimestampOrError()).toNanos();
 
-        var all_execution_times: std.ArrayList(u64) = .{};
+        var all_execution_times: std.ArrayList(u64) = .empty;
         defer all_execution_times.deinit(std.testing.allocator);
 
         // Multiple rounds of measurement for statistical reliability
@@ -171,8 +171,8 @@ pub const MemorySafetyVerifier = struct {
 
     pub fn init(allocator: std.mem.Allocator) MemorySafetyVerifier {
         return MemorySafetyVerifier{
-            .allocations = .{},
-            .deallocations = .{},
+            .allocations = .empty,
+            .deallocations = .empty,
             .allocator = allocator,
         };
     }
@@ -241,7 +241,7 @@ pub const SideChannelVerifier = struct {
         const start_time = (try util.getTimestampOrError()).toNanos();
 
         // Measure cache behavior using performance counters (simplified)
-        var cache_misses: std.ArrayList(u64) = .{};
+        var cache_misses: std.ArrayList(u64) = .empty;
         defer cache_misses.deinit(std.testing.allocator);
 
         for (test_inputs) |input| {

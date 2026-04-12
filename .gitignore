@@ -1,9 +1,13 @@
 zig-cache/
 zig-out/
-/.zigcache/
 .zig-cache/
 zig-pkg/
 *.o
+*.a
 *.exe
+*.log
+zig-out/**
+test_output.log
+libzcrypto.a
 CLAUDE.md
-SEC_TASKLIST.md
+tasks/ 

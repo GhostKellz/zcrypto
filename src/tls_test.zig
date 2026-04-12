@@ -138,7 +138,7 @@ test "TLS AEAD cipher" {
 
 // Example: Complete TLS client usage
 pub fn exampleTlsClient() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -175,7 +175,7 @@ pub fn exampleTlsClient() !void {
 
 // Example: Complete TLS server usage
 pub fn exampleTlsServer() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -265,8 +265,6 @@ test "TLS configuration cloning" {
 }
 
 test "TLS X25519 key exchange" {
-    const allocator = std.testing.allocator;
-
     // Generate client and server keypairs
     const client_keypair = zcrypto.asym.x25519.generate();
     const server_keypair = zcrypto.asym.x25519.generate();

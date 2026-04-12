@@ -31,8 +31,8 @@ pub const MerkleTree = struct {
     pub fn init(allocator: Allocator) MerkleTree {
         return MerkleTree{
             .allocator = allocator,
-            .leaves = .{},
-            .tree = .{},
+            .leaves = .empty,
+            .tree = .empty,
         };
     }
 
@@ -131,7 +131,7 @@ pub const MerkleProof = struct {
     pub fn init(allocator: Allocator) MerkleProof {
         return MerkleProof{
             .allocator = allocator,
-            .steps = .{},
+            .steps = .empty,
         };
     }
 
@@ -182,7 +182,7 @@ pub const BatchVerifier = struct {
     pub fn init(allocator: Allocator) BatchVerifier {
         return BatchVerifier{
             .allocator = allocator,
-            .signatures = .{},
+            .signatures = .empty,
         };
     }
 

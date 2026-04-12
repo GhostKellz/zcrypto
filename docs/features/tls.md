@@ -1,15 +1,15 @@
 # TLS/QUIC Feature
 
-TLS 1.3 and QUIC cryptographic operations for secure transport protocols.
+TLS-related utilities and QUIC cryptographic helpers for transport protocols.
 
 ## Overview
 
-The TLS feature provides complete TLS 1.3 implementation and QUIC crypto support, including:
+The TLS feature currently provides transport-oriented support code, including:
 
-- TLS 1.3 handshake and record layer
+- TLS handshake and record-layer building blocks
 - QUIC initial secrets derivation
-- X.509 certificate parsing and validation
-- Client and server implementations
+- X.509 parsing helpers and configuration types
+- Client and server support code used by the current examples/tests
 
 ## API Reference
 
@@ -85,7 +85,7 @@ const zcrypto = b.lazyDependency("zcrypto", .{
 
 ## Examples
 
-See `examples/tls_client.zig` and `examples/tls_server.zig` for complete implementations.
+See `src/main.zig`, `src/tls_test.zig`, and the main build targets for current usage examples.
 
 ## Dependencies
 

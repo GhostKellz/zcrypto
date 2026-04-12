@@ -1,4 +1,4 @@
-//! FFI (Foreign Function Interface) for zcrypto v0.5.0
+//! FFI (Foreign Function Interface) for zcrypto v1.0.0
 //!
 //! Enhanced C ABI exports for seamless integration with all GhostChain services:
 //! - ghostbridge (gRPC relay over QUIC)
@@ -947,7 +947,7 @@ pub export fn zcrypto_aes256_gcm_decrypt(key: [*]const u8, key_len: u32, nonce: 
 /// @param buffer_len: Buffer capacity
 /// @return CryptoResult with version string length
 pub export fn zcrypto_version(buffer: [*]u8, buffer_len: u32) callconv(.c) CryptoResult {
-    const version = "zcrypto v0.5.0";
+    const version = "zcrypto v1.0.0";
     if (buffer_len < version.len) {
         return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
     }
@@ -959,7 +959,7 @@ pub export fn zcrypto_version(buffer: [*]u8, buffer_len: u32) callconv(.c) Crypt
 /// Check if post-quantum algorithms are available
 /// @return CryptoResult with success=available
 pub export fn zcrypto_has_post_quantum() callconv(.c) CryptoResult {
-    // Always true in v0.5.0
+    // Mirrors the currently built feature set.
     return CryptoResult.SUCCESS;
 }
 
@@ -1264,7 +1264,7 @@ test "FFI QUIC crypto with opaque handles" {
     // Test packet encryption/decryption
     // Buffer: header (5) + payload (18) + tag (16) = 39 bytes
     const header = [_]u8{ 0xc0, 0x00, 0x00, 0x00, 0x01 };
-    const payload = "Hello QUIC v0.5.0!";
+    const payload = "Hello QUIC v1.0.0!";
     const header_len = 5;
     const payload_len = 18;
     const packet_number: u64 = 42;

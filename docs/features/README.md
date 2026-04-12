@@ -1,30 +1,32 @@
 # Features Overview
 
-zcrypto v0.9.0 supports optional feature flags for modular compilation. Enable only the features you need to minimize binary size and compilation time.
+zcrypto v1.0.0 supports optional feature flags for modular compilation. Stable builds can stay close to the core feature set, while experimental cryptography requires explicit opt-in.
 
 ## Available Features
 
 | Feature | Flag | Description | Size Impact |
 |---------|------|-------------|-------------|
-| **TLS/QUIC** | `tls` | TLS 1.3, QUIC crypto, X.509 certificates | ~8MB |
-| **Post-Quantum** | `post_quantum` | ML-DSA, ML-KEM, Kyber, Dilithium | ~5MB |
-| **Hardware Acceleration** | `hardware_accel` | AES-NI, AVX2, SIMD optimizations | ~2MB |
-| **Blockchain** | `blockchain` | Schnorr signatures, ZK rollups | ~3MB |
+| **TLS/QUIC** | `tls` | TLS-related utilities and QUIC helpers | ~8MB |
+| **Post-Quantum** | `post-quantum` | Experimental ML-DSA / ML-KEM APIs | ~5MB |
+| **Hardware Acceleration** | `hardware-accel` | AES-NI, AVX2, SIMD optimizations | ~2MB |
+| **Blockchain** | `blockchain` | Experimental blockchain helpers | ~3MB |
 | **VPN** | `vpn` | WireGuard, IPsec, IKEv2 protocols | ~4MB |
 | **WebAssembly** | `wasm` | WASM crypto operations | ~1MB |
-| **Enterprise** | `enterprise` | HSM integration, key rotation | ~3MB |
-| **Zero-Knowledge Proofs** | `zkp` | Bulletproofs, Groth16, SNARKs | ~6MB |
+| **Enterprise** | `enterprise` | Experimental HSM / analysis helpers | ~3MB |
+| **Zero-Knowledge Proofs** | `zkp` | Experimental proof-system APIs | ~6MB |
 | **Async Operations** | `async` | Async crypto with zsync integration | ~2MB |
 
 ## Feature Dependencies
 
-Some features depend on others:
+Some features have additional stability considerations:
 
 - **async** → requires zsync dependency
 - **tls** → can use hardware_accel for performance
 - **blockchain** → can use zkp for advanced features
-- **enterprise** → can use hardware_accel and hsm
-- **zkp** → can use hardware_accel for performance
+- **post-quantum** → requires `-Dexperimental-crypto=true`
+- **blockchain** → requires `-Dexperimental-crypto=true`
+- **enterprise** → requires `-Dexperimental-crypto=true`
+- **zkp** → requires `-Dexperimental-crypto=true`
 
 ## Use Case Examples
 
@@ -36,8 +38,8 @@ const zcrypto = b.lazyDependency("zcrypto", .{
     .optimize = optimize,
     // Only essential primitives
     .tls = false,
-    .post_quantum = false,
-    .hardware_accel = false,
+    .@"post-quantum" = false,
+    .@"hardware-accel" = false,
     .blockchain = false,
     .vpn = false,
     .wasm = false,
@@ -55,13 +57,13 @@ const zcrypto = b.lazyDependency("zcrypto", .{
     .target = target,
     .optimize = optimize,
     .tls = true,
-    .async = true,
+    .@"async" = true,
     // Other features disabled
 });
 // Result: ~12MB binary
 ```
 
-### Blockchain Node
+### Blockchain Research Node
 ```zig
 // Full blockchain and ZKP support
 const zcrypto = b.lazyDependency("zcrypto", .{
@@ -69,7 +71,8 @@ const zcrypto = b.lazyDependency("zcrypto", .{
     .optimize = optimize,
     .blockchain = true,
     .zkp = true,
-    .hardware_accel = true,
+    .@"experimental-crypto" = true,
+    .@"hardware-accel" = true,
     // Core features
 });
 // Result: ~18MB binary
@@ -82,7 +85,7 @@ const zcrypto = b.lazyDependency("zcrypto", .{
     .target = target,
     .optimize = optimize,
     .vpn = true,
-    .hardware_accel = true,
+    .@"hardware-accel" = true,
     .tls = true,
     // Core features
 });
@@ -92,14 +95,7 @@ const zcrypto = b.lazyDependency("zcrypto", .{
 ## Feature-Specific Documentation
 
 - **[TLS/QUIC](tls.md)** - Transport security protocols
-- **[Post-Quantum](post-quantum.md)** - Quantum-resistant cryptography
-- **[Hardware Acceleration](hardware.md)** - CPU-specific optimizations
-- **[Blockchain](blockchain.md)** - Decentralized crypto primitives
-- **[VPN](vpn.md)** - Virtual private network protocols
-- **[WebAssembly](wasm.md)** - Browser-compatible crypto
-- **[Enterprise](enterprise.md)** - Enterprise security features
-- **[Zero-Knowledge Proofs](zkp.md)** - Privacy-preserving proofs
-- **[Async Operations](async.md)** - Asynchronous cryptography
+- Additional feature docs should be added only when they match the current implementation and examples.
 
 ## Build Configuration
 
@@ -112,6 +108,7 @@ See **[Build Configuration](../getting-started/build-config.md)** for detailed s
 - Post-quantum algorithms are slower but future-proof
 - ZKP operations are computationally intensive
 
-## Compatibility
+## Stability Notes
 
-All features are backward compatible. Code written for core zcrypto will work with any feature combination.
+- Core modules are the intended stable surface for `v1.0.0`.
+- Experimental modules are available for research and iteration, but should not be treated as frozen production APIs.

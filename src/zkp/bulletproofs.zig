@@ -308,6 +308,8 @@ pub fn proveRange(
     min_value: u64,
     max_value: u64,
 ) !RangeProof {
+    _ = blinding;
+
     if (value < min_value or value > max_value) {
         return BulletproofsError.InvalidRange;
     }
@@ -349,7 +351,7 @@ pub fn proveRange(
     }
 
     // Generate challenge y (would use Fiat-Shamir)
-    const y = Scalar.random();
+    _ = Scalar.random();
 
     // Compute t1, t2 commitments
     const t1 = Point.random(); // Simplified
@@ -538,7 +540,7 @@ test "Pedersen commitments" {
 }
 
 test "Range proof generation and verification" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
 
     const allocator = gpa.allocator();
@@ -574,7 +576,7 @@ test "Discrete log proof" {
 }
 
 test "Range proof serialization" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
 
     const allocator = gpa.allocator();

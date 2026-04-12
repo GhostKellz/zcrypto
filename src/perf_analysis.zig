@@ -67,7 +67,7 @@ pub const StatisticalAnalyzer = struct {
 
     pub fn init(allocator: std.mem.Allocator) StatisticalAnalyzer {
         return StatisticalAnalyzer{
-            .samples = .{},
+            .samples = .empty,
             .allocator = allocator,
         };
     }
