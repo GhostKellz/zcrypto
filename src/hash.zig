@@ -14,6 +14,9 @@ pub const Sha512Hash = [64]u8;
 /// Blake2b hash result
 pub const Blake2bHash = [64]u8;
 
+/// SHA-384 hash result
+pub const Sha384Hash = [48]u8;
+
 /// HMAC-SHA256 result
 pub const HmacSha256Hash = [32]u8;
 
@@ -22,6 +25,13 @@ pub const HmacSha512Hash = [64]u8;
 
 /// HMAC-Blake3 result (using 32-byte output)
 pub const HmacBlake3Hash = [32]u8;
+
+/// Hash algorithms used by downstream protocol code.
+pub const Algorithm = enum {
+    sha256,
+    sha384,
+    sha512,
+};
 
 /// Compute SHA-256 hash of input data
 pub fn sha256(data: []const u8) Sha256Hash {
@@ -35,6 +45,13 @@ pub fn sha512(data: []const u8) Sha512Hash {
     var hasher = std.crypto.hash.sha2.Sha512.init(.{});
     hasher.update(data);
     return hasher.finalResult();
+}
+
+/// Compute SHA-384 hash of input data
+pub fn sha384(data: []const u8) Sha384Hash {
+    var result: Sha384Hash = undefined;
+    std.crypto.hash.sha2.Sha384.hash(data, &result, .{});
+    return result;
 }
 
 /// Compute Blake2b hash of input data
@@ -99,6 +116,26 @@ pub const Sha512 = struct {
     }
 };
 
+/// Streaming SHA-384 hasher
+pub const Sha384 = struct {
+    hasher: std.crypto.hash.sha2.Sha384,
+
+    pub fn init() Sha384 {
+        return .{ .hasher = std.crypto.hash.sha2.Sha384.init(.{}) };
+    }
+
+    pub fn update(self: *Sha384, data: []const u8) void {
+        self.hasher.update(data);
+    }
+
+    pub fn final(self: *Sha384) Sha384Hash {
+        return self.hasher.finalResult();
+    }
+};
+
+/// Re-export Blake3 stream hasher from the dedicated module.
+pub const Blake3 = @import("blake3.zig").Blake3;
+
 /// Hex encoding utilities for hash outputs
 pub fn toHex(comptime T: type, hash: T, buf: []u8) []u8 {
     _ = std.fmt.bytesToHex(hash, .lower);
@@ -123,6 +160,13 @@ test "sha512 basic" {
 
     // Basic sanity check - should be 64 bytes
     try std.testing.expectEqual(@as(usize, 64), result.len);
+}
+
+test "sha384 basic" {
+    const input = "hello world";
+    const result = sha384(input);
+
+    try std.testing.expectEqual(@as(usize, 48), result.len);
 }
 
 test "blake2b basic" {

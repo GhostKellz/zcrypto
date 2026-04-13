@@ -5,6 +5,17 @@
 
 const std = @import("std");
 
+const HkdfSha384 = std.crypto.kdf.hkdf.Hkdf(std.crypto.auth.hmac.sha2.HmacSha384);
+
+fn hkdfExpandFromSecret(secret: []const u8, info: []const u8, output: []u8) !void {
+    switch (secret.len) {
+        32 => std.crypto.kdf.hkdf.HkdfSha256.expand(output, info, secret[0..32].*),
+        48 => HkdfSha384.expand(output, info, secret[0..48].*),
+        64 => std.crypto.kdf.hkdf.HkdfSha512.expand(output, info, secret[0..64].*),
+        else => return error.InvalidSecretLength,
+    }
+}
+
 /// HKDF using SHA-256
 pub fn hkdfSha256(
     allocator: std.mem.Allocator,
@@ -107,8 +118,11 @@ pub fn hkdfExpandLabel(
         @memcpy(hkdf_label[offset .. offset + context.len], context);
     }
 
-    // HKDF-Expand with the constructed label
-    return hkdfSha256(allocator, secret, "", hkdf_label, length);
+    const output = try allocator.alloc(u8, length);
+    errdefer allocator.free(output);
+
+    try hkdfExpandFromSecret(secret, hkdf_label, output);
+    return output;
 }
 
 /// Derive key material using HKDF with convenient defaults
@@ -235,14 +249,43 @@ test "hkdf sha256 basic" {
 test "tls 1.3 hkdf expand label" {
     const allocator = std.testing.allocator;
 
-    const secret = "master secret for testing";
+    const secret = [_]u8{0x11} ** 32;
     const label = "key";
     const context = "";
 
-    const derived = try hkdfExpandLabel(allocator, secret, label, context, 16);
+    const derived = try hkdfExpandLabel(allocator, &secret, label, context, 16);
     defer allocator.free(derived);
 
     try std.testing.expectEqual(@as(usize, 16), derived.len);
+}
+
+test "tls 1.3 hkdf expand label matches stdlib expand for sha256 prk" {
+    const allocator = std.testing.allocator;
+
+    const secret = [_]u8{0x42} ** 32;
+    const label = "quic key";
+    const context = "";
+
+    const derived = try hkdfExpandLabel(allocator, &secret, label, context, 16);
+    defer allocator.free(derived);
+
+    var info: [2 + 1 + 6 + label.len + 1]u8 = undefined;
+    var offset: usize = 0;
+    info[offset] = 0;
+    info[offset + 1] = 16;
+    offset += 2;
+    info[offset] = 6 + label.len;
+    offset += 1;
+    @memcpy(info[offset .. offset + 6], "tls13 ");
+    offset += 6;
+    @memcpy(info[offset .. offset + label.len], label);
+    offset += label.len;
+    info[offset] = 0;
+
+    var expected: [16]u8 = undefined;
+    std.crypto.kdf.hkdf.HkdfSha256.expand(&expected, &info, secret);
+
+    try std.testing.expectEqualSlices(u8, &expected, derived);
 }
 
 test "pbkdf2 password stretching" {

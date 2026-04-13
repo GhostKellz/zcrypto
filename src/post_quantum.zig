@@ -5,6 +5,7 @@
 const std = @import("std");
 const rand = @import("rand.zig");
 const crypto = std.crypto;
+const pq_impl = @import("pq.zig");
 const testing = std.testing;
 
 pub const PostQuantumError = error{
@@ -38,47 +39,32 @@ pub const ML_KEM_512 = struct {
 
     /// Generate a new key pair using secure random
     pub fn generateKeypair() !KeyPair {
-        var keypair = KeyPair{
-            .public_key = undefined,
-            .private_key = undefined,
+        const keypair = try pq_impl.ml_kem.ML_KEM_512.KeyPair.generateRandom();
+        return .{
+            .public_key = keypair.public_key,
+            .private_key = keypair.private_key,
         };
-
-        // For now, this is a stub implementation
-        // Real implementation would use NIST ML-KEM algorithm
-        rand.fill(&keypair.public_key);
-        rand.fill(&keypair.private_key);
-
-        return keypair;
     }
 
     /// Encapsulate to create shared secret and ciphertext
     pub fn encapsulate(public_key: [PUBLIC_KEY_SIZE]u8) !EncapsulationResult {
-        var result = EncapsulationResult{
-            .ciphertext = undefined,
-            .shared_secret = undefined,
+        var randomness: [pq_impl.ml_kem.ML_KEM_512.SEED_SIZE]u8 = undefined;
+        rand.fill(&randomness);
+
+        const result = try pq_impl.ml_kem.ML_KEM_512.KeyPair.encapsulate(public_key, randomness);
+        return .{
+            .ciphertext = result.ciphertext,
+            .shared_secret = result.shared_secret,
         };
-
-        // Stub implementation - would use proper ML-KEM encapsulation
-        rand.fill(&result.ciphertext);
-        rand.fill(&result.shared_secret);
-
-        // In real implementation, shared secret would be derived from public key
-        _ = public_key;
-
-        return result;
     }
 
     /// Decapsulate ciphertext to recover shared secret
     pub fn decapsulate(private_key: [PRIVATE_KEY_SIZE]u8, ciphertext: [CIPHERTEXT_SIZE]u8) ![SHARED_SECRET_SIZE]u8 {
-        var shared_secret: [SHARED_SECRET_SIZE]u8 = undefined;
-
-        // Stub implementation - would use proper ML-KEM decapsulation
-        var hasher = crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(&private_key);
-        hasher.update(&ciphertext);
-        hasher.final(&shared_secret);
-
-        return shared_secret;
+        const keypair = pq_impl.ml_kem.ML_KEM_512.KeyPair{
+            .public_key = [_]u8{0} ** PUBLIC_KEY_SIZE,
+            .private_key = private_key,
+        };
+        return try keypair.decapsulate(ciphertext);
     }
 };
 
@@ -100,39 +86,30 @@ pub const ML_KEM_768 = struct {
     };
 
     pub fn generateKeypair() !KeyPair {
-        var keypair = KeyPair{
-            .public_key = undefined,
-            .private_key = undefined,
+        const keypair = try pq_impl.ml_kem.ML_KEM_768.KeyPair.generateRandom();
+        return .{
+            .public_key = keypair.public_key,
+            .private_key = keypair.private_key,
         };
-
-        rand.fill(&keypair.public_key);
-        rand.fill(&keypair.private_key);
-
-        return keypair;
     }
 
     pub fn encapsulate(public_key: [PUBLIC_KEY_SIZE]u8) !EncapsulationResult {
-        var result = EncapsulationResult{
-            .ciphertext = undefined,
-            .shared_secret = undefined,
+        var randomness: [pq_impl.ml_kem.ML_KEM_768.SEED_SIZE]u8 = undefined;
+        rand.fill(&randomness);
+
+        const result = try pq_impl.ml_kem.ML_KEM_768.KeyPair.encapsulate(public_key, randomness);
+        return .{
+            .ciphertext = result.ciphertext,
+            .shared_secret = result.shared_secret,
         };
-
-        rand.fill(&result.ciphertext);
-        rand.fill(&result.shared_secret);
-        _ = public_key;
-
-        return result;
     }
 
     pub fn decapsulate(private_key: [PRIVATE_KEY_SIZE]u8, ciphertext: [CIPHERTEXT_SIZE]u8) ![SHARED_SECRET_SIZE]u8 {
-        var shared_secret: [SHARED_SECRET_SIZE]u8 = undefined;
-
-        var hasher = crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(&private_key);
-        hasher.update(&ciphertext);
-        hasher.final(&shared_secret);
-
-        return shared_secret;
+        const keypair = pq_impl.ml_kem.ML_KEM_768.KeyPair{
+            .public_key = [_]u8{0} ** PUBLIC_KEY_SIZE,
+            .private_key = private_key,
+        };
+        return try keypair.decapsulate(ciphertext);
     }
 };
 
@@ -154,39 +131,30 @@ pub const ML_KEM_1024 = struct {
     };
 
     pub fn generateKeypair() !KeyPair {
-        var keypair = KeyPair{
-            .public_key = undefined,
-            .private_key = undefined,
+        const keypair = try pq_impl.ml_kem.ML_KEM_1024.KeyPair.generateRandom();
+        return .{
+            .public_key = keypair.public_key,
+            .private_key = keypair.private_key,
         };
-
-        rand.fill(&keypair.public_key);
-        rand.fill(&keypair.private_key);
-
-        return keypair;
     }
 
     pub fn encapsulate(public_key: [PUBLIC_KEY_SIZE]u8) !EncapsulationResult {
-        var result = EncapsulationResult{
-            .ciphertext = undefined,
-            .shared_secret = undefined,
+        var randomness: [pq_impl.ml_kem.ML_KEM_1024.SEED_SIZE]u8 = undefined;
+        rand.fill(&randomness);
+
+        const result = try pq_impl.ml_kem.ML_KEM_1024.KeyPair.encapsulate(public_key, randomness);
+        return .{
+            .ciphertext = result.ciphertext,
+            .shared_secret = result.shared_secret,
         };
-
-        rand.fill(&result.ciphertext);
-        rand.fill(&result.shared_secret);
-        _ = public_key;
-
-        return result;
     }
 
     pub fn decapsulate(private_key: [PRIVATE_KEY_SIZE]u8, ciphertext: [CIPHERTEXT_SIZE]u8) ![SHARED_SECRET_SIZE]u8 {
-        var shared_secret: [SHARED_SECRET_SIZE]u8 = undefined;
-
-        var hasher = crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(&private_key);
-        hasher.update(&ciphertext);
-        hasher.final(&shared_secret);
-
-        return shared_secret;
+        const keypair = pq_impl.ml_kem.ML_KEM_1024.KeyPair{
+            .public_key = [_]u8{0} ** PUBLIC_KEY_SIZE,
+            .private_key = private_key,
+        };
+        return try keypair.decapsulate(ciphertext);
     }
 };
 
@@ -251,8 +219,8 @@ pub const ML_DSA_44 = struct {
 /// ML-DSA-65 (formerly Dilithium3) - NIST security level 3 (recommended)
 pub const ML_DSA_65 = struct {
     pub const PUBLIC_KEY_SIZE = 1952;
-    pub const PRIVATE_KEY_SIZE = 4000;
-    pub const SIGNATURE_SIZE = 3293;
+    pub const PRIVATE_KEY_SIZE = pq_impl.ml_dsa.ML_DSA_65.PRIVATE_KEY_SIZE;
+    pub const SIGNATURE_SIZE = pq_impl.ml_dsa.ML_DSA_65.SIGNATURE_SIZE;
 
     pub const KeyPair = struct {
         public_key: [PUBLIC_KEY_SIZE]u8,
@@ -260,45 +228,25 @@ pub const ML_DSA_65 = struct {
     };
 
     pub fn generateKeypair() !KeyPair {
-        var keypair = KeyPair{
-            .public_key = undefined,
-            .private_key = undefined,
+        const keypair = try pq_impl.ml_dsa.ML_DSA_65.KeyPair.generateRandom(std.heap.page_allocator);
+        return .{
+            .public_key = keypair.public_key,
+            .private_key = keypair.private_key,
         };
-
-        rand.fill(&keypair.public_key);
-        rand.fill(&keypair.private_key);
-
-        return keypair;
     }
 
     pub fn sign(private_key: [PRIVATE_KEY_SIZE]u8, message: []const u8) ![SIGNATURE_SIZE]u8 {
-        var signature: [SIGNATURE_SIZE]u8 = undefined;
-
-        var hasher = crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(&private_key);
-        hasher.update(message);
-        var hash: [32]u8 = undefined;
-        hasher.final(&hash);
-
-        var i: usize = 0;
-        while (i < SIGNATURE_SIZE) {
-            const chunk_size = @min(32, SIGNATURE_SIZE - i);
-            @memcpy(signature[i .. i + chunk_size], hash[0..chunk_size]);
-            i += chunk_size;
-        }
-
-        return signature;
+        const keypair = pq_impl.ml_dsa.ML_DSA_65.KeyPair{
+            .public_key = [_]u8{0} ** PUBLIC_KEY_SIZE,
+            .private_key = private_key,
+        };
+        var randomness: [pq_impl.ml_dsa.ML_DSA_65.SEED_SIZE]u8 = undefined;
+        rand.fill(&randomness);
+        return try keypair.sign(message, randomness);
     }
 
     pub fn verify(public_key: [PUBLIC_KEY_SIZE]u8, message: []const u8, signature: [SIGNATURE_SIZE]u8) !bool {
-        var hasher = crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(&public_key);
-        hasher.update(message);
-        hasher.update(&signature);
-        var hash: [32]u8 = undefined;
-        hasher.final(&hash);
-
-        return hash[0] != 0;
+        return try pq_impl.ml_dsa.ML_DSA_65.KeyPair.verify(public_key, message, signature);
     }
 };
 
@@ -527,12 +475,10 @@ pub const HybridSignature = struct {
 
 // Tests
 test "ML-KEM-768 key exchange" {
-    // TODO: Fix key exchange shared secret mismatch
-    // const keypair = try ML_KEM_768.generateKeypair();
-    // const encap_result = try ML_KEM_768.encapsulate(keypair.public_key);
-    // const decap_secret = try ML_KEM_768.decapsulate(keypair.private_key, encap_result.ciphertext);
-    // try testing.expectEqualSlices(u8, &encap_result.shared_secret, &decap_secret);
-    try testing.expect(true); // Placeholder for now
+    const keypair = try ML_KEM_768.generateKeypair();
+    const encap_result = try ML_KEM_768.encapsulate(keypair.public_key);
+    const decap_secret = try ML_KEM_768.decapsulate(keypair.private_key, encap_result.ciphertext);
+    try testing.expectEqualSlices(u8, &encap_result.shared_secret, &decap_secret);
 }
 
 test "ML-DSA-65 signature" {

@@ -6,6 +6,33 @@ const std = @import("std");
 const crypto = std.crypto;
 const testing = std.testing;
 
+const DerivedQuicKeys = struct {
+    key: [32]u8,
+    iv: [12]u8,
+    hp: [32]u8,
+};
+
+fn deriveQuicKeys(secret: *const [32]u8, cipher_suite: QuicCrypto.CipherSuite) !DerivedQuicKeys {
+    var derived: DerivedQuicKeys = .{
+        .key = [_]u8{0} ** 32,
+        .iv = [_]u8{0} ** 12,
+        .hp = [_]u8{0} ** 32,
+    };
+
+    const key_len = cipher_suite.keySize();
+    const hp_len: usize = switch (cipher_suite) {
+        .aes_128_gcm => 16,
+        .aes_256_gcm => 32,
+        .chacha20_poly1305 => 32,
+    };
+
+    QuicCrypto.HKDF.expandLabel(secret, QuicLabels.key, "", derived.key[0..key_len]);
+    QuicCrypto.HKDF.expandLabel(secret, QuicLabels.iv, "", &derived.iv);
+    QuicCrypto.HKDF.expandLabel(secret, QuicLabels.hp, "", derived.hp[0..hp_len]);
+
+    return derived;
+}
+
 pub const QuicCrypto = struct {
     pub const Error = error{
         InvalidKey,
@@ -94,20 +121,28 @@ pub const QuicCrypto = struct {
                 info_len += context.len;
             }
 
-            expand(secret, info_buffer[0..info_len], out);
+            std.debug.assert(secret.len == 32);
+            crypto.kdf.hkdf.HkdfSha256.expand(out, info_buffer[0..info_len], secret[0..32].*);
         }
     };
 
     /// Header protection for QUIC packets (RFC 9001 Section 5.4)
     pub const HeaderProtection = struct {
         cipher: CipherSuite,
-        key: []const u8,
+        key: [32]u8,
 
         pub fn init(cipher: CipherSuite, key: []const u8) HeaderProtection {
-            std.debug.assert(key.len == cipher.keySize());
+            const expected_len: usize = switch (cipher) {
+                .aes_128_gcm => 16,
+                .aes_256_gcm => 32,
+                .chacha20_poly1305 => 32,
+            };
+            std.debug.assert(key.len == expected_len);
+            var stored_key = [_]u8{0} ** 32;
+            @memcpy(stored_key[0..key.len], key);
             return HeaderProtection{
                 .cipher = cipher,
-                .key = key,
+                .key = stored_key,
             };
         }
 
@@ -130,11 +165,11 @@ pub const QuicCrypto = struct {
                     @memcpy(mask[0..5], aes_mask[0..5]);
                 },
                 .chacha20_poly1305 => {
-                    // ChaCha20 with counter=0
+                    const counter = std.mem.readInt(u32, sample[0..4], .little);
                     var chacha_mask: [64]u8 = undefined;
                     const key_array: [32]u8 = self.key[0..32].*;
                     const nonce_array: [12]u8 = sample[4..16].*;
-                    crypto.stream.chacha.ChaCha20IETF.xor(&chacha_mask, &chacha_mask, 0, key_array, nonce_array);
+                    crypto.stream.chacha.ChaCha20IETF.xor(&chacha_mask, &chacha_mask, counter, key_array, nonce_array);
                     @memcpy(mask[0..5], chacha_mask[0..5]);
                 },
             }
@@ -149,10 +184,9 @@ pub const QuicCrypto = struct {
 
             // Apply mask to first byte and packet number
             const mask_bits: u8 = if (packet[0] & 0x80 != 0) 0x0F else 0x1F;
+            const pn_length = (packet[0] & 0x03) + 1;
             packet[0] ^= mask[0] & mask_bits;
 
-            // Determine packet number length and apply mask
-            const pn_length = (packet[0] & 0x03) + 1;
             for (0..pn_length) |i| {
                 if (1 + i < packet.len) {
                     packet[1 + i] ^= mask[1 + i];
@@ -170,13 +204,15 @@ pub const QuicCrypto = struct {
     /// Zero-copy AEAD operations for QUIC packet protection
     pub const AEAD = struct {
         cipher: CipherSuite,
-        key: []const u8,
+        key: [32]u8,
 
         pub fn init(cipher: CipherSuite, key: []const u8) AEAD {
             std.debug.assert(key.len == cipher.keySize());
+            var stored_key = [_]u8{0} ** 32;
+            @memcpy(stored_key[0..key.len], key);
             return AEAD{
                 .cipher = cipher,
-                .key = key,
+                .key = stored_key,
             };
         }
 
@@ -343,6 +379,7 @@ pub const QuicConnection = struct {
     cipher_suite: QuicCrypto.CipherSuite,
     client_secret: [32]u8,
     server_secret: [32]u8,
+    iv: [12]u8,
     header_protection: QuicCrypto.HeaderProtection,
     aead: QuicCrypto.AEAD,
     is_ssh_mode: bool = false,
@@ -355,24 +392,20 @@ pub const QuicConnection = struct {
         server_secret: [32]u8,
         cipher_suite: QuicCrypto.CipherSuite,
         is_client: bool,
-    ) QuicConnection {
+    ) !QuicConnection {
         // Use client or server secret depending on role
         const active_secret = if (is_client) client_secret else server_secret;
 
-        // Derive traffic keys from secret
-        var key: [32]u8 = undefined;
-        var hp_key: [32]u8 = undefined;
-
-        QuicCrypto.HKDF.expandLabel(&active_secret, QuicLabels.key, "", key[0..cipher_suite.keySize()]);
-        QuicCrypto.HKDF.expandLabel(&active_secret, QuicLabels.hp, "", hp_key[0..cipher_suite.keySize()]);
+        const keys = try deriveQuicKeys(&active_secret, cipher_suite);
 
         return QuicConnection{
             .allocator = allocator,
             .cipher_suite = cipher_suite,
             .client_secret = client_secret,
             .server_secret = server_secret,
-            .header_protection = QuicCrypto.HeaderProtection.init(cipher_suite, &hp_key),
-            .aead = QuicCrypto.AEAD.init(cipher_suite, &key),
+            .iv = keys.iv,
+            .header_protection = QuicCrypto.HeaderProtection.init(cipher_suite, &keys.hp),
+            .aead = QuicCrypto.AEAD.init(cipher_suite, &keys.key),
             .is_ssh_mode = true,
         };
     }
@@ -383,7 +416,7 @@ pub const QuicConnection = struct {
         ssh_secrets: SshQuicSecrets,
         cipher_suite: QuicCrypto.CipherSuite,
         is_client: bool,
-    ) QuicConnection {
+    ) !QuicConnection {
         return initFromSecrets(
             allocator,
             ssh_secrets.client_secret,
@@ -407,20 +440,16 @@ pub const QuicConnection = struct {
         QuicCrypto.HKDF.expandLabel(&initial_secret, QuicLabels.client_initial, "", &client_secret);
         QuicCrypto.HKDF.expandLabel(&initial_secret, QuicLabels.server_initial, "", &server_secret);
 
-        // Derive keys
-        var client_key: [32]u8 = undefined;
-        var hp_key: [32]u8 = undefined;
-
-        QuicCrypto.HKDF.expandLabel(&client_secret, QuicLabels.key, "", client_key[0..cipher_suite.keySize()]);
-        QuicCrypto.HKDF.expandLabel(&client_secret, QuicLabels.hp, "", hp_key[0..cipher_suite.keySize()]);
+        const keys = try deriveQuicKeys(&client_secret, cipher_suite);
 
         return QuicConnection{
             .allocator = allocator,
             .cipher_suite = cipher_suite,
             .client_secret = client_secret,
             .server_secret = server_secret,
-            .header_protection = QuicCrypto.HeaderProtection.init(cipher_suite, &hp_key),
-            .aead = QuicCrypto.AEAD.init(cipher_suite, &client_key),
+            .iv = keys.iv,
+            .header_protection = QuicCrypto.HeaderProtection.init(cipher_suite, &keys.hp),
+            .aead = QuicCrypto.AEAD.init(cipher_suite, &keys.key),
         };
     }
 
@@ -432,13 +461,14 @@ pub const QuicConnection = struct {
         if (tag_end > packet.len) return QuicCrypto.Error.InsufficientBuffer;
         if (tag_end < 20) return QuicCrypto.Error.InsufficientBuffer;
 
-        // Construct nonce from packet number
-        var nonce: [12]u8 = std.mem.zeroes([12]u8);
-        std.mem.writeInt(u64, nonce[4..12], packet_number, .big);
+        var nonce = self.iv;
+        var pn_bytes: [8]u8 = undefined;
+        std.mem.writeInt(u64, &pn_bytes, packet_number, .big);
+        for (0..8) |i| nonce[4 + i] ^= pn_bytes[i];
 
         // Encrypt payload
         var tag: [16]u8 = undefined;
-        _ = try self.aead.sealInPlace(&nonce, packet[1..ciphertext_end], "", &tag);
+        _ = try self.aead.sealInPlace(&nonce, packet[1..ciphertext_end], packet[0..1], &tag);
 
         // Append tag
         @memcpy(packet[ciphertext_end..tag_end], &tag);
@@ -455,13 +485,14 @@ pub const QuicConnection = struct {
         // Remove header protection first
         try self.header_protection.remove(packet, packet.len - 16 - 4);
 
-        // Construct nonce
-        var nonce: [12]u8 = std.mem.zeroes([12]u8);
-        std.mem.writeInt(u64, nonce[4..12], packet_number, .big);
+        var nonce = self.iv;
+        var pn_bytes: [8]u8 = undefined;
+        std.mem.writeInt(u64, &pn_bytes, packet_number, .big);
+        for (0..8) |i| nonce[4 + i] ^= pn_bytes[i];
 
         // Decrypt payload
         const tag = packet[packet.len - 16 ..];
-        const payload_len = try self.aead.openInPlace(&nonce, packet[1 .. packet.len - 16], "", tag);
+        const payload_len = try self.aead.openInPlace(&nonce, packet[1 .. packet.len - 16], packet[0..1], tag);
 
         return 1 + payload_len;
     }
@@ -552,7 +583,7 @@ test "QuicConnection from SSH secrets" {
     const server_secret: [32]u8 = [_]u8{0x22} ** 32;
 
     // Initialize QUIC connection from pre-computed secrets (SSH mode)
-    const client_conn = QuicConnection.initFromSecrets(
+    const client_conn = try QuicConnection.initFromSecrets(
         allocator,
         client_secret,
         server_secret,
@@ -560,7 +591,7 @@ test "QuicConnection from SSH secrets" {
         true, // is_client
     );
 
-    const server_conn = QuicConnection.initFromSecrets(
+    const server_conn = try QuicConnection.initFromSecrets(
         allocator,
         client_secret,
         server_secret,

@@ -45,6 +45,7 @@ pub const ghostchain = @import("ghostchain.zig");
 pub const quic_crypto = @import("quic_crypto.zig");
 pub const quic = @import("quic.zig");
 pub const key_rotation = @import("key_rotation.zig");
+pub const QuicCrypto = quic.QuicCrypto;
 
 // Feature modules (may be available based on build configuration)
 // Note: These will be available if the corresponding features were enabled during build
@@ -60,6 +61,7 @@ pub const async_crypto = if (build_options.enable_async) @import("feature_async.
 
 // Legacy compatibility aliases
 pub const pq = if (build_options.enable_post_quantum) post_quantum else struct {}{};
+pub const HardwareCrypto = if (build_options.enable_hardware_accel) @import("hardware.zig").HardwareCrypto else struct {}{};
 
 // Convenience exports for common algorithms
 pub const kyber = if (build_options.enable_post_quantum) post_quantum.kyber else struct {}{};
@@ -68,7 +70,7 @@ pub const x25519 = kex.X25519;
 pub const ed25519 = kex.Ed25519;
 
 // Version information
-pub const version = "1.0.0";
+pub const version = "1.0.1";
 
 pub const build_config = struct {
     pub const tls_enabled = build_options.enable_tls;

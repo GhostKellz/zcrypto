@@ -14,6 +14,12 @@ const sym = @import("sym.zig");
 const pq = @import("pq.zig");
 const security = @import("security.zig");
 
+fn packetKeysAreInitialized(keys: *const PacketKeys) bool {
+    return !std.mem.allEqual(u8, &keys.aead_key, 0) and
+        !std.mem.allEqual(u8, &keys.header_protection_key, 0) and
+        !std.mem.allEqual(u8, &keys.iv, 0);
+}
+
 /// QUIC cryptography errors
 pub const QuicError = error{
     InvalidConnectionId,
@@ -204,7 +210,7 @@ pub const QuicCrypto = struct {
     /// Returns the length of encrypted data (ciphertext + 16-byte auth tag).
     /// Output buffer must be at least payload.len + 16 bytes.
     pub fn encryptPacket(self: *const QuicCrypto, level: EncryptionLevel, is_server: bool, packet_number: u64, header: []const u8, payload: []const u8, output: []u8) QuicError!usize {
-        const keys = self.getKeys(level, is_server);
+        const keys = try self.requireKeys(level, is_server);
 
         // Output must fit ciphertext + 16-byte auth tag
         if (output.len < payload.len + 16) {
@@ -246,7 +252,7 @@ pub const QuicCrypto = struct {
     /// Verifies authentication tag BEFORE exposing plaintext.
     /// Returns length of decrypted payload on success.
     pub fn decryptPacket(self: *const QuicCrypto, level: EncryptionLevel, is_server: bool, packet_number: u64, header: []const u8, ciphertext: []const u8, output: []u8) QuicError!usize {
-        const keys = self.getKeys(level, is_server);
+        const keys = try self.requireKeys(level, is_server);
 
         // Ciphertext must include 16-byte auth tag
         if (ciphertext.len < 16) {
@@ -304,7 +310,7 @@ pub const QuicCrypto = struct {
             return QuicError.HeaderProtectionFailed;
         }
 
-        const keys = self.getKeys(level, is_server);
+        const keys = try self.requireKeys(level, is_server);
 
         // Generate header protection mask
         var mask: [5]u8 = undefined;
@@ -374,6 +380,12 @@ pub const QuicCrypto = struct {
             .handshake => if (is_server) &self.handshake_keys_server else &self.handshake_keys_client,
             .application => if (is_server) &self.application_keys_server else &self.application_keys_client,
         };
+    }
+
+    fn requireKeys(self: *const QuicCrypto, level: EncryptionLevel, is_server: bool) QuicError!*const PacketKeys {
+        const keys = self.getKeys(level, is_server);
+        if (!packetKeysAreInitialized(keys)) return QuicError.InvalidKeys;
+        return keys;
     }
 
     /// Get packet number offset in header (simplified)
@@ -696,7 +708,7 @@ pub const ZeroCopy = struct {
     /// Packet buffer must have header_len + payload_len + 16 bytes available.
     /// Returns total encrypted length (payload + tag).
     pub fn encryptInPlace(crypto: *const QuicCrypto, level: EncryptionLevel, is_server: bool, packet_number: u64, packet: []u8, header_len: usize) QuicError!usize {
-        const keys = crypto.getKeys(level, is_server);
+        const keys = try crypto.requireKeys(level, is_server);
 
         if (packet.len <= header_len + 16) {
             return QuicError.InvalidPacket;
@@ -742,7 +754,7 @@ pub const ZeroCopy = struct {
     /// Verifies auth tag BEFORE exposing plaintext.
     /// Returns decrypted payload length (excluding tag) on success.
     pub fn decryptInPlace(crypto: *const QuicCrypto, level: EncryptionLevel, is_server: bool, packet_number: u64, packet: []u8, header_len: usize) QuicError!usize {
-        const keys = crypto.getKeys(level, is_server);
+        const keys = try crypto.requireKeys(level, is_server);
 
         // Must have at least header + 16-byte tag
         if (packet.len <= header_len + 16) {
@@ -867,6 +879,19 @@ test "QUIC packet encryption/decryption" {
     try std.testing.expectError(QuicError.DecryptionFailed, tamper_result);
 }
 
+test "QUIC rejects uninitialized handshake keys" {
+    var crypto = QuicCrypto.init(.TLS_AES_128_GCM_SHA256);
+
+    const header = [_]u8{ 0xc0, 0x00, 0x00, 0x00, 0x01 };
+    const payload = "Hello, QUIC!";
+    var encrypted: [64]u8 = undefined;
+
+    try std.testing.expectError(
+        QuicError.InvalidKeys,
+        crypto.encryptPacket(.handshake, false, 1, &header, payload, &encrypted),
+    );
+}
+
 test "QUIC cipher suite properties" {
     const cs = CipherSuite.TLS_AES_256_GCM_SHA384;
     try std.testing.expect(cs.keyLength() == 32);
@@ -977,4 +1002,17 @@ test "Zero-copy packet processing" {
     packet[header_len + 3] ^= 0xFF;
     const tamper_result = ZeroCopy.decryptInPlace(&crypto, .initial, false, packet_number, &packet, header_len);
     try std.testing.expectError(QuicError.DecryptionFailed, tamper_result);
+}
+
+test "QUIC zero-copy rejects uninitialized application keys" {
+    var crypto = QuicCrypto.init(.TLS_AES_128_GCM_SHA256);
+
+    var packet: [32]u8 = undefined;
+    @memset(&packet, 0);
+    packet[0] = 0x40;
+
+    try std.testing.expectError(
+        QuicError.InvalidKeys,
+        ZeroCopy.encryptInPlace(&crypto, .application, false, 1, &packet, 1),
+    );
 }

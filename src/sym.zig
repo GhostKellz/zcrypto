@@ -219,6 +219,24 @@ pub fn decryptChaCha20Poly1305(
     return plaintext_buf;
 }
 
+/// AES-128 single-block ECB encryption for QUIC/TLS header protection.
+pub fn aes_128_ecb_encrypt(input: *const [16]u8, key: *const [AES_128_KEY_SIZE]u8, output: *[16]u8) SymError!void {
+    const aes = std.crypto.core.aes.Aes128.initEnc(key.*);
+    aes.encrypt(output, input);
+}
+
+/// AES-256 header protection uses AES-128 over the first 16 bytes of the HP key per RFC 9001.
+pub fn aes_256_ecb_encrypt(input: *const [16]u8, key: *const [AES_256_KEY_SIZE]u8, output: *[16]u8) SymError!void {
+    const hp_key: [AES_128_KEY_SIZE]u8 = key[0..AES_128_KEY_SIZE].*;
+    return aes_128_ecb_encrypt(input, &hp_key, output);
+}
+
+/// Generate ChaCha20 keystream for QUIC header protection mask generation.
+pub fn chacha20_generate_keystream(key: *const [CHACHA20_KEY_SIZE]u8, nonce: *const [CHACHA20_NONCE_SIZE]u8, counter: u32, output: []u8) SymError!void {
+    @memset(output, 0);
+    std.crypto.stream.chacha.ChaCha20IETF.xor(output, output, counter, key.*, nonce.*);
+}
+
 /// Simplified AES-256-GCM encryption API (auto-generates nonce)
 pub fn encryptAesGcm(
     allocator: std.mem.Allocator,
@@ -399,6 +417,48 @@ test "simplified chacha20 api" {
     defer allocator.free(decrypted);
 
     try std.testing.expectEqualSlices(u8, plaintext, decrypted);
+}
+
+test "aes-128 ecb helper matches stdlib block encryption" {
+    const key = [_]u8{0x11} ** AES_128_KEY_SIZE;
+    const input = [_]u8{0x22} ** 16;
+
+    var expected: [16]u8 = undefined;
+    var actual: [16]u8 = undefined;
+
+    const aes = std.crypto.core.aes.Aes128.initEnc(key);
+    aes.encrypt(&expected, &input);
+
+    try aes_128_ecb_encrypt(&input, &key, &actual);
+    try std.testing.expectEqualSlices(u8, &expected, &actual);
+}
+
+test "aes-256 ecb helper uses RFC 9001 header protection key bytes" {
+    const key = [_]u8{0x33} ** AES_256_KEY_SIZE;
+    const input = [_]u8{0x44} ** 16;
+
+    var expected: [16]u8 = undefined;
+    var actual: [16]u8 = undefined;
+
+    const aes = std.crypto.core.aes.Aes128.initEnc(key[0..16].*);
+    aes.encrypt(&expected, &input);
+
+    try aes_256_ecb_encrypt(&input, &key, &actual);
+    try std.testing.expectEqualSlices(u8, &expected, &actual);
+}
+
+test "chacha20 keystream helper matches stdlib" {
+    const key = [_]u8{0x55} ** CHACHA20_KEY_SIZE;
+    const nonce = [_]u8{0x66} ** CHACHA20_NONCE_SIZE;
+    const counter: u32 = 7;
+
+    var expected = [_]u8{0} ** 64;
+    var actual = [_]u8{0} ** 64;
+
+    std.crypto.stream.chacha.ChaCha20IETF.xor(&expected, &expected, counter, key, nonce);
+    try chacha20_generate_keystream(&key, &nonce, counter, &actual);
+
+    try std.testing.expectEqualSlices(u8, &expected, &actual);
 }
 
 // =============================================================================

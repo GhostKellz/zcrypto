@@ -302,7 +302,26 @@ pub fn build(b: *std.Build) !void {
     });
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
+    var ffi_imports_buffer: [2]std.Build.Module.Import = undefined;
+    var ffi_imports_count: usize = 1;
+    ffi_imports_buffer[0] = .{ .name = "build_options", .module = build_options.createModule() };
+    if (enable_async and zsync_dep != null) {
+        ffi_imports_buffer[ffi_imports_count] = .{ .name = "zsync", .module = zsync_dep.?.module("zsync") };
+        ffi_imports_count += 1;
+    }
+
+    const ffi_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/ffi.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = ffi_imports_buffer[0..ffi_imports_count],
+        }),
+    });
+    const run_ffi_tests = b.addRunArtifact(ffi_tests);
+
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+    test_step.dependOn(&run_ffi_tests.step);
 }

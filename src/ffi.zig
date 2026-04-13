@@ -1,4 +1,4 @@
-//! FFI (Foreign Function Interface) for zcrypto v1.0.0
+//! FFI (Foreign Function Interface) for zcrypto v1.0.1
 //!
 //! Enhanced C ABI exports for seamless integration with all GhostChain services:
 //! - ghostbridge (gRPC relay over QUIC)
@@ -11,6 +11,7 @@
 //! Full post-quantum cryptography and zero-knowledge proof support.
 
 const std = @import("std");
+const build_options = @import("build_options");
 const rand = @import("rand.zig");
 const zcrypto = @import("root.zig");
 const pq = @import("pq.zig");
@@ -76,7 +77,31 @@ const QuicContextSlot = struct {
 
 /// Global QUIC context table (thread-local for safety)
 var quic_context_table: [MAX_QUIC_CONTEXTS]QuicContextSlot = init_context_table();
-var quic_context_lock: std.Thread.Mutex = .{};
+var quic_context_lock: std.atomic.Mutex = .unlocked;
+
+fn lockQuicContextTable() void {
+    while (!quic_context_lock.tryLock()) {
+        std.Thread.yield() catch {};
+    }
+}
+
+fn unlockQuicContextTable() void {
+    quic_context_lock.unlock();
+}
+
+fn quicLevelRequiresDerivedKeys(level: quic.EncryptionLevel) bool {
+    return switch (level) {
+        .initial => false,
+        .early_data, .handshake, .application => true,
+    };
+}
+
+fn supportedAlgorithmsString() []const u8 {
+    return if (build_options.enable_post_quantum)
+        "Ed25519,X25519,AES-256-GCM,ChaCha20-Poly1305,ML-KEM-768,ML-DSA-65,SLH-DSA-128s,Hybrid-X25519-ML-KEM-768,QUIC-PQ"
+    else
+        "Ed25519,X25519,AES-256-GCM,ChaCha20-Poly1305";
+}
 
 fn init_context_table() [MAX_QUIC_CONTEXTS]QuicContextSlot {
     var table: [MAX_QUIC_CONTEXTS]QuicContextSlot = undefined;
@@ -92,8 +117,8 @@ fn init_context_table() [MAX_QUIC_CONTEXTS]QuicContextSlot {
 
 /// Allocate a new QUIC context handle
 fn allocQuicHandle(ctx: quic.QuicCrypto) ?QuicHandle {
-    quic_context_lock.lock();
-    defer quic_context_lock.unlock();
+    lockQuicContextTable();
+    defer unlockQuicContextTable();
 
     for (&quic_context_table, 0..) |*slot, i| {
         if (!slot.in_use) {
@@ -116,8 +141,8 @@ fn getQuicContext(handle: QuicHandle) ?*quic.QuicCrypto {
     if (handle.magic != QUIC_HANDLE_MAGIC) return null;
     if (handle.index >= MAX_QUIC_CONTEXTS) return null;
 
-    quic_context_lock.lock();
-    defer quic_context_lock.unlock();
+    lockQuicContextTable();
+    defer unlockQuicContextTable();
 
     const slot = &quic_context_table[handle.index];
     if (!slot.in_use) return null;
@@ -131,8 +156,8 @@ fn freeQuicHandle(handle: QuicHandle) bool {
     if (handle.magic != QUIC_HANDLE_MAGIC) return false;
     if (handle.index >= MAX_QUIC_CONTEXTS) return false;
 
-    quic_context_lock.lock();
-    defer quic_context_lock.unlock();
+    lockQuicContextTable();
+    defer unlockQuicContextTable();
 
     const slot = &quic_context_table[handle.index];
     if (!slot.in_use) return false;
@@ -662,6 +687,10 @@ pub export fn zcrypto_quic_encrypt_packet_inplace(handle: [*]const u8, level: u3
         else => return CryptoResult.failure(FFI_ERROR_INVALID_INPUT),
     };
 
+    if (quicLevelRequiresDerivedKeys(enc_level)) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+
     const packet_slice = packet[0..packet_len];
 
     const encrypted_len = quic.ZeroCopy.encryptInPlace(
@@ -718,6 +747,10 @@ pub export fn zcrypto_quic_decrypt_packet_inplace(handle: [*]const u8, level: u3
         3 => quic.EncryptionLevel.application,
         else => return CryptoResult.failure(FFI_ERROR_INVALID_INPUT),
     };
+
+    if (quicLevelRequiresDerivedKeys(enc_level)) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
 
     const packet_slice = packet[0..packet_len];
 
@@ -947,7 +980,7 @@ pub export fn zcrypto_aes256_gcm_decrypt(key: [*]const u8, key_len: u32, nonce: 
 /// @param buffer_len: Buffer capacity
 /// @return CryptoResult with version string length
 pub export fn zcrypto_version(buffer: [*]u8, buffer_len: u32) callconv(.c) CryptoResult {
-    const version = "zcrypto v1.0.0";
+    const version = "zcrypto v1.0.1";
     if (buffer_len < version.len) {
         return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
     }
@@ -959,8 +992,11 @@ pub export fn zcrypto_version(buffer: [*]u8, buffer_len: u32) callconv(.c) Crypt
 /// Check if post-quantum algorithms are available
 /// @return CryptoResult with success=available
 pub export fn zcrypto_has_post_quantum() callconv(.c) CryptoResult {
-    // Mirrors the currently built feature set.
-    return CryptoResult.SUCCESS;
+    return .{
+        .success = build_options.enable_post_quantum,
+        .data_len = 0,
+        .error_code = if (build_options.enable_post_quantum) 0 else FFI_ERROR_POST_QUANTUM_FAILED,
+    };
 }
 
 /// Get supported algorithm list
@@ -968,7 +1004,7 @@ pub export fn zcrypto_has_post_quantum() callconv(.c) CryptoResult {
 /// @param buffer_len: Buffer capacity
 /// @return CryptoResult with string length
 pub export fn zcrypto_supported_algorithms(buffer: [*]u8, buffer_len: u32) callconv(.c) CryptoResult {
-    const algorithms = "Ed25519,X25519,AES-256-GCM,ChaCha20-Poly1305,ML-KEM-768,ML-DSA-65,SLH-DSA-128s,Hybrid-X25519-ML-KEM-768,QUIC-PQ,Groth16,Bulletproofs,Signal,Noise,MLS";
+    const algorithms = supportedAlgorithmsString();
 
     if (buffer_len < algorithms.len) {
         return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
@@ -1014,9 +1050,22 @@ pub export fn zcrypto_get_features(features: [*]u32) callconv(.c) CryptoResult {
     const FEATURE_ASM_OPTIMIZED = 0x10;
     const FEATURE_HYBRID_CRYPTO = 0x20;
 
-    features[0] = FEATURE_POST_QUANTUM | FEATURE_ZERO_KNOWLEDGE |
-        FEATURE_QUIC_CRYPTO | FEATURE_PROTOCOLS |
-        FEATURE_ASM_OPTIMIZED | FEATURE_HYBRID_CRYPTO;
+    var enabled: u32 = FEATURE_QUIC_CRYPTO;
+
+    if (build_options.enable_post_quantum) {
+        enabled |= FEATURE_POST_QUANTUM | FEATURE_HYBRID_CRYPTO;
+    }
+    if (build_options.enable_zkp) {
+        enabled |= FEATURE_ZERO_KNOWLEDGE;
+    }
+    if (build_options.enable_hardware_accel) {
+        enabled |= FEATURE_ASM_OPTIMIZED;
+    }
+    if (build_options.enable_tls) {
+        enabled |= FEATURE_PROTOCOLS;
+    }
+
+    features[0] = enabled;
 
     return CryptoResult.SUCCESS;
 }
@@ -1217,9 +1266,7 @@ test "FFI ML-KEM-768 operations" {
     try std.testing.expect(decaps_result.success);
 
     // Shared secrets should match
-    // TODO: Fix ML-KEM shared secret mismatch
-    // try std.testing.expect(std.mem.eql(u8, &shared_secret1, &shared_secret2));
-    try std.testing.expect(encaps_result.success and decaps_result.success);
+    try std.testing.expect(std.mem.eql(u8, &shared_secret1, &shared_secret2));
 }
 
 test "FFI hybrid operations" {
@@ -1334,14 +1381,51 @@ test "FFI library features" {
     const result = zcrypto_get_features(@ptrCast(&features));
     try std.testing.expect(result.success);
 
-    // Should have all expected features
     const FEATURE_POST_QUANTUM = 0x01;
     const FEATURE_ZERO_KNOWLEDGE = 0x02;
     const FEATURE_QUIC_CRYPTO = 0x04;
+    const FEATURE_PROTOCOLS = 0x08;
+    const FEATURE_ASM_OPTIMIZED = 0x10;
+    const FEATURE_HYBRID_CRYPTO = 0x20;
 
-    try std.testing.expect((features & FEATURE_POST_QUANTUM) != 0);
-    try std.testing.expect((features & FEATURE_ZERO_KNOWLEDGE) != 0);
     try std.testing.expect((features & FEATURE_QUIC_CRYPTO) != 0);
+    try std.testing.expectEqual(build_options.enable_post_quantum, (features & FEATURE_POST_QUANTUM) != 0);
+    try std.testing.expectEqual(build_options.enable_zkp, (features & FEATURE_ZERO_KNOWLEDGE) != 0);
+    try std.testing.expectEqual(build_options.enable_tls, (features & FEATURE_PROTOCOLS) != 0);
+    try std.testing.expectEqual(build_options.enable_hardware_accel, (features & FEATURE_ASM_OPTIMIZED) != 0);
+    try std.testing.expectEqual(build_options.enable_post_quantum, (features & FEATURE_HYBRID_CRYPTO) != 0);
+}
+
+test "FFI post quantum reporting matches build flags" {
+    const result = zcrypto_has_post_quantum();
+    try std.testing.expectEqual(build_options.enable_post_quantum, result.success);
+    if (build_options.enable_post_quantum) {
+        try std.testing.expectEqual(@as(u32, 0), result.error_code);
+    } else {
+        try std.testing.expectEqual(@as(u32, FFI_ERROR_POST_QUANTUM_FAILED), result.error_code);
+    }
+}
+
+test "FFI rejects unsupported derived QUIC levels" {
+    var handle: [16]u8 = undefined;
+
+    const init_result = zcrypto_quic_init(0, &handle, 16);
+    try std.testing.expect(init_result.success);
+    defer {
+        _ = zcrypto_quic_free(&handle);
+    }
+
+    var packet: [32]u8 = undefined;
+    @memset(&packet, 0);
+    packet[0] = 0x40;
+
+    const encrypt_result = zcrypto_quic_encrypt_packet_inplace(&handle, 2, false, 1, &packet, packet.len, 1);
+    try std.testing.expect(!encrypt_result.success);
+    try std.testing.expectEqual(@as(u32, FFI_ERROR_INVALID_INPUT), encrypt_result.error_code);
+
+    const decrypt_result = zcrypto_quic_decrypt_packet_inplace(&handle, 3, false, 1, &packet, packet.len, 1);
+    try std.testing.expect(!decrypt_result.success);
+    try std.testing.expectEqual(@as(u32, FFI_ERROR_INVALID_INPUT), decrypt_result.error_code);
 }
 
 test "FFI secure operations" {

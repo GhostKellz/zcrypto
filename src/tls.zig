@@ -10,6 +10,25 @@ const hash = @import("hash.zig");
 const util = @import("util.zig");
 const asym = @import("asym.zig");
 
+const HkdfSha384 = std.crypto.kdf.hkdf.Hkdf(std.crypto.auth.hmac.sha2.HmacSha384);
+
+fn hkdfExtract(hash_alg: config.HashAlgorithm, salt: []const u8, ikm: []const u8, out: []u8) !void {
+    switch (hash_alg) {
+        .sha256 => {
+            const extracted = std.crypto.kdf.hkdf.HkdfSha256.extract(salt, ikm);
+            @memcpy(out, &extracted);
+        },
+        .sha384 => {
+            const extracted = HkdfSha384.extract(salt, ikm);
+            @memcpy(out, &extracted);
+        },
+        .sha512 => {
+            const extracted = std.crypto.kdf.hkdf.HkdfSha512.extract(salt, ikm);
+            @memcpy(out, &extracted);
+        },
+    }
+}
+
 // Re-export high-level modules for convenience
 pub const config = @import("tls_config.zig");
 pub const client = @import("tls_client.zig");
@@ -29,9 +48,9 @@ pub const Secrets = struct {
     pub fn deriveKeys(self: Secrets, allocator: std.mem.Allocator, is_client: bool) !TrafficKeys {
         const secret = if (is_client) self.client_initial_secret else self.server_initial_secret;
 
-        const key = try kdf.hkdfExpandLabel(allocator, &secret, "key", "", 16);
-        const iv = try kdf.hkdfExpandLabel(allocator, &secret, "iv", "", 12);
-        const hp = try kdf.hkdfExpandLabel(allocator, &secret, "hp", "", 16);
+        const key = try kdf.hkdfExpandLabel(allocator, &secret, "quic key", "", 16);
+        const iv = try kdf.hkdfExpandLabel(allocator, &secret, "quic iv", "", 12);
+        const hp = try kdf.hkdfExpandLabel(allocator, &secret, "quic hp", "", 16);
 
         return TrafficKeys{
             .key = key[0..16].*,
@@ -228,14 +247,10 @@ pub const KeySchedule = struct {
 
         switch (self.hash_alg) {
             .sha256 => {
-                const extracted = std.crypto.kdf.hkdf.HkdfSha256.extract(&[_]u8{0}, ikm);
-                @memcpy(self.early_secret, &extracted);
+                try hkdfExtract(self.hash_alg, &[_]u8{0}, ikm, self.early_secret);
             },
             .sha384, .sha512 => {
-                // For now, fall back to SHA256 for SHA384/SHA512
-                // TODO: Implement proper SHA384/SHA512 HKDF when available
-                const extracted = std.crypto.kdf.hkdf.HkdfSha256.extract(&[_]u8{0}, ikm);
-                @memcpy(self.early_secret[0..32], &extracted);
+                try hkdfExtract(self.hash_alg, &[_]u8{0}, ikm, self.early_secret);
             },
         }
     }
@@ -247,12 +262,10 @@ pub const KeySchedule = struct {
 
         switch (self.hash_alg) {
             .sha256 => {
-                const extracted = std.crypto.kdf.hkdf.HkdfSha256.extract(derived_secret, ecdhe_secret);
-                @memcpy(self.handshake_secret, &extracted);
+                try hkdfExtract(self.hash_alg, derived_secret, ecdhe_secret, self.handshake_secret);
             },
             .sha384, .sha512 => {
-                const extracted = std.crypto.kdf.hkdf.HkdfSha256.extract(derived_secret, ecdhe_secret);
-                @memcpy(self.handshake_secret[0..32], &extracted);
+                try hkdfExtract(self.hash_alg, derived_secret, ecdhe_secret, self.handshake_secret);
             },
         }
     }
@@ -268,12 +281,10 @@ pub const KeySchedule = struct {
 
         switch (self.hash_alg) {
             .sha256 => {
-                const extracted = std.crypto.kdf.hkdf.HkdfSha256.extract(derived_secret, zero_hash);
-                @memcpy(self.master_secret, &extracted);
+                try hkdfExtract(self.hash_alg, derived_secret, zero_hash, self.master_secret);
             },
             .sha384, .sha512 => {
-                const extracted = std.crypto.kdf.hkdf.HkdfSha256.extract(derived_secret, zero_hash);
-                @memcpy(self.master_secret[0..32], &extracted);
+                try hkdfExtract(self.hash_alg, derived_secret, zero_hash, self.master_secret);
             },
         }
     }
@@ -487,6 +498,23 @@ test "traffic key derivation" {
     try std.testing.expect(!util.constantTimeEqualArray([12]u8, client_keys.iv, server_keys.iv));
 }
 
+test "quic traffic key derivation uses quic labels" {
+    const allocator = std.testing.allocator;
+
+    const secrets = Secrets{
+        .client_initial_secret = [_]u8{0x42} ** 32,
+        .server_initial_secret = [_]u8{0x24} ** 32,
+    };
+
+    const traffic = try secrets.deriveKeys(allocator, true);
+    defer traffic.deinit();
+
+    const generic_key = try kdf.hkdfExpandLabel(allocator, &secrets.client_initial_secret, "key", "", 16);
+    defer allocator.free(generic_key);
+
+    try std.testing.expect(!std.mem.eql(u8, generic_key, &traffic.key));
+}
+
 test "aes-gcm encryption integration" {
     const allocator = std.testing.allocator;
 
@@ -510,10 +538,10 @@ test "aes-gcm encryption integration" {
 test "hkdf expand label integration" {
     const allocator = std.testing.allocator;
 
-    const secret = "test secret for hkdf";
+    const secret = [_]u8{0x23} ** 32;
     const label = "test label";
 
-    const derived = try hkdfExpandLabel(allocator, secret, label, 32);
+    const derived = try hkdfExpandLabel(allocator, &secret, label, 32);
     defer allocator.free(derived);
 
     try std.testing.expectEqual(@as(usize, 32), derived.len);
