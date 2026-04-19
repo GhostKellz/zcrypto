@@ -24,19 +24,19 @@ pub const X3DH = struct {
     /// Identity key pair (long-term)
     pub const IdentityKey = struct {
         public: [32]u8,
-        private: [32]u8,
+        private: [64]u8,
 
         pub fn generate() !IdentityKey {
             var seed: [32]u8 = undefined;
             rand.fill(&seed);
 
-            const keypair = std.crypto.sign.Ed25519.KeyPair.create(seed) catch {
+            const keypair = std.crypto.sign.Ed25519.KeyPair.generateDeterministic(seed) catch {
                 return SignalError.KeyExchangeFailed;
             };
 
             return IdentityKey{
-                .public = keypair.public_key,
-                .private = keypair.secret_key,
+                .public = keypair.public_key.toBytes(),
+                .private = keypair.secret_key.toBytes(),
             };
         }
     };
@@ -51,14 +51,16 @@ pub const X3DH = struct {
             var seed: [32]u8 = undefined;
             rand.fill(&seed);
 
-            const dh_keypair = std.crypto.dh.X25519.KeyPair.create(seed) catch {
+            const dh_keypair = std.crypto.dh.X25519.KeyPair.generateDeterministic(seed) catch {
                 return SignalError.KeyExchangeFailed;
             };
 
             // Sign the prekey with identity key
-            const identity_keypair = std.crypto.sign.Ed25519.KeyPair{
-                .public_key = identity_key.public,
-                .secret_key = identity_key.private,
+            const secret_key = std.crypto.sign.Ed25519.SecretKey.fromBytes(identity_key.private) catch {
+                return SignalError.InvalidKey;
+            };
+            const identity_keypair = std.crypto.sign.Ed25519.KeyPair.fromSecretKey(secret_key) catch {
+                return SignalError.InvalidKey;
             };
 
             const signature = identity_keypair.sign(&dh_keypair.public_key, null) catch {
@@ -68,12 +70,16 @@ pub const X3DH = struct {
             return SignedPrekey{
                 .public = dh_keypair.public_key,
                 .private = dh_keypair.secret_key,
-                .signature = signature,
+                .signature = signature.toBytes(),
             };
         }
 
         pub fn verify(self: *const SignedPrekey, identity_public: [32]u8) !bool {
-            std.crypto.sign.Ed25519.verify(self.signature, &self.public, identity_public) catch {
+            const public_key = std.crypto.sign.Ed25519.PublicKey.fromBytes(identity_public) catch {
+                return false;
+            };
+            const signature = std.crypto.sign.Ed25519.Signature.fromBytes(self.signature);
+            signature.verify(&self.public, public_key) catch {
                 return false;
             };
             return true;
@@ -89,7 +95,7 @@ pub const X3DH = struct {
             var seed: [32]u8 = undefined;
             rand.fill(&seed);
 
-            const keypair = std.crypto.dh.X25519.KeyPair.create(seed) catch {
+            const keypair = std.crypto.dh.X25519.KeyPair.generateDeterministic(seed) catch {
                 return SignalError.KeyExchangeFailed;
             };
 
@@ -117,34 +123,26 @@ pub const X3DH = struct {
         var dh_count: usize = 0;
 
         // DH1 = DH(IK_A, SPK_B)
-        const alice_identity_dh = std.crypto.dh.X25519.KeyPair{
-            .public_key = alice_identity.public,
-            .secret_key = alice_identity.private,
-        };
-        dh_outputs[dh_count] = alice_identity_dh.secret_key.mul(bob_signed_prekey.public) catch {
+        dh_outputs[dh_count] = std.crypto.dh.X25519.scalarmult(alice_identity.private[0..32].*, bob_signed_prekey.public) catch {
             return SignalError.KeyExchangeFailed;
         };
         dh_count += 1;
 
         // DH2 = DH(EK_A, IK_B)
-        const alice_ephemeral_dh = std.crypto.dh.X25519.KeyPair{
-            .public_key = alice_ephemeral.public,
-            .secret_key = alice_ephemeral.private,
-        };
-        dh_outputs[dh_count] = alice_ephemeral_dh.secret_key.mul(bob_identity_public) catch {
+        dh_outputs[dh_count] = std.crypto.dh.X25519.scalarmult(alice_ephemeral.private, bob_identity_public) catch {
             return SignalError.KeyExchangeFailed;
         };
         dh_count += 1;
 
         // DH3 = DH(EK_A, SPK_B)
-        dh_outputs[dh_count] = alice_ephemeral_dh.secret_key.mul(bob_signed_prekey.public) catch {
+        dh_outputs[dh_count] = std.crypto.dh.X25519.scalarmult(alice_ephemeral.private, bob_signed_prekey.public) catch {
             return SignalError.KeyExchangeFailed;
         };
         dh_count += 1;
 
         // DH4 = DH(EK_A, OPK_B) (if one-time prekey exists)
         if (bob_onetime_public) |opk| {
-            dh_outputs[dh_count] = alice_ephemeral_dh.secret_key.mul(opk) catch {
+            dh_outputs[dh_count] = std.crypto.dh.X25519.scalarmult(alice_ephemeral.private, opk) catch {
                 return SignalError.KeyExchangeFailed;
             };
             dh_count += 1;
@@ -178,6 +176,7 @@ pub const X3DH = struct {
 pub const DoubleRatchet = struct {
     /// Ratchet state
     pub const State = struct {
+        allocator: std.mem.Allocator,
         root_key: [32]u8,
         chain_key_send: [32]u8,
         chain_key_recv: [32]u8,
@@ -192,11 +191,12 @@ pub const DoubleRatchet = struct {
             var seed: [32]u8 = undefined;
             rand.fill(&seed);
 
-            const dh_keypair = std.crypto.dh.X25519.KeyPair.create(seed) catch {
+            const dh_keypair = std.crypto.dh.X25519.KeyPair.generateDeterministic(seed) catch {
                 return SignalError.KeyExchangeFailed;
             };
 
             return State{
+                .allocator = allocator,
                 .root_key = shared_secret,
                 .chain_key_send = shared_secret,
                 .chain_key_recv = shared_secret,
@@ -205,12 +205,12 @@ pub const DoubleRatchet = struct {
                 .send_count = 0,
                 .recv_count = 0,
                 .prev_send_count = 0,
-                .skipped_keys = std.ArrayList([32]u8).init(allocator),
+                .skipped_keys = .empty,
             };
         }
 
         pub fn deinit(self: *State) void {
-            self.skipped_keys.deinit();
+            self.skipped_keys.deinit(self.allocator);
         }
     };
 
@@ -290,14 +290,14 @@ pub const DoubleRatchet = struct {
         var seed: [32]u8 = undefined;
         rand.fill(&seed);
 
-        state.dh_send = std.crypto.dh.X25519.KeyPair.create(seed) catch {
+        state.dh_send = std.crypto.dh.X25519.KeyPair.generateDeterministic(seed) catch {
             return SignalError.KeyExchangeFailed;
         };
 
         state.dh_recv_public = remote_public;
 
         // Derive new root key and chain keys
-        const dh_output = state.dh_send.secret_key.mul(remote_public) catch {
+        const dh_output = std.crypto.dh.X25519.scalarmult(state.dh_send.secret_key, remote_public) catch {
             return SignalError.KeyExchangeFailed;
         };
 

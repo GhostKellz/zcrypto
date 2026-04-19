@@ -56,7 +56,7 @@ pub const GroupContext = struct {
 
     pub fn encode(self: *const GroupContext, allocator: std.mem.Allocator) ![]u8 {
         // Simplified encoding
-        var list = std.ArrayList(u8).init(allocator);
+        var list: std.ArrayList(u8) = .empty;
         try list.appendSlice(allocator, std.mem.asBytes(&self.version));
         try list.appendSlice(allocator, std.mem.asBytes(&self.cipher_suite));
         try list.appendSlice(allocator, self.group_id);
@@ -97,7 +97,7 @@ pub const KeyPackage = struct {
         var init_seed: [32]u8 = undefined;
         rand.fill(&init_seed);
 
-        const init_keypair = std.crypto.dh.X25519.KeyPair.create(init_seed) catch {
+        const init_keypair = std.crypto.dh.X25519.KeyPair.generateDeterministic(init_seed) catch {
             return MLSError.InvalidMember;
         };
 
@@ -105,7 +105,7 @@ pub const KeyPackage = struct {
         var sign_seed: [32]u8 = undefined;
         rand.fill(&sign_seed);
 
-        const sign_keypair = std.crypto.sign.Ed25519.KeyPair.create(sign_seed) catch {
+        const sign_keypair = std.crypto.sign.Ed25519.KeyPair.generateDeterministic(sign_seed) catch {
             return MLSError.InvalidMember;
         };
 
@@ -148,17 +148,18 @@ pub const KeyPackage = struct {
         }
 
         // Sign the key package
-        var to_be_signed = std.ArrayList(u8).init(std.heap.page_allocator);
-        defer to_be_signed.deinit();
+        var to_be_signed: std.ArrayList(u8) = .empty;
+        defer to_be_signed.deinit(std.heap.page_allocator);
 
-        try to_be_signed.appendSlice(std.mem.asBytes(&key_package.version));
-        try to_be_signed.appendSlice(std.mem.asBytes(&key_package.cipher_suite));
-        try to_be_signed.appendSlice(&key_package.init_key);
-        try to_be_signed.appendSlice(identity);
+        try to_be_signed.appendSlice(std.heap.page_allocator, std.mem.asBytes(&key_package.version));
+        try to_be_signed.appendSlice(std.heap.page_allocator, std.mem.asBytes(&key_package.cipher_suite));
+        try to_be_signed.appendSlice(std.heap.page_allocator, &key_package.init_key);
+        try to_be_signed.appendSlice(std.heap.page_allocator, identity);
 
-        key_package.signature = sign_keypair.sign(to_be_signed.items, null) catch {
+        const signature = sign_keypair.sign(to_be_signed.items, null) catch {
             return MLSError.InvalidSignature;
         };
+        key_package.signature = signature.toBytes();
 
         return key_package;
     }
@@ -354,13 +355,13 @@ pub const Group = struct {
             .tree = tree,
             .epoch_secrets = epoch_secrets,
             .message_secrets = message_secrets,
-            .pending_proposals = std.ArrayList(Proposal).init(allocator),
+            .pending_proposals = .empty,
         };
     }
 
     pub fn deinit(self: *Group) void {
         self.tree.deinit();
-        self.pending_proposals.deinit();
+        self.pending_proposals.deinit(self.allocator);
     }
 
     /// Add a new member to the group
@@ -488,12 +489,12 @@ const RatchetTree = struct {
     fn init(allocator: std.mem.Allocator) !RatchetTree {
         return RatchetTree{
             .allocator = allocator,
-            .nodes = std.ArrayList(?Node).init(allocator),
+            .nodes = .empty,
         };
     }
 
     fn deinit(self: *RatchetTree) void {
-        self.nodes.deinit();
+        self.nodes.deinit(self.allocator);
     }
 
     fn addLeaf(self: *RatchetTree, leaf_node: LeafNode) !LeafIndex {
@@ -505,7 +506,7 @@ const RatchetTree = struct {
             .right_child = null,
         };
 
-        try self.nodes.append(node);
+        try self.nodes.append(self.allocator, node);
         return @intCast(self.nodes.items.len - 1);
     }
 
@@ -664,7 +665,7 @@ test "MLS group creation and member addition" {
     );
 
     const add_proposal = try group.addMember(bob_kp);
-    try group.pending_proposals.append(add_proposal);
+    try group.pending_proposals.append(gpa.allocator(), add_proposal);
 
     // Create and process commit
     const commit = try group.createCommit();

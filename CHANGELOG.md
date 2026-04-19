@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.2] - 2026-04-18
+
+### Changed
+
+- Bumped the package and exported version metadata to `v1.0.2`.
+- Updated the project Zig baseline and release validation around `0.17.0-dev.9+046002d1a`.
+- Reworked the exported post-quantum release surface so ML-DSA paths now follow current Zig stdlib behavior instead of older project-local placeholders.
+- Tightened the async integration wording so `zcrypto` now documents the supported `zsync` core surface it actually targets instead of implying unsupported runtime offload behavior.
+
+### Fixed
+
+- Fixed ML-DSA encoded sizes and FFI-facing key/signature expectations to match current Zig stdlib `MLDSA44`, `MLDSA65`, and `MLDSA87` values.
+- Fixed remaining Zig master API drift across Ed25519, X25519, and unmanaged `std.ArrayList` callsites on the audited release paths.
+- Fixed old compatibility wording in source comments that still described Zig `0.16.0-dev` as the active target.
+- Fixed the Ed25519 context-signing surface to fail explicitly as unsupported on the current Zig stdlib baseline instead of leaving the contract ambiguous.
+
+### Verified
+
+- `"/opt/zig-dev/zig" build test`
+- `"/opt/zig-dev/zig" build test -Dexperimental-crypto=true -Dpost-quantum=true -Dblockchain=true -Denterprise=true -Dzkp=true`
+- `"/opt/zig-dev/zig" build`
+- `"/opt/zig-dev/zig" build -Doptimize=ReleaseSafe`
+- `"/opt/zig-dev/zig" build -Dtls=false -Dpost-quantum=false -Dhardware-accel=false -Dasync=false -Dvpn=false -Dwasm=false`
+- `"/opt/zig-dev/zig" build -Dexperimental-crypto=true -Dpost-quantum=true -Dblockchain=true -Denterprise=true -Dzkp=true`
+- `"/opt/zig-dev/zig" build run`
+- `"/opt/zig-dev/zig" build run-advanced`
+- `"/opt/zig-dev/zig" build bench`
+- `"/opt/zig-dev/zig" build run-zsync`
+
+### Notes
+
+- `v1.0.2` is the release intended to carry the Zig `0.17.0-dev.9+046002d1a` compatibility pass.
+- The remaining follow-up after this bump is release-note and documentation polish rather than an identified Zig `0.17` code-compatibility blocker.
+
 ## [1.0.1] - 2026-04-12
 
 ### Changed

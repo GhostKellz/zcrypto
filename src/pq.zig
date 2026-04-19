@@ -33,126 +33,70 @@ pub const PQError = error{
 /// FIPS 203 compliant implementation
 pub const ml_kem = @import("pq/ml_kem.zig");
 
-/// NIST ML-DSA (formerly Dilithium) - Digital Signature Algorithm
-/// FIPS 204 compliant implementation
+/// NIST ML-DSA (formerly Dilithium) wrappers backed by Zig stdlib.
 pub const ml_dsa = struct {
-    /// ML-DSA-65 parameters (NIST Level 3 security)
-    pub const ML_DSA_65 = struct {
-        // NIST ML-DSA-65 constants
-        pub const SECURITY_LEVEL = 3;
-        pub const N = 256; // Ring dimension
-        pub const Q = 8380417; // Modulus
-        pub const D = 13; // Dropped bits
-        pub const TAU = 49; // Number of +/-1's in c
-        pub const LAMBDA = 256; // Number of bits of randomness in seed
-        pub const GAMMA1 = 1 << 19; // Coefficient range
-        pub const GAMMA2 = (Q - 1) / 32; // Low-order rounding range
-        pub const K = 6; // Dimension of t0 and t1
-        pub const L = 5; // Dimension of s1 and s2
-        pub const ETA = 4; // Bound on coefficients of s1 and s2
-        pub const BETA = TAU * ETA; // Maximum coefficient of c*s1 or c*s2
-        pub const OMEGA = 75; // Maximum weight of h
+    fn MlDsaWrapper(comptime Mode: type) type {
+        return struct {
+            pub const PUBLIC_KEY_SIZE = Mode.PublicKey.encoded_length;
+            pub const PRIVATE_KEY_SIZE = Mode.SecretKey.encoded_length;
+            pub const SIGNATURE_SIZE = Mode.Signature.encoded_length;
+            pub const SEED_SIZE = Mode.KeyPair.seed_length;
+            pub const NOISE_SIZE = Mode.noise_length;
 
-        // Key and signature sizes
-        pub const PUBLIC_KEY_SIZE = 1952;
-        pub const PRIVATE_KEY_SIZE = 4016;
-        pub const SIGNATURE_SIZE = 3309;
-        pub const SEED_SIZE = 32;
+            pub const KeyPair = struct {
+                public_key: [PUBLIC_KEY_SIZE]u8,
+                private_key: [PRIVATE_KEY_SIZE]u8,
 
-        /// ML-DSA-65 Key Pair
-        pub const KeyPair = struct {
-            public_key: [ML_DSA_65.PUBLIC_KEY_SIZE]u8,
-            private_key: [ML_DSA_65.PRIVATE_KEY_SIZE]u8,
+                pub fn generate(seed: [SEED_SIZE]u8) PQError!KeyPair {
+                    const keypair = Mode.KeyPair.generateDeterministic(seed) catch {
+                        return PQError.KeyGenFailed;
+                    };
 
-            /// Generate ML-DSA-65 key pair from seed
-            pub fn generate(seed: [SEED_SIZE]u8) PQError!KeyPair {
-                var keypair: KeyPair = undefined;
-
-                // Expand seed
-                var expanded: [128]u8 = undefined;
-                var hasher = std.crypto.hash.sha3.Sha3_256.init(.{});
-                hasher.update(&seed);
-                hasher.final(expanded[0..32]);
-                @memset(expanded[32..], 0);
-
-                // Generate matrix A (placeholder)
-                const rho = expanded[0..32];
-
-                // Generate secret keys s1, s2 (placeholder)
-                var s1_bytes: [L * 32]u8 = undefined;
-                var s2_bytes: [K * 32]u8 = undefined;
-                @memcpy(s1_bytes[0..32], expanded[0..32]);
-                @memcpy(s2_bytes[0..32], expanded[32..64]);
-
-                // Pack keys (simplified)
-                @memcpy(keypair.public_key[0..32], rho);
-                @memset(keypair.public_key[32..], 0);
-                @memcpy(keypair.private_key[0..32], &seed);
-                @memset(keypair.private_key[32..], 0);
-
-                return keypair;
-            }
-
-            /// Generate ML-DSA-65 key pair using system randomness
-            pub fn generateRandom(allocator: std.mem.Allocator) PQError!KeyPair {
-                _ = allocator;
-                var seed: [SEED_SIZE]u8 = undefined;
-                rand.fill(&seed);
-                return generate(seed);
-            }
-
-            /// Sign message with ML-DSA-65
-            pub fn sign(self: *const KeyPair, message: []const u8, randomness: [SEED_SIZE]u8) PQError![SIGNATURE_SIZE]u8 {
-                var signature: [SIGNATURE_SIZE]u8 = undefined;
-
-                // Hash message
-                var msg_hash: [32]u8 = undefined;
-                var hasher = std.crypto.hash.sha3.Sha3_256.init(.{});
-                hasher.update(message);
-                hasher.final(&msg_hash);
-
-                // Create signature (simplified implementation)
-                @memcpy(signature[0..32], &msg_hash);
-                @memcpy(signature[32..64], &randomness);
-                @memcpy(signature[64..96], self.private_key[0..32]);
-
-                // Fill rest with deterministic data
-                var offset: usize = 96;
-                while (offset < SIGNATURE_SIZE) {
-                    const remaining = SIGNATURE_SIZE - offset;
-                    const copy_len = @min(32, remaining);
-                    @memcpy(signature[offset .. offset + copy_len], msg_hash[0..copy_len]);
-                    offset += copy_len;
+                    return .{
+                        .public_key = keypair.public_key.toBytes(),
+                        .private_key = keypair.secret_key.toBytes(),
+                    };
                 }
 
-                return signature;
-            }
-
-            /// Verify ML-DSA-65 signature
-            pub fn verify(public_key: [PUBLIC_KEY_SIZE]u8, message: []const u8, signature: [SIGNATURE_SIZE]u8) PQError!bool {
-                // Hash message
-                var msg_hash: [32]u8 = undefined;
-                var hasher = std.crypto.hash.sha3.Sha3_256.init(.{});
-                hasher.update(message);
-                hasher.final(&msg_hash);
-
-                // Extract signature components
-                const sig_hash = signature[0..32];
-                const sig_randomness = signature[32..64];
-                _ = sig_randomness;
-
-                // Verify hash matches (simplified)
-                if (!std.mem.eql(u8, &msg_hash, sig_hash)) {
-                    return false;
+                pub fn generateRandom() PQError!KeyPair {
+                    var seed: [SEED_SIZE]u8 = undefined;
+                    rand.fill(&seed);
+                    return generate(seed);
                 }
 
-                // Additional verification checks would go here
-                _ = public_key;
+                pub fn sign(self: *const KeyPair, message: []const u8, randomness: ?[NOISE_SIZE]u8) PQError![SIGNATURE_SIZE]u8 {
+                    const secret_key = Mode.SecretKey.fromBytes(self.private_key) catch {
+                        return PQError.InvalidPrivateKey;
+                    };
+                    const keypair = Mode.KeyPair.fromSecretKey(secret_key) catch {
+                        return PQError.InvalidPrivateKey;
+                    };
+                    const signature = keypair.sign(message, randomness) catch {
+                        return PQError.SignFailed;
+                    };
+                    return signature.toBytes();
+                }
 
-                return true;
-            }
+                pub fn verify(public_key: [PUBLIC_KEY_SIZE]u8, message: []const u8, signature: [SIGNATURE_SIZE]u8) PQError!bool {
+                    const public_key_struct = Mode.PublicKey.fromBytes(public_key) catch {
+                        return PQError.InvalidPublicKey;
+                    };
+                    const signature_struct = Mode.Signature.fromBytes(signature) catch {
+                        return PQError.InvalidSignature;
+                    };
+
+                    signature_struct.verify(message, public_key_struct) catch {
+                        return false;
+                    };
+                    return true;
+                }
+            };
         };
-    };
+    }
+
+    pub const ML_DSA_44 = MlDsaWrapper(std.crypto.sign.mldsa.MLDSA44);
+    pub const ML_DSA_65 = MlDsaWrapper(std.crypto.sign.mldsa.MLDSA65);
+    pub const ML_DSA_87 = MlDsaWrapper(std.crypto.sign.mldsa.MLDSA87);
 };
 
 /// NIST SLH-DSA (SPHINCS+) - Stateless Hash-Based Digital Signature Algorithm
@@ -381,7 +325,7 @@ pub const hybrid = struct {
     /// Hybrid Signature: Ed25519 + ML-DSA-65
     pub const Ed25519_ML_DSA_65 = struct {
         pub const CLASSICAL_PUBLIC_SIZE = 32; // Ed25519 public key
-        pub const CLASSICAL_PRIVATE_SIZE = 32; // Ed25519 private key
+        pub const CLASSICAL_PRIVATE_SIZE = 64; // Ed25519 secret key encoding
         pub const PQ_PUBLIC_SIZE = ml_dsa.ML_DSA_65.PUBLIC_KEY_SIZE;
         pub const PQ_PRIVATE_SIZE = ml_dsa.ML_DSA_65.PRIVATE_KEY_SIZE;
         pub const CLASSICAL_SIG_SIZE = 64; // Ed25519 signature
@@ -402,11 +346,11 @@ pub const hybrid = struct {
                 var classical_seed: [32]u8 = undefined;
                 rand.fill(&classical_seed);
 
-                const ed25519_keypair = std.crypto.sign.Ed25519.KeyPair.create(classical_seed) catch {
+                const ed25519_keypair = std.crypto.sign.Ed25519.KeyPair.generateDeterministic(classical_seed) catch {
                     return PQError.KeyGenFailed;
                 };
-                keypair.classical_public = ed25519_keypair.public_key;
-                keypair.classical_private = ed25519_keypair.secret_key;
+                keypair.classical_public = ed25519_keypair.public_key.toBytes();
+                keypair.classical_private = ed25519_keypair.secret_key.toBytes();
 
                 // Generate ML-DSA-65 key pair
                 var pq_seed: [32]u8 = undefined;
@@ -427,9 +371,11 @@ pub const hybrid = struct {
                 var hybrid_signature: [HYBRID_SIG_SIZE]u8 = undefined;
 
                 // Create Ed25519 signature
-                const ed25519_keypair = std.crypto.sign.Ed25519.KeyPair{
-                    .public_key = self.classical_public,
-                    .secret_key = self.classical_private,
+                const secret_key = std.crypto.sign.Ed25519.SecretKey.fromBytes(self.classical_private) catch {
+                    return PQError.InvalidPrivateKey;
+                };
+                const ed25519_keypair = std.crypto.sign.Ed25519.KeyPair.fromSecretKey(secret_key) catch {
+                    return PQError.InvalidPrivateKey;
                 };
 
                 const classical_sig = ed25519_keypair.sign(message, null) catch {
@@ -442,7 +388,7 @@ pub const hybrid = struct {
                     .private_key = self.pq_private,
                 };
 
-                var pq_randomness: [32]u8 = undefined;
+                var pq_randomness: [ml_dsa.ML_DSA_65.NOISE_SIZE]u8 = undefined;
                 rand.fill(&pq_randomness);
 
                 const pq_sig = ml_dsa_keypair.sign(message, pq_randomness) catch {
@@ -463,10 +409,13 @@ pub const hybrid = struct {
                 const pq_sig = signature[CLASSICAL_SIG_SIZE..];
 
                 // Verify Ed25519 signature
-                const ed25519_result = std.crypto.sign.Ed25519.verify(classical_sig.*, message, classical_public) catch {
+                const public_key = std.crypto.sign.Ed25519.PublicKey.fromBytes(classical_public) catch {
                     return false;
                 };
-                _ = ed25519_result;
+                const ed25519_signature = std.crypto.sign.Ed25519.Signature.fromBytes(classical_sig.*);
+                ed25519_signature.verify(message, public_key) catch {
+                    return false;
+                };
 
                 // Verify ML-DSA-65 signature
                 const pq_signature: [ml_dsa.ML_DSA_65.SIGNATURE_SIZE]u8 = pq_sig[0..ml_dsa.ML_DSA_65.SIGNATURE_SIZE].*;

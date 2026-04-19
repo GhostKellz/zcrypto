@@ -1,4 +1,4 @@
-//! FFI (Foreign Function Interface) for zcrypto v1.0.1
+//! FFI (Foreign Function Interface) for zcrypto v1.0.2
 //!
 //! Enhanced C ABI exports for seamless integration with all GhostChain services:
 //! - ghostbridge (gRPC relay over QUIC)
@@ -314,16 +314,22 @@ pub export fn zcrypto_ed25519_sign(message: [*]const u8, message_len: u32, priva
     // Allow signing empty messages
     const message_slice = if (message_len > 0) message[0..message_len] else "";
 
-    const priv_key_bytes = private_key[0..32];
     var secret_key_data: [64]u8 = undefined;
-    @memcpy(secret_key_data[0..32], priv_key_bytes);
-    @memset(secret_key_data[32..], 0);
-    const secret_key = std.crypto.sign.Ed25519.SecretKey{ .bytes = secret_key_data };
-
-    const keypair = std.crypto.sign.Ed25519.KeyPair.fromSecretKey(secret_key) catch {
-        // Securely zero sensitive data on error
-        std.crypto.secureZero(u8, &secret_key_data);
-        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    const keypair = if (private_key_len == 32) blk: {
+        const seed: [32]u8 = private_key[0..32].*;
+        break :blk std.crypto.sign.Ed25519.KeyPair.generateDeterministic(seed) catch {
+            return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+        };
+    } else blk: {
+        secret_key_data = private_key[0..64].*;
+        const secret_key = std.crypto.sign.Ed25519.SecretKey.fromBytes(secret_key_data) catch {
+            std.crypto.secureZero(u8, &secret_key_data);
+            return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+        };
+        break :blk std.crypto.sign.Ed25519.KeyPair.fromSecretKey(secret_key) catch {
+            std.crypto.secureZero(u8, &secret_key_data);
+            return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+        };
     };
 
     const sig = keypair.sign(message_slice, null) catch {
@@ -361,7 +367,9 @@ pub export fn zcrypto_ed25519_verify(message: [*]const u8, message_len: u32, sig
     const message_slice = if (message_len > 0) message[0..message_len] else "";
     const sig: [64]u8 = signature[0..64].*;
     const pub_key_bytes = public_key[0..32];
-    const public_key_struct = std.crypto.sign.Ed25519.PublicKey{ .bytes = pub_key_bytes[0..32].* };
+    const public_key_struct = std.crypto.sign.Ed25519.PublicKey.fromBytes(pub_key_bytes[0..32].*) catch {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    };
 
     std.crypto.sign.Ed25519.Signature.fromBytes(sig).verify(message_slice, public_key_struct) catch {
         return CryptoResult.failure(FFI_ERROR_VERIFICATION_FAILED);
@@ -432,10 +440,10 @@ pub export fn zcrypto_ml_kem_768_decaps(private_key: [*]const u8, ciphertext: [*
 
 /// Generate ML-DSA-65 key pair
 /// @param public_key: Output buffer for public key (1952 bytes)
-/// @param private_key: Output buffer for private key (4016 bytes)
+/// @param private_key: Output buffer for private key (4032 bytes)
 /// @return CryptoResult with success/failure status
 pub export fn zcrypto_ml_dsa_65_keygen(public_key: [*]u8, private_key: [*]u8) callconv(.c) CryptoResult {
-    const keypair = pq.ml_dsa.ML_DSA_65.KeyPair.generateRandom(std.heap.page_allocator) catch {
+    const keypair = pq.ml_dsa.ML_DSA_65.KeyPair.generateRandom() catch {
         return CryptoResult.failure(FFI_ERROR_POST_QUANTUM_FAILED);
     };
 
@@ -445,19 +453,17 @@ pub export fn zcrypto_ml_dsa_65_keygen(public_key: [*]u8, private_key: [*]u8) ca
 }
 
 /// ML-DSA-65 signing
-/// @param private_key: Private key (4016 bytes)
+/// @param private_key: Private key (4032 bytes)
 /// @param message: Message to sign
 /// @param message_len: Message length
 /// @param signature: Output buffer for signature (3309 bytes)
 /// @return CryptoResult with success/failure status
 pub export fn zcrypto_ml_dsa_65_sign(private_key: [*]const u8, message: [*]const u8, message_len: u32, signature: [*]u8) callconv(.c) CryptoResult {
-    if (message_len == 0) return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
-
     const priv_key: [pq.ml_dsa.ML_DSA_65.PRIVATE_KEY_SIZE]u8 = private_key[0..pq.ml_dsa.ML_DSA_65.PRIVATE_KEY_SIZE].*;
     const pub_key_placeholder: [pq.ml_dsa.ML_DSA_65.PUBLIC_KEY_SIZE]u8 = [_]u8{0} ** pq.ml_dsa.ML_DSA_65.PUBLIC_KEY_SIZE;
-    const message_slice = message[0..message_len];
+    const message_slice = if (message_len > 0) message[0..message_len] else "";
 
-    var randomness: [32]u8 = undefined;
+    var randomness: [pq.ml_dsa.ML_DSA_65.NOISE_SIZE]u8 = undefined;
     rand.fill(&randomness);
 
     const keypair = pq.ml_dsa.ML_DSA_65.KeyPair{
@@ -980,7 +986,7 @@ pub export fn zcrypto_aes256_gcm_decrypt(key: [*]const u8, key_len: u32, nonce: 
 /// @param buffer_len: Buffer capacity
 /// @return CryptoResult with version string length
 pub export fn zcrypto_version(buffer: [*]u8, buffer_len: u32) callconv(.c) CryptoResult {
-    const version = "zcrypto v1.0.1";
+    const version = "zcrypto v1.0.2";
     if (buffer_len < version.len) {
         return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
     }

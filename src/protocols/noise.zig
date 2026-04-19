@@ -6,6 +6,7 @@
 const std = @import("std");
 const pq = @import("../pq.zig");
 const kdf = @import("../kdf.zig");
+const rand = @import("../rand.zig");
 
 /// Noise Protocol errors
 pub const NoiseError = error{
@@ -405,7 +406,7 @@ fn generateKeyPair() !HandshakeState.KeyPair {
     var seed: [32]u8 = undefined;
     rand.fill(&seed);
 
-    const keypair = std.crypto.dh.X25519.KeyPair.create(seed) catch {
+    const keypair = std.crypto.dh.X25519.KeyPair.generateDeterministic(seed) catch {
         return NoiseError.InvalidKey;
     };
 
@@ -416,12 +417,7 @@ fn generateKeyPair() !HandshakeState.KeyPair {
 }
 
 fn performDH(private_key: [32]u8, public_key: [32]u8) ![32]u8 {
-    const keypair = std.crypto.dh.X25519.KeyPair{
-        .public_key = undefined, // Not needed for DH
-        .secret_key = private_key,
-    };
-
-    return keypair.secret_key.mul(public_key) catch {
+    return std.crypto.dh.X25519.scalarmult(private_key, public_key) catch {
         return NoiseError.HandshakeFailed;
     };
 }

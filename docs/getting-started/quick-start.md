@@ -147,6 +147,11 @@ Build this example with `-Dpost-quantum=true -Dexperimental-crypto=true`.
 
 ## 🔄 Async Operations (when enabled)
 
+The current async integration targets the stable `zsync` core surface. In this
+release, `zcrypto.async_crypto.AsyncCrypto` is a zsync-compatible wrapper around
+direct crypto work, which is useful for shared integration patterns and tests
+without pretending that every operation is runtime-scheduled offload.
+
 ```zig
 const zcrypto = @import("zcrypto");
 const zsync = @import("zsync");
@@ -154,7 +159,7 @@ const zsync = @import("zsync");
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
 
-    // Create async crypto instance
+    // Create async crypto instance on the supported BlockingIo path
     var blocking_io = zsync.BlockingIo.init(allocator, 4096);
     defer blocking_io.deinit();
 

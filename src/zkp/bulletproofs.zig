@@ -232,32 +232,33 @@ pub const RangeProof = struct {
 
     /// Serialize range proof to bytes
     pub fn toBytes(self: *const RangeProof, allocator: std.mem.Allocator) ![]u8 {
-        var list = std.ArrayList(u8).init(allocator);
+        var list: std.ArrayList(u8) = .empty;
+        errdefer list.deinit(allocator);
 
         // Serialize group elements (33 bytes each compressed)
-        try list.appendSlice(&self.a.compress());
-        try list.appendSlice(&self.s.compress());
-        try list.appendSlice(&self.t1.compress());
-        try list.appendSlice(&self.t2.compress());
+        try list.appendSlice(allocator, &self.a.compress());
+        try list.appendSlice(allocator, &self.s.compress());
+        try list.appendSlice(allocator, &self.t1.compress());
+        try list.appendSlice(allocator, &self.t2.compress());
 
         // Serialize scalars (32 bytes each)
-        try list.appendSlice(std.mem.asBytes(&self.tau_x.value));
-        try list.appendSlice(std.mem.asBytes(&self.mu.value));
+        try list.appendSlice(allocator, std.mem.asBytes(&self.tau_x.value));
+        try list.appendSlice(allocator, std.mem.asBytes(&self.mu.value));
 
         // Serialize inner product proof
-        try list.appendSlice(std.mem.asBytes(&@as(u32, @intCast(self.inner_product_proof.l.len))));
+        try list.appendSlice(allocator, std.mem.asBytes(&@as(u32, @intCast(self.inner_product_proof.l.len))));
         for (self.inner_product_proof.l) |point| {
-            try list.appendSlice(&point.compress());
+            try list.appendSlice(allocator, &point.compress());
         }
 
         for (self.inner_product_proof.r) |point| {
-            try list.appendSlice(&point.compress());
+            try list.appendSlice(allocator, &point.compress());
         }
 
-        try list.appendSlice(std.mem.asBytes(&self.inner_product_proof.a.value));
-        try list.appendSlice(std.mem.asBytes(&self.inner_product_proof.b.value));
+        try list.appendSlice(allocator, std.mem.asBytes(&self.inner_product_proof.a.value));
+        try list.appendSlice(allocator, std.mem.asBytes(&self.inner_product_proof.b.value));
 
-        return list.toOwnedSlice();
+        return list.toOwnedSlice(allocator);
     }
 };
 

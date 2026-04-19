@@ -1,6 +1,6 @@
 # Features Overview
 
-zcrypto v1.0.0 supports optional feature flags for modular compilation. Stable builds can stay close to the core feature set, while experimental cryptography requires explicit opt-in.
+zcrypto supports optional feature flags for modular compilation. Stable builds can stay close to the core feature set, while experimental cryptography requires explicit opt-in.
 
 ## Available Features
 
@@ -14,13 +14,14 @@ zcrypto v1.0.0 supports optional feature flags for modular compilation. Stable b
 | **WebAssembly** | `wasm` | WASM crypto operations | ~1MB |
 | **Enterprise** | `enterprise` | Experimental HSM / analysis helpers | ~3MB |
 | **Zero-Knowledge Proofs** | `zkp` | Experimental proof-system APIs | ~6MB |
-| **Async Operations** | `async` | Async crypto with zsync integration | ~2MB |
+| **Async Operations** | `async` | zsync-backed async integration helpers | ~2MB |
 
 ## Feature Dependencies
 
 Some features have additional stability considerations:
 
 - **async** → requires zsync dependency
+- **async** → currently targets the stable `zsync` core surface (`Io`, `BlockingIo`, `ThreadPoolIo`, runtime helpers)
 - **tls** → can use hardware_accel for performance
 - **blockchain** → can use zkp for advanced features
 - **post-quantum** → requires `-Dexperimental-crypto=true`
@@ -110,5 +111,5 @@ See **[Build Configuration](../getting-started/build-config.md)** for detailed s
 
 ## Stability Notes
 
-- Core modules are the intended stable surface for `v1.0.0`.
+- Core modules are the intended stable surface.
 - Experimental modules are available for research and iteration, but should not be treated as frozen production APIs.

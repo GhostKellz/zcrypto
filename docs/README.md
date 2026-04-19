@@ -1,6 +1,6 @@
 # zcrypto Documentation
 
-**zcrypto v1.0.0** - Modular cryptography library for Zig with a stable core API and explicit experimental feature gates
+Modular cryptography library for Zig with a stable core API, explicit experimental feature gates, and verified Zig `0.17.0-dev.9+046002d1a` support
 
 ## Quick Navigation
 

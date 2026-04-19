@@ -6,7 +6,7 @@ Welcome! We appreciate your interest in contributing to zcrypto. This guide cove
 
 ### Prerequisites
 
-- Zig 0.16.0 or later
+- Zig `0.17.0-dev.9+046002d1a` or later
 - Git
 - Linux/macOS/Windows (all supported)
 
@@ -16,6 +16,17 @@ Welcome! We appreciate your interest in contributing to zcrypto. This guide cove
 git clone https://github.com/ghostkellz/zcrypto.git
 cd zcrypto
 zig build test  # Run tests to verify setup
+```
+
+The package metadata currently declares `0.17.0-dev.9+046002d1a` as the supported baseline in `build.zig.zon`.
+
+Recommended verification commands for the current release line:
+
+```bash
+"/opt/zig-dev/zig" build test
+"/opt/zig-dev/zig" build test -Dexperimental-crypto=true -Dpost-quantum=true -Dblockchain=true -Denterprise=true -Dzkp=true
+"/opt/zig-dev/zig" build
+"/opt/zig-dev/zig" build -Doptimize=ReleaseSafe
 ```
 
 ### Development Workflow

@@ -252,19 +252,19 @@ pub const MeshVpn = struct {
 
     pub fn init(allocator: Allocator) MeshVpn {
         return MeshVpn{
-            .tunnels = std.ArrayList(VpnTunnel).init(allocator),
+            .tunnels = .empty,
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *MeshVpn) void {
-        self.tunnels.deinit();
+        self.tunnels.deinit(self.allocator);
     }
 
     /// Add a tunnel to the mesh
     pub fn addTunnel(self: *MeshVpn, config: TunnelConfig) !void {
         const tunnel = VpnTunnel.init(config);
-        try self.tunnels.append(tunnel);
+        try self.tunnels.append(self.allocator, tunnel);
     }
 
     /// Encrypt packet for multi-hop routing

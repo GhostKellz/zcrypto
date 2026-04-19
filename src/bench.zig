@@ -19,7 +19,7 @@ var test_nonce: [12]u8 = undefined;
 var test_plaintext: []u8 = undefined;
 var test_allocator: std.mem.Allocator = undefined;
 
-/// Cross-platform timestamp helper for Zig 0.16.0-dev compatibility
+/// Cross-platform timestamp helper for current Zig dev builds
 fn getTimestampNs() !i128 {
     var ts: std.posix.timespec = undefined;
     const rc = std.posix.system.clock_gettime(.REALTIME, &ts);

@@ -36,7 +36,7 @@ pub const kex = @import("kex.zig");
 pub const errors = @import("errors.zig");
 
 // Version information
-pub const version = "1.0.1";
+pub const version = "1.0.2";
 
 // Core crypto test suite
 test {

@@ -203,22 +203,29 @@ pub const Ed25519 = struct {
         return true;
     }
 
-    /// Sign with context (Ed25519ctx)
+    /// Sign with context (Ed25519ctx).
+    ///
+    /// Zig stdlib Ed25519 on the current release baseline does not expose an
+    /// Ed25519ctx-compatible signing API, so this surface is intentionally
+    /// unavailable instead of pretending to support it.
     pub fn signWithContext(private_key: [PRIVATE_KEY_SIZE]u8, message: []const u8, context: []const u8) ![SIGNATURE_SIZE]u8 {
-        // Use real Ed25519 implementation with context
-        const secret_key = crypto.sign.Ed25519.SecretKey.fromBytes(private_key) catch return error.InvalidKey;
-        const key_pair = crypto.sign.Ed25519.KeyPair.fromSecretKey(secret_key) catch return error.InvalidKey;
-        const signature = key_pair.sign(message, context) catch return error.InvalidSignature;
-        return signature.toBytes();
+        _ = private_key;
+        _ = message;
+        _ = context;
+        return error.UnsupportedContextSigning;
     }
 
-    /// Verify with context (Ed25519ctx)
+    /// Verify with context (Ed25519ctx).
+    ///
+    /// Zig stdlib Ed25519 on the current release baseline does not expose an
+    /// Ed25519ctx-compatible verification API, so this surface is intentionally
+    /// unavailable instead of pretending to support it.
     pub fn verifyWithContext(public_key: [PUBLIC_KEY_SIZE]u8, message: []const u8, signature: [SIGNATURE_SIZE]u8, context: []const u8) !bool {
-        // Use real Ed25519 implementation with context
-        const pub_key = crypto.sign.Ed25519.PublicKey.fromBytes(public_key) catch return false;
-        const sig = crypto.sign.Ed25519.Signature.fromBytes(signature);
-        sig.verify(message, pub_key, context) catch return false;
-        return true;
+        _ = public_key;
+        _ = message;
+        _ = signature;
+        _ = context;
+        return error.UnsupportedContextSigning;
     }
 
     /// Batch signature generation
@@ -463,6 +470,15 @@ test "Ed25519 signature" {
     const valid = try Ed25519.verify(keypair.public_key, message, signature);
 
     try testing.expect(valid);
+}
+
+test "Ed25519 context signing is explicitly unsupported" {
+    const keypair = try Ed25519.generateKeypair();
+    const message = "context message";
+    const context = "ctx";
+
+    try testing.expectError(error.UnsupportedContextSigning, Ed25519.signWithContext(keypair.private_key, message, context));
+    try testing.expectError(error.UnsupportedContextSigning, Ed25519.verifyWithContext(keypair.public_key, message, [_]u8{0} ** 64, context));
 }
 
 test "QUIC hybrid key exchange" {

@@ -149,7 +149,7 @@ pub const StatisticalAnalyzer = struct {
             }
         }
 
-        return anomalies.toOwnedSlice();
+        return anomalies.toOwnedSlice(self.allocator);
     }
 };
 

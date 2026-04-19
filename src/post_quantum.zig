@@ -160,9 +160,9 @@ pub const ML_KEM_1024 = struct {
 
 /// ML-DSA-44 (formerly Dilithium2) - NIST security level 2
 pub const ML_DSA_44 = struct {
-    pub const PUBLIC_KEY_SIZE = 1312;
-    pub const PRIVATE_KEY_SIZE = 2528;
-    pub const SIGNATURE_SIZE = 2420;
+    pub const PUBLIC_KEY_SIZE = pq_impl.ml_dsa.ML_DSA_44.PUBLIC_KEY_SIZE;
+    pub const PRIVATE_KEY_SIZE = pq_impl.ml_dsa.ML_DSA_44.PRIVATE_KEY_SIZE;
+    pub const SIGNATURE_SIZE = pq_impl.ml_dsa.ML_DSA_44.SIGNATURE_SIZE;
 
     pub const KeyPair = struct {
         public_key: [PUBLIC_KEY_SIZE]u8,
@@ -170,49 +170,25 @@ pub const ML_DSA_44 = struct {
     };
 
     pub fn generateKeypair() !KeyPair {
-        var keypair = KeyPair{
-            .public_key = undefined,
-            .private_key = undefined,
+        const keypair = try pq_impl.ml_dsa.ML_DSA_44.KeyPair.generateRandom();
+        return .{
+            .public_key = keypair.public_key,
+            .private_key = keypair.private_key,
         };
-
-        rand.fill(&keypair.public_key);
-        rand.fill(&keypair.private_key);
-
-        return keypair;
     }
 
     pub fn sign(private_key: [PRIVATE_KEY_SIZE]u8, message: []const u8) ![SIGNATURE_SIZE]u8 {
-        var signature: [SIGNATURE_SIZE]u8 = undefined;
-
-        // Stub implementation - would use proper ML-DSA signing
-        var hasher = crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(&private_key);
-        hasher.update(message);
-        var hash: [32]u8 = undefined;
-        hasher.final(&hash);
-
-        // Expand hash to signature size (simplified)
-        var i: usize = 0;
-        while (i < SIGNATURE_SIZE) {
-            const chunk_size = @min(32, SIGNATURE_SIZE - i);
-            @memcpy(signature[i .. i + chunk_size], hash[0..chunk_size]);
-            i += chunk_size;
-        }
-
-        return signature;
+        var randomness: [pq_impl.ml_dsa.ML_DSA_44.NOISE_SIZE]u8 = undefined;
+        rand.fill(&randomness);
+        const keypair = pq_impl.ml_dsa.ML_DSA_44.KeyPair{
+            .public_key = [_]u8{0} ** PUBLIC_KEY_SIZE,
+            .private_key = private_key,
+        };
+        return try keypair.sign(message, randomness);
     }
 
     pub fn verify(public_key: [PUBLIC_KEY_SIZE]u8, message: []const u8, signature: [SIGNATURE_SIZE]u8) !bool {
-        // Stub implementation - would use proper ML-DSA verification
-        var hasher = crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(&public_key);
-        hasher.update(message);
-        hasher.update(&signature);
-        var hash: [32]u8 = undefined;
-        hasher.final(&hash);
-
-        // Simple verification - not cryptographically secure
-        return hash[0] != 0;
+        return try pq_impl.ml_dsa.ML_DSA_44.KeyPair.verify(public_key, message, signature);
     }
 };
 
@@ -228,7 +204,7 @@ pub const ML_DSA_65 = struct {
     };
 
     pub fn generateKeypair() !KeyPair {
-        const keypair = try pq_impl.ml_dsa.ML_DSA_65.KeyPair.generateRandom(std.heap.page_allocator);
+        const keypair = try pq_impl.ml_dsa.ML_DSA_65.KeyPair.generateRandom();
         return .{
             .public_key = keypair.public_key,
             .private_key = keypair.private_key,
@@ -240,7 +216,7 @@ pub const ML_DSA_65 = struct {
             .public_key = [_]u8{0} ** PUBLIC_KEY_SIZE,
             .private_key = private_key,
         };
-        var randomness: [pq_impl.ml_dsa.ML_DSA_65.SEED_SIZE]u8 = undefined;
+        var randomness: [pq_impl.ml_dsa.ML_DSA_65.NOISE_SIZE]u8 = undefined;
         rand.fill(&randomness);
         return try keypair.sign(message, randomness);
     }
@@ -253,8 +229,8 @@ pub const ML_DSA_65 = struct {
 /// ML-DSA-87 (formerly Dilithium5) - NIST security level 5
 pub const ML_DSA_87 = struct {
     pub const PUBLIC_KEY_SIZE = 2592;
-    pub const PRIVATE_KEY_SIZE = 4864;
-    pub const SIGNATURE_SIZE = 4595;
+    pub const PRIVATE_KEY_SIZE = pq_impl.ml_dsa.ML_DSA_87.PRIVATE_KEY_SIZE;
+    pub const SIGNATURE_SIZE = pq_impl.ml_dsa.ML_DSA_87.SIGNATURE_SIZE;
 
     pub const KeyPair = struct {
         public_key: [PUBLIC_KEY_SIZE]u8,
@@ -262,45 +238,25 @@ pub const ML_DSA_87 = struct {
     };
 
     pub fn generateKeypair() !KeyPair {
-        var keypair = KeyPair{
-            .public_key = undefined,
-            .private_key = undefined,
+        const keypair = try pq_impl.ml_dsa.ML_DSA_87.KeyPair.generateRandom();
+        return .{
+            .public_key = keypair.public_key,
+            .private_key = keypair.private_key,
         };
-
-        rand.fill(&keypair.public_key);
-        rand.fill(&keypair.private_key);
-
-        return keypair;
     }
 
     pub fn sign(private_key: [PRIVATE_KEY_SIZE]u8, message: []const u8) ![SIGNATURE_SIZE]u8 {
-        var signature: [SIGNATURE_SIZE]u8 = undefined;
-
-        var hasher = crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(&private_key);
-        hasher.update(message);
-        var hash: [32]u8 = undefined;
-        hasher.final(&hash);
-
-        var i: usize = 0;
-        while (i < SIGNATURE_SIZE) {
-            const chunk_size = @min(32, SIGNATURE_SIZE - i);
-            @memcpy(signature[i .. i + chunk_size], hash[0..chunk_size]);
-            i += chunk_size;
-        }
-
-        return signature;
+        var randomness: [pq_impl.ml_dsa.ML_DSA_87.NOISE_SIZE]u8 = undefined;
+        rand.fill(&randomness);
+        const keypair = pq_impl.ml_dsa.ML_DSA_87.KeyPair{
+            .public_key = [_]u8{0} ** PUBLIC_KEY_SIZE,
+            .private_key = private_key,
+        };
+        return try keypair.sign(message, randomness);
     }
 
     pub fn verify(public_key: [PUBLIC_KEY_SIZE]u8, message: []const u8, signature: [SIGNATURE_SIZE]u8) !bool {
-        var hasher = crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(&public_key);
-        hasher.update(message);
-        hasher.update(&signature);
-        var hash: [32]u8 = undefined;
-        hasher.final(&hash);
-
-        return hash[0] != 0;
+        return try pq_impl.ml_dsa.ML_DSA_87.KeyPair.verify(public_key, message, signature);
     }
 };
 

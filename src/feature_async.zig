@@ -1,6 +1,7 @@
-//! zcrypto Async Feature Module - Asynchronous cryptographic operations
+//! zcrypto Async Feature Module.
 //!
-//! Provides async crypto operations using zsync runtime when enabled.
+//! Provides zsync-backed async integration helpers when the async feature is
+//! enabled. The current release surface targets the stable `zsync` core APIs.
 
 const std = @import("std");
 

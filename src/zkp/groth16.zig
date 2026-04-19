@@ -226,23 +226,24 @@ pub const Proof = struct {
     /// Serialize proof to bytes
     pub fn toBytes(self: *const Proof, allocator: std.mem.Allocator) ![]u8 {
         // Simplified serialization (would use proper encoding)
-        var list = std.ArrayList(u8).init(allocator);
+        var list: std.ArrayList(u8) = .empty;
+        errdefer list.deinit(allocator);
 
         // Serialize A point (64 bytes)
-        try list.appendSlice(std.mem.asBytes(&self.a.x.value));
-        try list.appendSlice(std.mem.asBytes(&self.a.y.value));
+        try list.appendSlice(allocator, std.mem.asBytes(&self.a.x.value));
+        try list.appendSlice(allocator, std.mem.asBytes(&self.a.y.value));
 
         // Serialize B point (128 bytes for G2)
-        try list.appendSlice(std.mem.asBytes(&self.b.x[0].value));
-        try list.appendSlice(std.mem.asBytes(&self.b.x[1].value));
-        try list.appendSlice(std.mem.asBytes(&self.b.y[0].value));
-        try list.appendSlice(std.mem.asBytes(&self.b.y[1].value));
+        try list.appendSlice(allocator, std.mem.asBytes(&self.b.x[0].value));
+        try list.appendSlice(allocator, std.mem.asBytes(&self.b.x[1].value));
+        try list.appendSlice(allocator, std.mem.asBytes(&self.b.y[0].value));
+        try list.appendSlice(allocator, std.mem.asBytes(&self.b.y[1].value));
 
         // Serialize C point (64 bytes)
-        try list.appendSlice(std.mem.asBytes(&self.c.x.value));
-        try list.appendSlice(std.mem.asBytes(&self.c.y.value));
+        try list.appendSlice(allocator, std.mem.asBytes(&self.c.x.value));
+        try list.appendSlice(allocator, std.mem.asBytes(&self.c.y.value));
 
-        return list.toOwnedSlice();
+        return list.toOwnedSlice(allocator);
     }
 
     /// Deserialize proof from bytes

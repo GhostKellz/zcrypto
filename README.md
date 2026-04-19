@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Zig-F7A41D?style=for-the-badge&logo=zig&logoColor=white" alt="Zig">
+  <img src="https://img.shields.io/badge/Zig-0.17.0--dev.9%2B046002d1a-F7A41D?style=for-the-badge&logo=zig&logoColor=white" alt="Zig 0.17.0-dev.9+046002d1a">
   <img src="https://img.shields.io/badge/Cryptography-1F6FEB?style=for-the-badge&logo=letsencrypt&logoColor=white" alt="Cryptography">
   <img src="https://img.shields.io/badge/QUIC-0F766E?style=for-the-badge&logo=googlechrome&logoColor=white" alt="QUIC">
   <img src="https://img.shields.io/badge/TLS-2563EB?style=for-the-badge&logo=letsencrypt&logoColor=white" alt="TLS">
@@ -13,7 +13,7 @@
 
 # Zcrypto: A Modern Cryptography Library for Zig
 
-**Zcrypto v1.0.0** is a modular cryptography library written in Zig. The stable `1.0.0` scope centers on the core primitives, QUIC helpers, and feature-gated transport/runtime integrations that are currently verified in this repository.
+**Zcrypto** is a modular cryptography library written in Zig. The stable release centers on the core primitives, QUIC helpers, and feature-gated transport/runtime integrations that are currently verified in this repository.
 
 ---
 
@@ -30,7 +30,7 @@ The core API in this release is intended to be stable. Several optional modules 
 
 ---
 
-## ⚙️ Modular Features (v1.0.0)
+## ⚙️ Modular Features
 
 Zcrypto supports selective compilation with feature flags:
 
@@ -81,10 +81,12 @@ Zcrypto supports selective compilation with feature flags:
 
 ## 🚀 Quick Start
 
+Current toolchain baseline: Zig `0.17.0-dev.9+046002d1a`.
+
 ### Installation
 
 ```bash
-zig fetch --save https://github.com/ghostkellz/zcrypto/archive/refs/tags/v1.0.0.tar.gz
+zig fetch --save https://github.com/ghostkellz/zcrypto/archive/refs/tags/v1.0.2.tar.gz
 ```
 
 ### Basic Usage (Core Only)
@@ -167,7 +169,7 @@ zig build run-advanced -Dpost-quantum=true -Dexperimental-crypto=true -Dhardware
 
 ## 🚀 Roadmap
 
-### ✅ Completed (v1.0.0)
+### ✅ Completed
 * ✅ Modular build system with 9 feature flags
 * ✅ 70-91% binary size reduction for selective builds
 * ✅ Structured documentation in `docs/` directory

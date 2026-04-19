@@ -401,13 +401,13 @@ pub const Noise = struct {
         }
 
         pub fn writeMessage(self: *NoiseState, allocator: std.mem.Allocator, payload: []const u8) ![]u8 {
-            var message = std.ArrayList(u8).init(allocator);
-            defer message.deinit();
+            var message: std.ArrayList(u8) = .empty;
+            defer message.deinit(allocator);
 
             // Generate ephemeral key if needed
             if (self.e == null) {
                 self.e = try kex.X25519.generateKeypair();
-                try message.appendSlice(&self.e.?.public_key);
+                try message.appendSlice(allocator, &self.e.?.public_key);
                 self.mixHash(&self.e.?.public_key);
             }
 
@@ -423,7 +423,7 @@ pub const Noise = struct {
                         // Send static key
                         const encrypted_s = try self.encryptAndHash(allocator, &self.s.?.public_key);
                         defer allocator.free(encrypted_s);
-                        try message.appendSlice(encrypted_s);
+                        try message.appendSlice(allocator, encrypted_s);
 
                         // se
                         const dh2 = try kex.X25519.computeSharedSecret(self.s.?.private_key, self.re.?);
@@ -437,9 +437,9 @@ pub const Noise = struct {
             // Encrypt payload
             const encrypted_payload = try self.encryptAndHash(allocator, payload);
             defer allocator.free(encrypted_payload);
-            try message.appendSlice(encrypted_payload);
+            try message.appendSlice(allocator, encrypted_payload);
 
-            return try message.toOwnedSlice();
+            return try message.toOwnedSlice(allocator);
         }
 
         pub fn readMessage(self: *NoiseState, allocator: std.mem.Allocator, message: []const u8) ![]u8 {

@@ -6,7 +6,7 @@
 const std = @import("std");
 
 // =============================================================================
-// TIMESTAMP UTILITIES (Zig 0.16.0-dev compatible)
+// TIMESTAMP UTILITIES
 // =============================================================================
 
 /// Timestamp result containing seconds and nanoseconds
@@ -25,7 +25,7 @@ pub const Timestamp = struct {
     }
 };
 
-/// Get current realtime timestamp (Zig 0.16.0-dev compatible)
+/// Get current realtime timestamp
 /// Returns null on error for use in contexts where errors can't be propagated
 pub fn getTimestamp() ?Timestamp {
     var ts: std.posix.timespec = undefined;

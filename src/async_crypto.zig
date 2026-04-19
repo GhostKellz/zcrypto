@@ -1,7 +1,9 @@
-//! Async cryptographic operations with zsync integration
+//! Async cryptographic operations with zsync integration.
 //!
-//! Provides non-blocking cryptographic operations optimized for high-performance
-//! QUIC and TLS applications using the zsync async runtime.
+//! This module currently targets the stable `zsync` runtime surface used by
+//! `zcrypto` (`Io`, `BlockingIo`, and related integration helpers). The
+//! operations below are zsync-compatible wrappers around direct crypto work,
+//! rather than runtime-scheduled offload of long-running cryptographic tasks.
 
 const std = @import("std");
 const sym = @import("sym.zig");
@@ -25,27 +27,24 @@ pub const AsyncCrypto = struct {
         };
     }
 
-    /// Async encryption using direct crypto calls (for now)
+    /// zsync-compatible encryption wrapper using direct crypto calls.
     pub fn encryptAsync(self: AsyncCrypto, data: []const u8, key: []const u8) ![]u8 {
-        // Direct call until zsync function type issues are resolved
         if (key.len != 32) return error.InvalidKeySize;
         var key_array: [32]u8 = undefined;
         @memcpy(&key_array, key[0..32]);
         return try sym.encryptAesGcm(self.allocator, data, &key_array);
     }
 
-    /// Async decryption using direct crypto calls (for now)
+    /// zsync-compatible decryption wrapper using direct crypto calls.
     pub fn decryptAsync(self: AsyncCrypto, ciphertext: []const u8, key: []const u8) ![]u8 {
-        // Direct call until zsync function type issues are resolved
         if (key.len != 32) return error.InvalidKeySize;
         var key_array: [32]u8 = undefined;
         @memcpy(&key_array, key[0..32]);
         return try sym.decryptAesGcm(self.allocator, ciphertext, &key_array);
     }
 
-    /// Async hashing using direct crypto calls (for now)
+    /// zsync-compatible hashing wrapper using direct crypto calls.
     pub fn hashAsync(self: AsyncCrypto, data: []const u8) ![32]u8 {
-        // Direct call until zsync function type issues are resolved
         _ = self;
         return hash.sha256(data);
     }
@@ -63,9 +62,12 @@ pub const AsyncCrypto = struct {
         return results;
     }
 
-    /// Encrypt with timeout support using zsync features
+    /// Encrypt with timeout-shaped API compatibility.
+    ///
+    /// The current implementation preserves the timeout parameter for callers,
+    /// but does not yet route the operation through `zsync.timeout()`.
     pub fn encryptAsyncWithTimeout(self: AsyncCrypto, data: []const u8, key: []const u8, timeout_ms: u32) ![]u8 {
-        _ = timeout_ms; // TODO: Use zsync timeout when available in API
+        _ = timeout_ms;
         return self.encryptAsync(data, key);
     }
 

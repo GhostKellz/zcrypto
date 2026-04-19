@@ -70,7 +70,7 @@ pub const x25519 = kex.X25519;
 pub const ed25519 = kex.Ed25519;
 
 // Version information
-pub const version = "1.0.1";
+pub const version = "1.0.2";
 
 pub const build_config = struct {
     pub const tls_enabled = build_options.enable_tls;
