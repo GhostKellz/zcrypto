@@ -457,8 +457,8 @@ test "batch signature verification" {
     defer verifier.deinit();
 
     const message = "test transaction";
-    const signature = [_]u8{0} ** 64;
-    const public_key = [_]u8{0} ** 32;
+    const signature = std.mem.zeroes([64]u8);
+    const public_key = std.mem.zeroes([32]u8);
 
     try verifier.addSignature(message, signature, public_key);
 
@@ -488,8 +488,12 @@ test "consensus hash functions" {
 }
 
 test "block hash computation" {
-    const prev_hash = [_]u8{0} ** 32;
-    const merkle_root = [_]u8{1} ** 32;
+    const prev_hash = std.mem.zeroes([32]u8);
+    const merkle_root = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x01);
+        break :blk bytes;
+    };
 
     const block_hash = BlockHash.computeBlockHash(prev_hash, merkle_root, 1234567890, 0, 1000);
 

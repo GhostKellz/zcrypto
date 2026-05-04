@@ -502,8 +502,16 @@ test "quic traffic key derivation uses quic labels" {
     const allocator = std.testing.allocator;
 
     const secrets = Secrets{
-        .client_initial_secret = [_]u8{0x42} ** 32,
-        .server_initial_secret = [_]u8{0x24} ** 32,
+        .client_initial_secret = blk: {
+            var bytes = std.mem.zeroes([32]u8);
+            @memset(bytes[0..], 0x42);
+            break :blk bytes;
+        },
+        .server_initial_secret = blk: {
+            var bytes = std.mem.zeroes([32]u8);
+            @memset(bytes[0..], 0x24);
+            break :blk bytes;
+        },
     };
 
     const traffic = try secrets.deriveKeys(allocator, true);
@@ -518,8 +526,16 @@ test "quic traffic key derivation uses quic labels" {
 test "aes-gcm encryption integration" {
     const allocator = std.testing.allocator;
 
-    const key = [_]u8{0x42} ** 16;
-    const nonce = [_]u8{0x69} ** 12;
+    const key = blk: {
+        var bytes = std.mem.zeroes([16]u8);
+        @memset(bytes[0..], 0x42);
+        break :blk bytes;
+    };
+    const nonce = blk: {
+        var bytes = std.mem.zeroes([12]u8);
+        @memset(bytes[0..], 0x69);
+        break :blk bytes;
+    };
     const plaintext = "Hello, QUIC!";
     const aad = "packet header";
 
@@ -538,7 +554,11 @@ test "aes-gcm encryption integration" {
 test "hkdf expand label integration" {
     const allocator = std.testing.allocator;
 
-    const secret = [_]u8{0x23} ** 32;
+    const secret = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x23);
+        break :blk bytes;
+    };
     const label = "test label";
 
     const derived = try hkdfExpandLabel(allocator, &secret, label, 32);

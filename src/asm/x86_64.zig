@@ -103,7 +103,7 @@ pub fn curve25519_mul_avx2(point: *[32]u8, scalar: []const u8) void {
     _ = scalar;
 
     // Montgomery ladder implementation (placeholder)
-    var result: [32]u8 = [_]u8{1} ++ [_]u8{0} ** 31;
+    var result: [32]u8 = [_]u8{1} ++ std.mem.zeroes([31]u8);
 
     for (scalar) |byte| {
         for (0..8) |bit| {
@@ -197,10 +197,10 @@ pub const ConstantTime = struct {
 
 test "x86_64 optimizations" {
     // Test ChaCha20
-    var key = [_]u8{0x00} ** 32;
-    var nonce = [_]u8{0x00} ** 12;
-    var input = [_]u8{0x00} ** 64;
-    var output = [_]u8{0x00} ** 64;
+    var key = std.mem.zeroes([32]u8);
+    var nonce = std.mem.zeroes([12]u8);
+    var input = std.mem.zeroes([64]u8);
+    var output = std.mem.zeroes([64]u8);
 
     chacha20_avx512(&input, &key, &nonce, 0, &output);
 

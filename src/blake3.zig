@@ -177,7 +177,7 @@ pub const Blake3 = struct {
 /// ```
 pub fn keyedBlake3(data: []const u8, key: []const u8) Blake3Hash {
     var hasher = std.crypto.hash.Blake3.init(.{ .key = if (key.len >= 32) key[0..32].* else blk: {
-        var padded_key: [32]u8 = [_]u8{0} ** 32;
+        var padded_key: [32]u8 = std.mem.zeroes([32]u8);
         @memcpy(padded_key[0..key.len], key);
         break :blk padded_key;
     } });
@@ -222,7 +222,7 @@ pub fn deriveKey(
 
     // Use Blake3 derive_key mode
     var hasher = std.crypto.hash.Blake3.init(.{ .key = if (input_key.len >= 32) input_key[0..32].* else blk: {
-        var padded: [32]u8 = [_]u8{0} ** 32;
+        var padded: [32]u8 = std.mem.zeroes([32]u8);
         @memcpy(padded[0..input_key.len], input_key);
         break :blk padded;
     } });

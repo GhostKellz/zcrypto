@@ -14,9 +14,9 @@ const DerivedQuicKeys = struct {
 
 fn deriveQuicKeys(secret: *const [32]u8, cipher_suite: QuicCrypto.CipherSuite) !DerivedQuicKeys {
     var derived: DerivedQuicKeys = .{
-        .key = [_]u8{0} ** 32,
-        .iv = [_]u8{0} ** 12,
-        .hp = [_]u8{0} ** 32,
+        .key = std.mem.zeroes([32]u8),
+        .iv = std.mem.zeroes([12]u8),
+        .hp = std.mem.zeroes([32]u8),
     };
 
     const key_len = cipher_suite.keySize();
@@ -138,7 +138,7 @@ pub const QuicCrypto = struct {
                 .chacha20_poly1305 => 32,
             };
             std.debug.assert(key.len == expected_len);
-            var stored_key = [_]u8{0} ** 32;
+            var stored_key = std.mem.zeroes([32]u8);
             @memcpy(stored_key[0..key.len], key);
             return HeaderProtection{
                 .cipher = cipher,
@@ -208,7 +208,7 @@ pub const QuicCrypto = struct {
 
         pub fn init(cipher: CipherSuite, key: []const u8) AEAD {
             std.debug.assert(key.len == cipher.keySize());
-            var stored_key = [_]u8{0} ** 32;
+            var stored_key = std.mem.zeroes([32]u8);
             @memcpy(stored_key[0..key.len], key);
             return AEAD{
                 .cipher = cipher,
@@ -521,8 +521,16 @@ test "HKDF extract and expand" {
 }
 
 test "AEAD seal and open" {
-    const key: [32]u8 = [_]u8{1} ** 32;
-    const nonce: [12]u8 = [_]u8{2} ** 12;
+    const key: [32]u8 = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x01);
+        break :blk bytes;
+    };
+    const nonce: [12]u8 = blk: {
+        var bytes = std.mem.zeroes([12]u8);
+        @memset(bytes[0..], 0x02);
+        break :blk bytes;
+    };
     var plaintext = [_]u8{ 0x48, 0x65, 0x6c, 0x6c, 0x6f }; // "Hello"
     const aad = "additional authenticated data";
 
@@ -538,10 +546,14 @@ test "AEAD seal and open" {
 }
 
 test "Header protection" {
-    const key: [32]u8 = [_]u8{3} ** 32;
+    const key: [32]u8 = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x03);
+        break :blk bytes;
+    };
     const hp = QuicCrypto.HeaderProtection.init(.chacha20_poly1305, &key);
 
-    var packet = [_]u8{ 0xc0, 0x00, 0x00, 0x00, 0x01 } ++ [_]u8{0} ** 20;
+    var packet = [_]u8{ 0xc0, 0x00, 0x00, 0x00, 0x01 } ++ std.mem.zeroes([20]u8);
     const original_first_byte = packet[0];
 
     try hp.apply(&packet, 5);
@@ -579,8 +591,16 @@ test "QuicConnection from SSH secrets" {
     const allocator = gpa.allocator();
 
     // Create SSH-derived secrets
-    const client_secret: [32]u8 = [_]u8{0x11} ** 32;
-    const server_secret: [32]u8 = [_]u8{0x22} ** 32;
+    const client_secret: [32]u8 = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x11);
+        break :blk bytes;
+    };
+    const server_secret: [32]u8 = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x22);
+        break :blk bytes;
+    };
 
     // Initialize QUIC connection from pre-computed secrets (SSH mode)
     const client_conn = try QuicConnection.initFromSecrets(
@@ -620,7 +640,11 @@ test "QuicConnection encrypts packet with reserved tag space" {
     @memset(&packet, 0);
     packet[0] = 0x40;
 
-    const payload = [_]u8{0x42} ** 32;
+    const payload = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x42);
+        break :blk bytes;
+    };
     @memcpy(packet[1 .. 1 + payload.len], &payload);
 
     const encrypted_len = try conn.encryptPacket(packet[0..], payload.len, 42);

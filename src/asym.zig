@@ -82,7 +82,7 @@ pub fn generateEd25519() Ed25519KeyPair {
 pub fn generateCurve25519() Curve25519KeyPair {
     var private_key: [CURVE25519_PRIVATE_KEY_SIZE]u8 = undefined;
     rand.fill(&private_key);
-    const public_key = std.crypto.dh.X25519.recoverPublicKey(private_key) catch return Curve25519KeyPair{ .public_key = [_]u8{0} ** 32, .private_key = private_key };
+    const public_key = std.crypto.dh.X25519.recoverPublicKey(private_key) catch return Curve25519KeyPair{ .public_key = std.mem.zeroes([32]u8), .private_key = private_key };
 
     return Curve25519KeyPair{
         .public_key = public_key,
@@ -113,7 +113,7 @@ pub fn dhX25519(private_key: [CURVE25519_PRIVATE_KEY_SIZE]u8, public_key: [CURVE
 
 /// Generate X25519 public key from private key
 pub fn x25519PublicKey(private_key: [CURVE25519_PRIVATE_KEY_SIZE]u8) [CURVE25519_PUBLIC_KEY_SIZE]u8 {
-    return std.crypto.dh.X25519.recoverPublicKey(private_key) catch [_]u8{0} ** 32;
+    return std.crypto.dh.X25519.recoverPublicKey(private_key) catch std.mem.zeroes([32]u8);
 }
 
 /// Ed25519 module with clean API matching your docs
@@ -440,7 +440,11 @@ test "ed25519 standalone functions" {
 }
 
 test "ed25519 deterministic generation from seed" {
-    const seed = [_]u8{42} ** 32;
+    const seed = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 42);
+        break :blk bytes;
+    };
 
     // Generate two keypairs from the same seed
     const keypair1 = ed25519.generateFromSeed(seed);
@@ -479,7 +483,11 @@ test "x25519 public key derivation" {
 
 test "secp256k1 keypair generation and signing" {
     const keypair = secp256k1.generate();
-    const message = [_]u8{0xAB} ** 32; // Hash of message
+    const message = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0xAB);
+        break :blk bytes;
+    }; // Hash of message
 
     const signature = try keypair.sign(message);
     const valid = keypair.verify(message, signature);
@@ -487,14 +495,22 @@ test "secp256k1 keypair generation and signing" {
     try std.testing.expect(valid);
 
     // Test with different message
-    const wrong_message = [_]u8{0xCD} ** 32;
+    const wrong_message = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0xCD);
+        break :blk bytes;
+    };
     const invalid = keypair.verify(wrong_message, signature);
     try std.testing.expect(!invalid);
 }
 
 test "secp256r1 keypair generation and signing" {
     const keypair = secp256r1.generate();
-    const message = [_]u8{0xEF} ** 32; // Hash of message
+    const message = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0xEF);
+        break :blk bytes;
+    }; // Hash of message
 
     const signature = try keypair.sign(message);
     const valid = keypair.verify(message, signature);
@@ -502,14 +518,22 @@ test "secp256r1 keypair generation and signing" {
     try std.testing.expect(valid);
 
     // Test with different message
-    const wrong_message = [_]u8{0x12} ** 32;
+    const wrong_message = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x12);
+        break :blk bytes;
+    };
     const invalid = keypair.verify(wrong_message, signature);
     try std.testing.expect(!invalid);
 }
 
 test "secp256k1 standalone functions" {
     const keypair = secp256k1.generate();
-    const message = [_]u8{0x34} ** 32;
+    const message = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x34);
+        break :blk bytes;
+    };
 
     const signature = try secp256k1.sign(message, keypair.private_key);
     const valid = secp256k1.verify(message, signature, keypair.public_key_compressed);
@@ -549,7 +573,11 @@ test "secp256k1 dual public key formats" {
 
 test "secp256r1 standalone functions" {
     const keypair = secp256r1.generate();
-    const message = [_]u8{0x56} ** 32;
+    const message = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x56);
+        break :blk bytes;
+    };
 
     const signature = try secp256r1.sign(message, keypair.private_key);
     const valid = secp256r1.verify(message, signature, keypair.public_key);

@@ -80,7 +80,11 @@ pub fn main() !void {
         defer key_schedule.deinit();
 
         try key_schedule.deriveEarlySecret(null);
-        const ecdhe_secret = [_]u8{0x42} ** 32;
+        const ecdhe_secret = blk: {
+            var bytes = std.mem.zeroes([32]u8);
+            @memset(bytes[0..], 0x42);
+            break :blk bytes;
+        };
         try key_schedule.deriveHandshakeSecret(&ecdhe_secret);
         try key_schedule.deriveMasterSecret();
         std.debug.print("  Completed TLS 1.3 key schedule derivation\n", .{});

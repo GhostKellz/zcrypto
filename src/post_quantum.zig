@@ -61,7 +61,7 @@ pub const ML_KEM_512 = struct {
     /// Decapsulate ciphertext to recover shared secret
     pub fn decapsulate(private_key: [PRIVATE_KEY_SIZE]u8, ciphertext: [CIPHERTEXT_SIZE]u8) ![SHARED_SECRET_SIZE]u8 {
         const keypair = pq_impl.ml_kem.ML_KEM_512.KeyPair{
-            .public_key = [_]u8{0} ** PUBLIC_KEY_SIZE,
+            .public_key = std.mem.zeroes([PUBLIC_KEY_SIZE]u8),
             .private_key = private_key,
         };
         return try keypair.decapsulate(ciphertext);
@@ -106,7 +106,7 @@ pub const ML_KEM_768 = struct {
 
     pub fn decapsulate(private_key: [PRIVATE_KEY_SIZE]u8, ciphertext: [CIPHERTEXT_SIZE]u8) ![SHARED_SECRET_SIZE]u8 {
         const keypair = pq_impl.ml_kem.ML_KEM_768.KeyPair{
-            .public_key = [_]u8{0} ** PUBLIC_KEY_SIZE,
+            .public_key = std.mem.zeroes([PUBLIC_KEY_SIZE]u8),
             .private_key = private_key,
         };
         return try keypair.decapsulate(ciphertext);
@@ -151,7 +151,7 @@ pub const ML_KEM_1024 = struct {
 
     pub fn decapsulate(private_key: [PRIVATE_KEY_SIZE]u8, ciphertext: [CIPHERTEXT_SIZE]u8) ![SHARED_SECRET_SIZE]u8 {
         const keypair = pq_impl.ml_kem.ML_KEM_1024.KeyPair{
-            .public_key = [_]u8{0} ** PUBLIC_KEY_SIZE,
+            .public_key = std.mem.zeroes([PUBLIC_KEY_SIZE]u8),
             .private_key = private_key,
         };
         return try keypair.decapsulate(ciphertext);
@@ -181,7 +181,7 @@ pub const ML_DSA_44 = struct {
         var randomness: [pq_impl.ml_dsa.ML_DSA_44.NOISE_SIZE]u8 = undefined;
         rand.fill(&randomness);
         const keypair = pq_impl.ml_dsa.ML_DSA_44.KeyPair{
-            .public_key = [_]u8{0} ** PUBLIC_KEY_SIZE,
+            .public_key = std.mem.zeroes([PUBLIC_KEY_SIZE]u8),
             .private_key = private_key,
         };
         return try keypair.sign(message, randomness);
@@ -213,7 +213,7 @@ pub const ML_DSA_65 = struct {
 
     pub fn sign(private_key: [PRIVATE_KEY_SIZE]u8, message: []const u8) ![SIGNATURE_SIZE]u8 {
         const keypair = pq_impl.ml_dsa.ML_DSA_65.KeyPair{
-            .public_key = [_]u8{0} ** PUBLIC_KEY_SIZE,
+            .public_key = std.mem.zeroes([PUBLIC_KEY_SIZE]u8),
             .private_key = private_key,
         };
         var randomness: [pq_impl.ml_dsa.ML_DSA_65.NOISE_SIZE]u8 = undefined;
@@ -249,7 +249,7 @@ pub const ML_DSA_87 = struct {
         var randomness: [pq_impl.ml_dsa.ML_DSA_87.NOISE_SIZE]u8 = undefined;
         rand.fill(&randomness);
         const keypair = pq_impl.ml_dsa.ML_DSA_87.KeyPair{
-            .public_key = [_]u8{0} ** PUBLIC_KEY_SIZE,
+            .public_key = std.mem.zeroes([PUBLIC_KEY_SIZE]u8),
             .private_key = private_key,
         };
         return try keypair.sign(message, randomness);

@@ -530,8 +530,8 @@ test "Noise handshake XX pattern" {
     );
 
     // Message buffers
-    var message_buffer = [_]u8{0} ** 1024;
-    var payload_buffer = [_]u8{0} ** 512;
+    var message_buffer = std.mem.zeroes([1024]u8);
+    var payload_buffer = std.mem.zeroes([512]u8);
 
     // Alice -> Bob (message 1)
     const msg1 = try alice_state.writeMessage("Hello", &message_buffer);

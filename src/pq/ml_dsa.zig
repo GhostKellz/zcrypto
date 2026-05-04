@@ -87,7 +87,7 @@ pub const Poly = struct {
 
     /// Initialize polynomial with zeros
     pub fn zero() Poly {
-        return Poly{ .coeffs = [_]u32{0} ** Params.N };
+        return Poly{ .coeffs = std.mem.zeroes([Params.N]u32) };
     }
 
     /// Initialize polynomial from bytes
@@ -196,7 +196,7 @@ pub const PublicKey = struct {
     pub fn init(allocator: std.mem.Allocator, level: SecurityLevel) !PublicKey {
         const params = LevelParams.forLevel(level);
         return PublicKey{
-            .rho = [_]u8{0} ** Params.SEEDBYTES,
+            .rho = std.mem.zeroes([Params.SEEDBYTES]u8),
             .t1 = try allocator.alloc(Poly, params.k),
             .allocator = allocator,
         };
@@ -220,9 +220,9 @@ pub const SecretKey = struct {
     pub fn init(allocator: std.mem.Allocator, level: SecurityLevel) !SecretKey {
         const params = LevelParams.forLevel(level);
         return SecretKey{
-            .rho = [_]u8{0} ** Params.SEEDBYTES,
-            .tr = [_]u8{0} ** Params.TRBYTES,
-            .key = [_]u8{0} ** Params.SEEDBYTES,
+            .rho = std.mem.zeroes([Params.SEEDBYTES]u8),
+            .tr = std.mem.zeroes([Params.TRBYTES]u8),
+            .key = std.mem.zeroes([Params.SEEDBYTES]u8),
             .s1 = try allocator.alloc(Poly, params.l),
             .s2 = try allocator.alloc(Poly, params.k),
             .t0 = try allocator.alloc(Poly, params.k),
@@ -247,7 +247,7 @@ pub const Signature = struct {
     pub fn init(allocator: std.mem.Allocator, level: SecurityLevel) !Signature {
         const params = LevelParams.forLevel(level);
         return Signature{
-            .c = [_]u8{0} ** Params.SEEDBYTES,
+            .c = std.mem.zeroes([Params.SEEDBYTES]u8),
             .z = try allocator.alloc(Poly, params.l),
             .h = try allocator.alloc(Poly, params.k),
             .allocator = allocator,
@@ -473,8 +473,22 @@ test "ML-DSA-44 sign and verify" {
 }
 
 test "ML-DSA polynomial operations" {
-    const poly1 = Poly.fromBytes(&[_]u8{ 1, 2, 3 } ** 256);
-    const poly2 = Poly.fromBytes(&[_]u8{ 4, 5, 6 } ** 256);
+    const poly1_bytes = blk: {
+        var bytes = std.mem.zeroes([256]u8);
+        bytes[0] = 1;
+        bytes[1] = 2;
+        bytes[2] = 3;
+        break :blk bytes;
+    };
+    const poly2_bytes = blk: {
+        var bytes = std.mem.zeroes([256]u8);
+        bytes[0] = 4;
+        bytes[1] = 5;
+        bytes[2] = 6;
+        break :blk bytes;
+    };
+    const poly1 = Poly.fromBytes(&poly1_bytes);
+    const poly2 = Poly.fromBytes(&poly2_bytes);
 
     const sum = poly1.add(poly2);
     const diff = poly1.sub(poly2);

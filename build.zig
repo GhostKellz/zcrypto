@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_zon = @import("build.zig.zon");
 
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
@@ -165,6 +166,7 @@ pub fn build(b: *std.Build) !void {
 
     // Add build options for conditional compilation
     const build_options = b.addOptions();
+    build_options.addOption([]const u8, "version", build_zon.version);
     build_options.addOption(bool, "enable_tls", enable_tls);
     build_options.addOption(bool, "enable_post_quantum", enable_post_quantum);
     build_options.addOption(bool, "enable_hardware_accel", enable_hardware_accel);

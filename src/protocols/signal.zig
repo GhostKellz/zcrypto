@@ -418,8 +418,8 @@ test "Double Ratchet encryption/decryption" {
 
     // Test message
     const plaintext = "Hello, Signal!";
-    var ciphertext = [_]u8{0} ** 64;
-    var decrypted = [_]u8{0} ** 64;
+    var ciphertext = std.mem.zeroes([64]u8);
+    var decrypted = std.mem.zeroes([64]u8);
 
     // Alice encrypts
     const message = try DoubleRatchet.encrypt(&alice_state, plaintext, &ciphertext);

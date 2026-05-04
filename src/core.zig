@@ -5,6 +5,7 @@
 //! symmetric encryption, authentication, key derivation, and random number generation.
 
 const std = @import("std");
+const build_options = @import("build_options");
 
 // Re-export standardized crypto errors
 pub const CryptoError = error{
@@ -36,7 +37,7 @@ pub const kex = @import("kex.zig");
 pub const errors = @import("errors.zig");
 
 // Version information
-pub const version = "1.0.2";
+pub const version = build_options.version;
 
 // Core crypto test suite
 test {

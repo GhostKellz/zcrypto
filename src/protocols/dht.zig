@@ -545,9 +545,13 @@ test "node ID generation" {
 }
 
 test "XOR distance calculation" {
-    const node1: NodeId = [_]u8{0x00} ** 32;
-    const node2: NodeId = [_]u8{0xFF} ** 32;
-    const node3: NodeId = [_]u8{0x00} ** 32;
+    const node1: NodeId = std.mem.zeroes([32]u8);
+    const node2: NodeId = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0xFF);
+        break :blk bytes;
+    };
+    const node3: NodeId = std.mem.zeroes([32]u8);
 
     const dist1 = xorDistance(node1, node2);
     const dist2 = xorDistance(node1, node3);
@@ -571,7 +575,7 @@ test "DHT node creation and operations" {
 
     // Test distance calculation
     const distance = node1.distanceTo(node2.id);
-    try std.testing.expect(!std.mem.eql(u8, &distance, &[_]u8{0} ** 32));
+    try std.testing.expect(!std.mem.eql(u8, &distance, &std.mem.zeroes([32]u8)));
 
     // Test message signing and verification
     const message = "test message";

@@ -37,7 +37,11 @@ fn demoQuicCrypto(allocator: std.mem.Allocator) !void {
     var quic_conn = try zcrypto.quic_crypto.QuicConnection.initFromConnectionId(allocator, &connection_id, .chacha20_poly1305);
 
     var packet: [64]u8 = undefined;
-    const payload = [_]u8{0x42} ** 32;
+    const payload = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x42);
+        break :blk bytes;
+    };
     @memcpy(packet[0..payload.len], &payload);
     @memset(packet[payload.len..], 0);
 

@@ -318,16 +318,32 @@ test "timingSafeEqual empty" {
 }
 
 test "timingSafeEqual secrets" {
-    const mac1 = [_]u8{0x01} ** 32;
-    const mac2 = [_]u8{0x01} ** 32;
-    const mac3 = [_]u8{0x02} ** 32;
+    const mac1 = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x01);
+        break :blk bytes;
+    };
+    const mac2 = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x01);
+        break :blk bytes;
+    };
+    const mac3 = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x02);
+        break :blk bytes;
+    };
 
     try testing.expect(timingSafeEqual(&mac1, &mac2));
     try testing.expect(!timingSafeEqual(&mac1, &mac3));
 }
 
 test "secureZero clears memory" {
-    var buffer = [_]u8{0xFF} ** 64;
+    var buffer = blk: {
+        var bytes = std.mem.zeroes([64]u8);
+        @memset(bytes[0..], 0xFF);
+        break :blk bytes;
+    };
 
     secureZero(&buffer);
 
@@ -356,9 +372,13 @@ test "constantTimeByteEq" {
 }
 
 test "constantTimeIsZero" {
-    const zeros = [_]u8{0} ** 32;
-    const nonzeros = [_]u8{0} ** 31 ++ [_]u8{1};
-    const all_nonzero = [_]u8{0xFF} ** 32;
+    const zeros = std.mem.zeroes([32]u8);
+    const nonzeros = std.mem.zeroes([31]u8) ++ [_]u8{1};
+    const all_nonzero = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0xFF);
+        break :blk bytes;
+    };
 
     try testing.expect(constantTimeIsZero(&zeros));
     try testing.expect(!constantTimeIsZero(&nonzeros));
@@ -373,7 +393,11 @@ test "constantTimeIsZero empty buffer" {
 test "timing safe comparison demonstrates constant time behavior" {
     // This test demonstrates that timingSafeEqual should take similar time
     // regardless of where the difference occurs
-    const base = [_]u8{0x42} ** 1000;
+    const base = blk: {
+        var bytes = std.mem.zeroes([1000]u8);
+        @memset(bytes[0..], 0x42);
+        break :blk bytes;
+    };
     var diff_start = base;
     var diff_end = base;
 

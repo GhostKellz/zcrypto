@@ -342,8 +342,12 @@ pub fn decryptChaCha20(
 test "aes-128-gcm round trip" {
     const allocator = std.testing.allocator;
 
-    const key = [_]u8{0} ** AES_128_KEY_SIZE;
-    const nonce = [_]u8{1} ** GCM_NONCE_SIZE;
+    const key = std.mem.zeroes([AES_128_KEY_SIZE]u8);
+    const nonce = blk: {
+        var bytes = std.mem.zeroes([GCM_NONCE_SIZE]u8);
+        @memset(bytes[0..], 0x01);
+        break :blk bytes;
+    };
     const plaintext = "Hello, zcrypto!";
     const aad = "metadata";
 
@@ -362,8 +366,16 @@ test "aes-128-gcm round trip" {
 test "chacha20-poly1305 round trip" {
     const allocator = std.testing.allocator;
 
-    const key = [_]u8{0x42} ** CHACHA20_KEY_SIZE;
-    const nonce = [_]u8{0x69} ** CHACHA20_NONCE_SIZE;
+    const key = blk: {
+        var bytes = std.mem.zeroes([CHACHA20_KEY_SIZE]u8);
+        @memset(bytes[0..], 0x42);
+        break :blk bytes;
+    };
+    const nonce = blk: {
+        var bytes = std.mem.zeroes([CHACHA20_NONCE_SIZE]u8);
+        @memset(bytes[0..], 0x69);
+        break :blk bytes;
+    };
     const plaintext = "ChaCha20 is fast!";
     const aad = "associated data";
 
@@ -382,7 +394,11 @@ test "chacha20-poly1305 round trip" {
 test "simplified aes gcm api" {
     const allocator = std.testing.allocator;
 
-    const key = [_]u8{0xAB} ** AES_256_KEY_SIZE;
+    const key = blk: {
+        var bytes = std.mem.zeroes([AES_256_KEY_SIZE]u8);
+        @memset(bytes[0..], 0xAB);
+        break :blk bytes;
+    };
     const plaintext = "Hello, simplified crypto!";
 
     // Encrypt (auto-generates nonce)
@@ -402,7 +418,11 @@ test "simplified aes gcm api" {
 test "simplified chacha20 api" {
     const allocator = std.testing.allocator;
 
-    const key = [_]u8{0xCD} ** CHACHA20_KEY_SIZE;
+    const key = blk: {
+        var bytes = std.mem.zeroes([CHACHA20_KEY_SIZE]u8);
+        @memset(bytes[0..], 0xCD);
+        break :blk bytes;
+    };
     const plaintext = "ChaCha20 simplified!";
 
     // Encrypt (auto-generates nonce)
@@ -420,8 +440,16 @@ test "simplified chacha20 api" {
 }
 
 test "aes-128 ecb helper matches stdlib block encryption" {
-    const key = [_]u8{0x11} ** AES_128_KEY_SIZE;
-    const input = [_]u8{0x22} ** 16;
+    const key = blk: {
+        var bytes = std.mem.zeroes([AES_128_KEY_SIZE]u8);
+        @memset(bytes[0..], 0x11);
+        break :blk bytes;
+    };
+    const input = blk: {
+        var bytes = std.mem.zeroes([16]u8);
+        @memset(bytes[0..], 0x22);
+        break :blk bytes;
+    };
 
     var expected: [16]u8 = undefined;
     var actual: [16]u8 = undefined;
@@ -434,8 +462,16 @@ test "aes-128 ecb helper matches stdlib block encryption" {
 }
 
 test "aes-256 ecb helper uses RFC 9001 header protection key bytes" {
-    const key = [_]u8{0x33} ** AES_256_KEY_SIZE;
-    const input = [_]u8{0x44} ** 16;
+    const key = blk: {
+        var bytes = std.mem.zeroes([AES_256_KEY_SIZE]u8);
+        @memset(bytes[0..], 0x33);
+        break :blk bytes;
+    };
+    const input = blk: {
+        var bytes = std.mem.zeroes([16]u8);
+        @memset(bytes[0..], 0x44);
+        break :blk bytes;
+    };
 
     var expected: [16]u8 = undefined;
     var actual: [16]u8 = undefined;
@@ -448,12 +484,20 @@ test "aes-256 ecb helper uses RFC 9001 header protection key bytes" {
 }
 
 test "chacha20 keystream helper matches stdlib" {
-    const key = [_]u8{0x55} ** CHACHA20_KEY_SIZE;
-    const nonce = [_]u8{0x66} ** CHACHA20_NONCE_SIZE;
+    const key = blk: {
+        var bytes = std.mem.zeroes([CHACHA20_KEY_SIZE]u8);
+        @memset(bytes[0..], 0x55);
+        break :blk bytes;
+    };
+    const nonce = blk: {
+        var bytes = std.mem.zeroes([CHACHA20_NONCE_SIZE]u8);
+        @memset(bytes[0..], 0x66);
+        break :blk bytes;
+    };
     const counter: u32 = 7;
 
-    var expected = [_]u8{0} ** 64;
-    var actual = [_]u8{0} ** 64;
+    var expected = std.mem.zeroes([64]u8);
+    var actual = std.mem.zeroes([64]u8);
 
     std.crypto.stream.chacha.ChaCha20IETF.xor(&expected, &expected, counter, key, nonce);
     try chacha20_generate_keystream(&key, &nonce, counter, &actual);
@@ -485,7 +529,7 @@ pub const Async = struct {
     /// Returns Task that can be awaited for encrypted result
     pub fn encryptAes128GcmAsync(allocator: std.mem.Allocator, runtime: anytype, key: [AES_128_KEY_SIZE]u8, nonce: [GCM_NONCE_SIZE]u8, plaintext: []const u8, aad: []const u8) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
         const async_sym = init(allocator, runtime) catch unreachable;
-        var key_256: [32]u8 = [_]u8{0} ** 32;
+        var key_256: [32]u8 = std.mem.zeroes([32]u8);
         @memcpy(key_256[0..16], &key);
         return async_sym.aes256GcmEncryptAsync(key_256, nonce, plaintext, aad);
     }

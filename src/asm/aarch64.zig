@@ -129,17 +129,29 @@ pub fn aes_encrypt_arm_crypto(
 }
 
 test "aarch64 optimizations" {
-    var key = [_]u8{0x01} ** 32;
-    var nonce = [_]u8{0x02} ** 12;
-    var input = [_]u8{0x03} ** 64;
-    var output = [_]u8{0x00} ** 64;
+    var key = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x01);
+        break :blk bytes;
+    };
+    var nonce = blk: {
+        var bytes = std.mem.zeroes([12]u8);
+        @memset(bytes[0..], 0x02);
+        break :blk bytes;
+    };
+    var input = blk: {
+        var bytes = std.mem.zeroes([64]u8);
+        @memset(bytes[0..], 0x03);
+        break :blk bytes;
+    };
+    var output = std.mem.zeroes([64]u8);
 
     chacha20_neon(&input, &key, &nonce, 0, &output);
 
     // Test polynomial addition
     const a = [_]u16{ 100, 200, 300, 400 };
     const b = [_]u16{ 50, 150, 250, 350 };
-    var result = [_]u16{0} ** 4;
+    var result = std.mem.zeroes([4]u16);
 
     poly_add_neon(&a, &b, &result);
     try std.testing.expect(result[0] == 150);

@@ -444,7 +444,7 @@ test "parallel fast-fail verification" {
 
         if (i == 25) {
             // Insert one invalid signature
-            signatures[i] = [_]u8{0} ** 64;
+            signatures[i] = std.mem.zeroes([64]u8);
         } else {
             signatures[i] = try keypair.sign(msg);
         }

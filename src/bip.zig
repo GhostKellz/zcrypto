@@ -183,7 +183,7 @@ pub const bip32 = struct {
             .key = master_key,
             .chain_code = chain_code,
             .depth = 0,
-            .parent_fingerprint = [_]u8{0} ** 4,
+            .parent_fingerprint = std.mem.zeroes([4]u8),
             .child_index = 0,
         };
     }

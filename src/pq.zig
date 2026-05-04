@@ -273,7 +273,7 @@ pub const hybrid = struct {
 
                 keypair.classical_private = classical_seed;
                 // Use X25519 basepoint to generate public key manually
-                const basepoint = [_]u8{9} ++ [_]u8{0} ** 31;
+                const basepoint = [_]u8{9} ++ std.mem.zeroes([31]u8);
                 keypair.classical_public = std.crypto.dh.X25519.scalarmult(classical_seed, basepoint) catch {
                     return PQError.KeyGenFailed;
                 };

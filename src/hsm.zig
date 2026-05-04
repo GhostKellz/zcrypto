@@ -196,7 +196,11 @@ pub const TPMProvider = struct {
         // TPM key derivation using HKDF
         // In real implementation, this would use TPM2_HKDF or similar
         const hkdf = hash.HKDF(hash.Sha256);
-        const dummy_key = [_]u8{0x42} ** 32; // Would be the actual TPM key
+        const dummy_key = blk: {
+            var bytes = std.mem.zeroes([32]u8);
+            @memset(bytes[0..], 0x42);
+            break :blk bytes;
+        }; // Would be the actual TPM key
         try hkdf.expand(dummy_key[0..], info, output);
 
         _ = parent_key;

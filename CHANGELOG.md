@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.3] - 2026-05-04
+
+### Changed
+
+- Bumped the package version metadata to `v1.0.3`.
+- Kept the existing `zsync v0.8.2` dependency update in place for the current release line.
+
+### Fixed
+
+- Restored `zcrypto` build compatibility on the current Zig `0.17.0-dev` toolchain after the newer parser started rejecting repeat-expression forms used across the project.
+- Replaced fragile array repeat initializers in the active build and test surface with parser-stable zero-initialization or explicit filled-buffer setup.
+- Fixed the same parser-sensitive patterns in examples, FFI tests, QUIC/TLS helpers, and post-quantum wrappers so downstream consumers like `/data/projects/zquic` no longer fail immediately on dependency parse errors.
+
+### Verified
+
+- `"/opt/zig-dev/zig" build`
+- `"/opt/zig-dev/zig" build test --summary all`
+- `"/opt/zig-dev/zig" build -Dpost-quantum=true -Dexperimental-crypto=true`
+
+### Notes
+
+- `v1.0.3` is the Zig-dev compatibility follow-up to `v1.0.2`.
+- A final cleanup pass is still warranted for remaining non-default files that use the old repeat-expression style, even though the primary build and test surface is now passing.
+
 ## [1.0.2] - 2026-04-18
 
 ### Changed

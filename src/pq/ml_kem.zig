@@ -80,7 +80,11 @@ pub const ML_KEM_768 = MlKemWrapper(std.crypto.kem.ml_kem.MLKem768);
 pub const ML_KEM_1024 = MlKemWrapper(std.crypto.kem.ml_kem.MLKem1024);
 
 test "ML-KEM-768 key generation" {
-    const seed = [_]u8{0x42} ** ML_KEM_768.SEED_SIZE;
+    const seed = blk: {
+        var bytes = std.mem.zeroes([ML_KEM_768.SEED_SIZE]u8);
+        @memset(bytes[0..], 0x42);
+        break :blk bytes;
+    };
     const keypair = try ML_KEM_768.KeyPair.generate(seed);
 
     var all_zero = true;
@@ -95,8 +99,16 @@ test "ML-KEM-768 key generation" {
 }
 
 test "ML-KEM-768 encapsulation and decapsulation derive same shared secret" {
-    const seed = [_]u8{0x42} ** ML_KEM_768.SEED_SIZE;
-    const randomness = [_]u8{0x24} ** ML_KEM_768.SEED_SIZE;
+    const seed = blk: {
+        var bytes = std.mem.zeroes([ML_KEM_768.SEED_SIZE]u8);
+        @memset(bytes[0..], 0x42);
+        break :blk bytes;
+    };
+    const randomness = blk: {
+        var bytes = std.mem.zeroes([ML_KEM_768.SEED_SIZE]u8);
+        @memset(bytes[0..], 0x24);
+        break :blk bytes;
+    };
 
     const keypair = try ML_KEM_768.KeyPair.generate(seed);
     const encap = try ML_KEM_768.KeyPair.encapsulate(keypair.public_key, randomness);

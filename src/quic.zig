@@ -102,9 +102,9 @@ pub const PacketKeys = struct {
     /// Initialize with zeros
     pub fn zero() PacketKeys {
         return PacketKeys{
-            .aead_key = [_]u8{0} ** 32,
-            .iv = [_]u8{0} ** 12,
-            .header_protection_key = [_]u8{0} ** 32,
+            .aead_key = std.mem.zeroes([32]u8),
+            .iv = std.mem.zeroes([12]u8),
+            .header_protection_key = std.mem.zeroes([32]u8),
         };
     }
 };
@@ -338,7 +338,7 @@ pub const QuicCrypto = struct {
                 @memcpy(&chacha_nonce, sample[4..16]);
 
                 const ChaCha20 = std.crypto.stream.chacha.ChaCha20IETF;
-                var keystream: [5]u8 = [_]u8{0} ** 5;
+                var keystream: [5]u8 = std.mem.zeroes([5]u8);
                 ChaCha20.xor(&keystream, &keystream, counter, chacha_nonce, keys.header_protection_key);
                 @memcpy(&mask, &keystream);
             },
@@ -460,7 +460,7 @@ pub const PostQuantumQuic = struct {
         var x25519_seed: [32]u8 = undefined;
         @memcpy(&x25519_seed, entropy[0..32]);
 
-        const basepoint = [_]u8{9} ++ [_]u8{0} ** 31;
+        const basepoint = [_]u8{9} ++ std.mem.zeroes([31]u8);
         const x25519_public = std.crypto.dh.X25519.scalarmult(x25519_seed, basepoint) catch {
             return pq.PQError.KeyGenFailed;
         };
@@ -488,7 +488,7 @@ pub const PostQuantumQuic = struct {
 
         var server_x25519_seed: [32]u8 = undefined;
         rand.fill(&server_x25519_seed);
-        const basepoint = [_]u8{9} ++ [_]u8{0} ** 31;
+        const basepoint = [_]u8{9} ++ std.mem.zeroes([31]u8);
         const server_x25519_public = std.crypto.dh.X25519.scalarmult(server_x25519_seed, basepoint) catch {
             return pq.PQError.KeyGenFailed;
         };
@@ -902,7 +902,11 @@ test "QUIC cipher suite properties" {
 test "Post-quantum QUIC key exchange" {
     var classical_share: [32]u8 = undefined;
     var pq_share: [pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE]u8 = undefined;
-    const entropy = [_]u8{0x42} ** 64;
+    const entropy = blk: {
+        var bytes = std.mem.zeroes([64]u8);
+        @memset(bytes[0..], 0x42);
+        break :blk bytes;
+    };
 
     // Generate hybrid key share
     try PostQuantumQuic.generateHybridKeyShare(&classical_share, &pq_share, &entropy);

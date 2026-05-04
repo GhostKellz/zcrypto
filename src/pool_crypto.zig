@@ -38,8 +38,8 @@ pub const CryptoContext = struct {
         const now = util.getCurrentUnixTime() orelse 0;
         return CryptoContext{
             .id = id,
-            .encryption_key = [_]u8{0} ** 32,
-            .decryption_key = [_]u8{0} ** 32,
+            .encryption_key = std.mem.zeroes([32]u8),
+            .decryption_key = std.mem.zeroes([32]u8),
             .send_counter = 0,
             .recv_counter = 0,
             .creation_time = now,
@@ -437,7 +437,11 @@ const testing = std.testing;
 
 test "crypto context creation and key generation" {
     var context = CryptoContext.init(1);
-    const master_key = [_]u8{1} ** 32;
+    const master_key = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x01);
+        break :blk bytes;
+    };
 
     context.generateKeys(master_key);
 
@@ -449,7 +453,11 @@ test "crypto context creation and key generation" {
 
 test "crypto context compression and decompression" {
     var context = CryptoContext.init(1);
-    const master_key = [_]u8{1} ** 32;
+    const master_key = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x01);
+        break :blk bytes;
+    };
     context.generateKeys(master_key);
 
     const original_enc_key = context.encryption_key;
@@ -467,7 +475,11 @@ test "crypto context compression and decompression" {
 }
 
 test "crypto pool operations" {
-    const master_key = [_]u8{1} ** 32;
+    const master_key = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x01);
+        break :blk bytes;
+    };
     var pool = CryptoPool.init(testing.allocator, master_key, 10, 3600);
     defer pool.deinit();
 
@@ -486,7 +498,11 @@ test "session cache operations" {
     defer cache.deinit();
 
     const session_id: u64 = 12345;
-    const resumption_key = [_]u8{1} ** 32;
+    const resumption_key = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x01);
+        break :blk bytes;
+    };
     const cipher_suite: u16 = 0x1301; // TLS_AES_128_GCM_SHA256
 
     try cache.storeSession(session_id, resumption_key, cipher_suite);
@@ -498,7 +514,11 @@ test "session cache operations" {
 }
 
 test "bulk key derivation" {
-    const master_key = [_]u8{1} ** 32;
+    const master_key = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x01);
+        break :blk bytes;
+    };
     const keys = try BulkKeyDerivation.deriveBatch(master_key, 5, testing.allocator);
     defer testing.allocator.free(keys);
 

@@ -249,7 +249,11 @@ test "hkdf sha256 basic" {
 test "tls 1.3 hkdf expand label" {
     const allocator = std.testing.allocator;
 
-    const secret = [_]u8{0x11} ** 32;
+    const secret = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x11);
+        break :blk bytes;
+    };
     const label = "key";
     const context = "";
 
@@ -262,7 +266,11 @@ test "tls 1.3 hkdf expand label" {
 test "tls 1.3 hkdf expand label matches stdlib expand for sha256 prk" {
     const allocator = std.testing.allocator;
 
-    const secret = [_]u8{0x42} ** 32;
+    const secret = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x42);
+        break :blk bytes;
+    };
     const label = "quic key";
     const context = "";
 

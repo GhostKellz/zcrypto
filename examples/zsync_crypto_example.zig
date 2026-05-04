@@ -24,7 +24,11 @@ pub fn main() !void {
 fn runAsyncCryptoExamples(io: zsync.Io, allocator: std.mem.Allocator) !void {
     const async_crypto = zcrypto.async_crypto.AsyncCrypto.init(io, allocator);
     const test_data = "Hello, zsync async crypto!";
-    const key = [_]u8{0x12} ** 32;
+    const key = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x12);
+        break :blk bytes;
+    };
 
     std.log.info("Testing async encryption...", .{});
 

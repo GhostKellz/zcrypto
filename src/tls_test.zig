@@ -74,7 +74,11 @@ test "TLS key schedule" {
     try key_schedule.deriveEarlySecret(null);
 
     // Simulate ECDHE secret
-    const ecdhe_secret = [_]u8{0x42} ** 32;
+    const ecdhe_secret = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x42);
+        break :blk bytes;
+    };
     try key_schedule.deriveHandshakeSecret(&ecdhe_secret);
 
     // Derive master secret
@@ -110,8 +114,16 @@ test "TLS transcript hash" {
 test "TLS AEAD cipher" {
     const allocator = std.testing.allocator;
 
-    const key = [_]u8{0x42} ** 16;
-    const iv = [_]u8{0x69} ** 12;
+    const key = blk: {
+        var bytes = std.mem.zeroes([16]u8);
+        @memset(bytes[0..], 0x42);
+        break :blk bytes;
+    };
+    const iv = blk: {
+        var bytes = std.mem.zeroes([12]u8);
+        @memset(bytes[0..], 0x69);
+        break :blk bytes;
+    };
 
     var cipher = try zcrypto.tls.AeadCipher.init(
         allocator,
@@ -124,7 +136,11 @@ test "TLS AEAD cipher" {
     // Test encryption/decryption
     const plaintext = "Hello, TLS!";
     const aad = "additional data";
-    const nonce = [_]u8{0x13} ** 12;
+    const nonce = blk: {
+        var bytes = std.mem.zeroes([12]u8);
+        @memset(bytes[0..], 0x13);
+        break :blk bytes;
+    };
 
     const ciphertext = try cipher.encrypt(allocator, &nonce, plaintext, aad);
     defer ciphertext.deinit();
@@ -294,8 +310,16 @@ test "TLS finished verify data computation" {
 
     // Set up required state for finished computation
     client.cipher_suite = .TLS_AES_128_GCM_SHA256;
-    client.client_handshake_secret = [_]u8{0x42} ** 32;
-    client.server_handshake_secret = [_]u8{0x69} ** 32;
+    client.client_handshake_secret = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x42);
+        break :blk bytes;
+    };
+    client.server_handshake_secret = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x69);
+        break :blk bytes;
+    };
 
     // Test finished verify data computation
     const client_verify = try client.computeFinishedVerifyData(true);
@@ -343,7 +367,11 @@ test "TLS traffic key derivation" {
     const allocator = std.testing.allocator;
 
     // Create test secret
-    const secret = [_]u8{0x42} ** 32;
+    const secret = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x42);
+        break :blk bytes;
+    };
 
     // Test key derivation for AES-128-GCM
     const key = try zcrypto.kdf.hkdfExpandLabel(allocator, &secret, "key", "", 16);
@@ -363,8 +391,16 @@ test "TLS AEAD cipher with proper nonce" {
     const allocator = std.testing.allocator;
 
     // Create proper traffic keys
-    const key = [_]u8{0x42} ** 16;
-    const base_iv = [_]u8{0x69} ** 12;
+    const key = blk: {
+        var bytes = std.mem.zeroes([16]u8);
+        @memset(bytes[0..], 0x42);
+        break :blk bytes;
+    };
+    const base_iv = blk: {
+        var bytes = std.mem.zeroes([12]u8);
+        @memset(bytes[0..], 0x69);
+        break :blk bytes;
+    };
 
     var cipher = try zcrypto.tls.AeadCipher.init(
         allocator,

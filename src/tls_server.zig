@@ -485,7 +485,7 @@ pub const TlsConnection = struct {
 
                                 if (group == 0x001d and key_len == 32 and offset + 4 + key_len <= ext_data.len) {
                                     // X25519 key share
-                                    self.client_public_key = [_]u8{0} ** 32;
+                                    self.client_public_key = std.mem.zeroes([32]u8);
                                     @memcpy(&self.client_public_key.?, ext_data[offset + 4 .. offset + 4 + key_len]);
                                     break; // Use first X25519 key share
                                 }
@@ -1023,8 +1023,8 @@ pub const TlsConnection = struct {
         defer self.allocator.free(server_hs_secret);
 
         // Copy secrets (truncate to 32 bytes for now)
-        self.client_handshake_secret = [_]u8{0} ** 32;
-        self.server_handshake_secret = [_]u8{0} ** 32;
+        self.client_handshake_secret = std.mem.zeroes([32]u8);
+        self.server_handshake_secret = std.mem.zeroes([32]u8);
         @memcpy(&self.client_handshake_secret.?, client_hs_secret[0..32]);
         @memcpy(&self.server_handshake_secret.?, server_hs_secret[0..32]);
 
@@ -1055,8 +1055,8 @@ pub const TlsConnection = struct {
         defer self.allocator.free(server_app_secret);
 
         // Copy secrets (truncate to 32 bytes for now)
-        self.client_traffic_secret = [_]u8{0} ** 32;
-        self.server_traffic_secret = [_]u8{0} ** 32;
+        self.client_traffic_secret = std.mem.zeroes([32]u8);
+        self.server_traffic_secret = std.mem.zeroes([32]u8);
         @memcpy(&self.client_traffic_secret.?, client_app_secret[0..32]);
         @memcpy(&self.server_traffic_secret.?, server_app_secret[0..32]);
 

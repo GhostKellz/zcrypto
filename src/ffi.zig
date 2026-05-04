@@ -1,4 +1,4 @@
-//! FFI (Foreign Function Interface) for zcrypto v1.0.2
+//! FFI (Foreign Function Interface) for zcrypto
 //!
 //! Enhanced C ABI exports for seamless integration with all GhostChain services:
 //! - ghostbridge (gRPC relay over QUIC)
@@ -422,7 +422,7 @@ pub export fn zcrypto_ml_kem_768_encaps(public_key: [*]const u8, ciphertext: [*]
 /// @return CryptoResult with success/failure status
 pub export fn zcrypto_ml_kem_768_decaps(private_key: [*]const u8, ciphertext: [*]const u8, shared_secret: [*]u8) callconv(.c) CryptoResult {
     const priv_key: [pq.ml_kem.ML_KEM_768.PRIVATE_KEY_SIZE]u8 = private_key[0..pq.ml_kem.ML_KEM_768.PRIVATE_KEY_SIZE].*;
-    const pub_key_placeholder: [pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE]u8 = [_]u8{0} ** pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE;
+    const pub_key_placeholder: [pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE]u8 = std.mem.zeroes([pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE]u8);
     const ct: [pq.ml_kem.ML_KEM_768.CIPHERTEXT_SIZE]u8 = ciphertext[0..pq.ml_kem.ML_KEM_768.CIPHERTEXT_SIZE].*;
 
     const keypair = pq.ml_kem.ML_KEM_768.KeyPair{
@@ -460,7 +460,7 @@ pub export fn zcrypto_ml_dsa_65_keygen(public_key: [*]u8, private_key: [*]u8) ca
 /// @return CryptoResult with success/failure status
 pub export fn zcrypto_ml_dsa_65_sign(private_key: [*]const u8, message: [*]const u8, message_len: u32, signature: [*]u8) callconv(.c) CryptoResult {
     const priv_key: [pq.ml_dsa.ML_DSA_65.PRIVATE_KEY_SIZE]u8 = private_key[0..pq.ml_dsa.ML_DSA_65.PRIVATE_KEY_SIZE].*;
-    const pub_key_placeholder: [pq.ml_dsa.ML_DSA_65.PUBLIC_KEY_SIZE]u8 = [_]u8{0} ** pq.ml_dsa.ML_DSA_65.PUBLIC_KEY_SIZE;
+    const pub_key_placeholder: [pq.ml_dsa.ML_DSA_65.PUBLIC_KEY_SIZE]u8 = std.mem.zeroes([pq.ml_dsa.ML_DSA_65.PUBLIC_KEY_SIZE]u8);
     const message_slice = if (message_len > 0) message[0..message_len] else "";
 
     var randomness: [pq.ml_dsa.ML_DSA_65.NOISE_SIZE]u8 = undefined;
@@ -986,7 +986,7 @@ pub export fn zcrypto_aes256_gcm_decrypt(key: [*]const u8, key_len: u32, nonce: 
 /// @param buffer_len: Buffer capacity
 /// @return CryptoResult with version string length
 pub export fn zcrypto_version(buffer: [*]u8, buffer_len: u32) callconv(.c) CryptoResult {
-    const version = "zcrypto v1.0.2";
+    const version = "zcrypto v" ++ build_options.version;
     if (buffer_len < version.len) {
         return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
     }
@@ -1172,8 +1172,16 @@ test "FFI HKDF operations" {
 }
 
 test "FFI AES-256-GCM encryption/decryption" {
-    const key = [_]u8{0x42} ** 32;
-    const nonce = [_]u8{0x01} ** 12;
+    const key = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x42);
+        break :blk bytes;
+    };
+    const nonce = blk: {
+        var bytes = std.mem.zeroes([12]u8);
+        @memset(bytes[0..], 0x01);
+        break :blk bytes;
+    };
     const aad = "additional authenticated data";
     const plaintext = "Secret message to encrypt!";
 

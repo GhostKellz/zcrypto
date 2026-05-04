@@ -761,7 +761,7 @@ test "zk-STARKs proof generation" {
     var proof = try STARKs.prove(allocator, &trace, &constraints);
     defer proof.deinit(allocator);
 
-    const public_inputs = [_][32]u8{[_]u8{42} ++ [_]u8{0} ** 31};
+    const public_inputs = [_][32]u8{[_]u8{42} ++ std.mem.zeroes([31]u8)};
     const valid = try STARKs.verify(allocator, &proof, &public_inputs, &constraints);
 
     try testing.expect(valid);

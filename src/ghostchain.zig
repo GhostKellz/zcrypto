@@ -478,7 +478,7 @@ test "verify transaction invalid signature" {
     const keypair = asym.ed25519.generate();
     const tx_data = "test transaction";
 
-    const invalid_sig = [_]u8{0} ** 64;
+    const invalid_sig = std.mem.zeroes([64]u8);
     const valid = verifyTransaction(tx_data, invalid_sig, keypair.public_key);
 
     try testing.expect(!valid);
@@ -590,7 +590,7 @@ test "verifyTransactionDetailed" {
     try verifyTransactionDetailed(tx_data, sig, keypair.public_key);
 
     // Invalid signature should error
-    const invalid_sig = [_]u8{0} ** 64;
+    const invalid_sig = std.mem.zeroes([64]u8);
     const result = verifyTransactionDetailed(tx_data, invalid_sig, keypair.public_key);
     try testing.expectError(BlockchainCryptoError.InvalidSignature, result);
 }

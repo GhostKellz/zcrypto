@@ -134,17 +134,17 @@ pub const ConstantTime = struct {
 
 test "generic implementations" {
     // Test ChaCha20
-    var key = [_]u8{0x00} ** 32;
-    var nonce = [_]u8{0x00} ** 12;
-    var input = [_]u8{0x00} ** 64;
-    var output = [_]u8{0x00} ** 64;
+    var key = std.mem.zeroes([32]u8);
+    var nonce = std.mem.zeroes([12]u8);
+    var input = std.mem.zeroes([64]u8);
+    var output = std.mem.zeroes([64]u8);
 
     chacha20_generic(&input, &key, &nonce, 0, &output);
 
     // Test polynomial multiplication
     const a = [_]u16{ 1, 2, 3 };
     const b = [_]u16{ 4, 5, 6 };
-    var result = [_]u16{0} ** 6;
+    var result = std.mem.zeroes([6]u16);
 
     poly_mul_generic(&a, &b, &result);
     try std.testing.expect(result[0] == 4); // 1*4

@@ -54,12 +54,12 @@ pub const VpnTunnel = struct {
     pub fn init(config: TunnelConfig) VpnTunnel {
         return VpnTunnel{
             .config = config,
-            .send_key = [_]u8{0} ** 32,
-            .recv_key = [_]u8{0} ** 32,
+            .send_key = std.mem.zeroes([32]u8),
+            .recv_key = std.mem.zeroes([32]u8),
             .send_counter = 0,
             .recv_counter = 0,
             .last_key_rotation = util.getCurrentUnixTime() orelse 0,
-            .obfuscation_key = [_]u8{0} ** 16,
+            .obfuscation_key = std.mem.zeroes([16]u8),
         };
     }
 
@@ -330,12 +330,20 @@ const testing = std.testing;
 test "vpn tunnel establishment" {
     var tunnel = VpnTunnel.init(TunnelConfig{
         .tunnel_id = 1,
-        .peer_public_key = [_]u8{0} ** 32,
+        .peer_public_key = std.mem.zeroes([32]u8),
         .encryption_algorithm = .ChaCha20Poly1305,
     });
 
-    const local_private = [_]u8{1} ** 32;
-    const peer_public = [_]u8{2} ** 32;
+    const local_private = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x01);
+        break :blk bytes;
+    };
+    const peer_public = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x02);
+        break :blk bytes;
+    };
 
     // Note: This will fail in actual X25519 but tests the error path
     tunnel.establishTunnel(local_private, peer_public) catch {};
@@ -347,15 +355,23 @@ test "vpn tunnel establishment" {
 test "vpn packet encryption" {
     var tunnel = VpnTunnel.init(TunnelConfig{
         .tunnel_id = 1,
-        .peer_public_key = [_]u8{0} ** 32,
+        .peer_public_key = std.mem.zeroes([32]u8),
         .encryption_algorithm = .ChaCha20Poly1305,
         .enable_header_protection = false,
         .enable_traffic_obfuscation = false,
     });
 
     // Set up dummy keys for testing
-    tunnel.send_key = [_]u8{1} ** 32;
-    tunnel.recv_key = [_]u8{1} ** 32;
+    tunnel.send_key = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x01);
+        break :blk bytes;
+    };
+    tunnel.recv_key = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x01);
+        break :blk bytes;
+    };
 
     const plaintext = "Hello, VPN World!";
     var ciphertext: [64]u8 = undefined;
@@ -372,7 +388,7 @@ test "vpn packet encryption" {
 test "mobile crypto optimization" {
     var config = TunnelConfig{
         .tunnel_id = 1,
-        .peer_public_key = [_]u8{0} ** 32,
+        .peer_public_key = std.mem.zeroes([32]u8),
         .encryption_algorithm = .ChaCha20Poly1305,
     };
 

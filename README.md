@@ -86,7 +86,7 @@ Current toolchain baseline: Zig `0.17.0-dev.9+046002d1a`.
 ### Installation
 
 ```bash
-zig fetch --save https://github.com/ghostkellz/zcrypto/archive/refs/tags/v1.0.2.tar.gz
+zig fetch --save https://github.com/ghostkellz/zcrypto/archive/refs/tags/v1.0.3.tar.gz
 ```
 
 ### Basic Usage (Core Only)

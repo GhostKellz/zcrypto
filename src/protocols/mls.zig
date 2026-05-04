@@ -694,8 +694,8 @@ test "MLS message encryption/decryption" {
 
     // Test message encryption/decryption
     const plaintext = "Hello, MLS!";
-    var ciphertext_buffer = [_]u8{0} ** 64;
-    var decrypted_buffer = [_]u8{0} ** 64;
+    var ciphertext_buffer = std.mem.zeroes([64]u8);
+    var decrypted_buffer = std.mem.zeroes([64]u8);
 
     const ciphertext = try group.encryptMessage(plaintext, &ciphertext_buffer);
     const decrypted = try group.decryptMessage(ciphertext, &decrypted_buffer);

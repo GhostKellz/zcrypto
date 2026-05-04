@@ -115,7 +115,11 @@ test "async crypto with zsync" {
     defer blocking_io.deinit();
     const async_crypto = AsyncCrypto.init(blocking_io.io(), std.testing.allocator);
     const test_data = "test data for zsync encryption";
-    const test_key = [_]u8{0xAB} ** 32;
+    const test_key = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0xAB);
+        break :blk bytes;
+    };
 
     const encrypted = try async_crypto.encryptAsync(test_data, &test_key);
     defer std.testing.allocator.free(encrypted);
@@ -133,7 +137,11 @@ test "batch async encryption" {
     defer blocking_io.deinit();
     const async_crypto = AsyncCrypto.init(blocking_io.io(), std.testing.allocator);
     const test_data = [_][]const u8{ "data1", "data2", "data3" };
-    const test_key = [_]u8{0xCD} ** 32;
+    const test_key = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0xCD);
+        break :blk bytes;
+    };
 
     const encrypted_batch = try async_crypto.batchEncryptAsync(&test_data, &test_key);
     defer {
@@ -169,7 +177,11 @@ test "encrypt with timeout" {
     defer blocking_io.deinit();
     const async_crypto = AsyncCrypto.init(blocking_io.io(), std.testing.allocator);
     const test_data = "timeout test data";
-    const test_key = [_]u8{0xEF} ** 32;
+    const test_key = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0xEF);
+        break :blk bytes;
+    };
 
     const encrypted = try async_crypto.encryptAsyncWithTimeout(test_data, &test_key, 5000);
     defer std.testing.allocator.free(encrypted);

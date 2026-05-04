@@ -478,7 +478,7 @@ test "Ed25519 context signing is explicitly unsupported" {
     const context = "ctx";
 
     try testing.expectError(error.UnsupportedContextSigning, Ed25519.signWithContext(keypair.private_key, message, context));
-    try testing.expectError(error.UnsupportedContextSigning, Ed25519.verifyWithContext(keypair.public_key, message, [_]u8{0} ** 64, context));
+    try testing.expectError(error.UnsupportedContextSigning, Ed25519.verifyWithContext(keypair.public_key, message, std.mem.zeroes([64]u8), context));
 }
 
 test "QUIC hybrid key exchange" {

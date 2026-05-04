@@ -382,7 +382,7 @@ pub const Benchmark = struct {
     pub fn benchmarkAesGcm(key_size: usize, data_size: usize, iterations: usize) !Result {
         const key = try std.testing.allocator.alloc(u8, key_size);
         defer std.testing.allocator.free(key);
-        const nonce = [_]u8{0} ** 12;
+        const nonce = std.mem.zeroes([12]u8);
         const plaintext = try std.testing.allocator.alloc(u8, data_size);
         defer std.testing.allocator.free(plaintext);
         const ciphertext = try std.testing.allocator.alloc(u8, data_size);
@@ -482,8 +482,16 @@ test "OpenSSL engine loading" {
 }
 
 test "hardware crypto fallback" {
-    const key = [_]u8{1} ** 16;
-    const nonce = [_]u8{2} ** 12;
+    const key = blk: {
+        var bytes = std.mem.zeroes([16]u8);
+        @memset(bytes[0..], 0x01);
+        break :blk bytes;
+    };
+    const nonce = blk: {
+        var bytes = std.mem.zeroes([12]u8);
+        @memset(bytes[0..], 0x02);
+        break :blk bytes;
+    };
     const plaintext = "Hello, World!";
     var ciphertext: [13]u8 = undefined;
     var tag: [16]u8 = undefined;
