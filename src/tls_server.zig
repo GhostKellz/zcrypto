@@ -641,6 +641,85 @@ pub const TlsConnection = struct {
         try self.writeHandshakeMessage(.certificate, buffer.items);
     }
 
+    /// Build the TLS 1.3 CertificateVerify signature block (RFC 8446 §4.4.3).
+    ///
+    /// Signs `content` with the server's private key and returns allocator-owned
+    /// wire bytes laid out as:
+    ///   SignatureScheme (u16 BE) || signature_len (u16 BE) || signature
+    ///
+    /// Supported, FIPS-aligned, stdlib-backed schemes:
+    ///   - Ed25519 (FIPS 186-5)      → ed25519 (0x0807), raw 64-byte signature
+    ///   - ECDSA P-256 / SHA-256     → ecdsa_secp256r1_sha256 (0x0403), DER sig
+    ///   - ECDSA P-384 / SHA-384     → ecdsa_secp384r1_sha384 (0x0503), DER sig
+    ///
+    /// RSA-PSS and X25519 are intentionally unsupported here: zcrypto does not
+    /// ship a hand-rolled / unvetted RSA implementation, and X25519 is a key
+    /// agreement key (not a signing key). Callers must use an EC or Ed25519
+    /// server key. This is a pure function (no connection state) so it is
+    /// directly unit-testable.
+    fn buildCertVerifySignature(
+        allocator: std.mem.Allocator,
+        key_type: tls_config.PrivateKeyType,
+        der_key: []const u8,
+        content: []const u8,
+    ) ![]u8 {
+        var buffer: std.ArrayList(u8) = .empty;
+        errdefer buffer.deinit(allocator);
+
+        switch (key_type) {
+            .ed25519 => {
+                // ed25519 (0x0807)
+                try writeU16(&buffer, allocator, 0x0807);
+
+                // Ed25519 private key handling:
+                // - 64 bytes: full secret key (seed + public, Zig's Ed25519 form)
+                // - 32 bytes: seed only; derive the full keypair
+                var secret_key: [64]u8 = undefined;
+                if (der_key.len == 64) {
+                    @memcpy(&secret_key, der_key[0..64]);
+                } else if (der_key.len >= 32) {
+                    var seed: [32]u8 = undefined;
+                    @memcpy(&seed, der_key[0..32]);
+                    const keypair = asym.ed25519.generateFromSeed(seed);
+                    secret_key = keypair.private_key;
+                } else {
+                    return error.InvalidPrivateKeySize;
+                }
+
+                const signature = try asym.ed25519.sign(content, secret_key);
+                try writeU16(&buffer, allocator, 64);
+                try writeBytes(&buffer, allocator, &signature);
+            },
+            .ecdsa_p256 => {
+                if (der_key.len < asym.SECP256R1_PRIVATE_KEY_SIZE) return error.InvalidPrivateKeySize;
+                // ecdsa_secp256r1_sha256 (0x0403)
+                try writeU16(&buffer, allocator, 0x0403);
+
+                const private_bytes: [asym.SECP256R1_PRIVATE_KEY_SIZE]u8 =
+                    der_key[0..asym.SECP256R1_PRIVATE_KEY_SIZE].*;
+                var der_buf: [asym.SECP256R1_DER_SIGNATURE_MAX]u8 = undefined;
+                const sig = try asym.secp256r1.signMessageDer(content, private_bytes, &der_buf);
+                try writeU16(&buffer, allocator, @intCast(sig.len));
+                try writeBytes(&buffer, allocator, sig);
+            },
+            .ecdsa_p384 => {
+                if (der_key.len < asym.SECP384R1_PRIVATE_KEY_SIZE) return error.InvalidPrivateKeySize;
+                // ecdsa_secp384r1_sha384 (0x0503)
+                try writeU16(&buffer, allocator, 0x0503);
+
+                const private_bytes: [asym.SECP384R1_PRIVATE_KEY_SIZE]u8 =
+                    der_key[0..asym.SECP384R1_PRIVATE_KEY_SIZE].*;
+                var der_buf: [asym.SECP384R1_DER_SIGNATURE_MAX]u8 = undefined;
+                const sig = try asym.secp384r1.signMessageDer(content, private_bytes, &der_buf);
+                try writeU16(&buffer, allocator, @intCast(sig.len));
+                try writeBytes(&buffer, allocator, sig);
+            },
+            .rsa, .x25519 => return error.UnsupportedKeyType,
+        }
+
+        return buffer.toOwnedSlice(allocator);
+    }
+
     /// Send CertificateVerify message to prove server identity (RFC 8446 Section 4.4.3)
     ///
     /// Signs the handshake transcript with the server's private key to prove
@@ -648,9 +727,6 @@ pub const TlsConnection = struct {
     fn sendCertificateVerify(self: *TlsConnection) !void {
         // Get the private key from config
         const private_key = self.config.private_key orelse return error.MissingPrivateKey;
-
-        var buffer: std.ArrayList(u8) = .empty;
-        defer buffer.deinit(self.allocator);
 
         // Build the content to be signed (RFC 8446 Section 4.4.3):
         // - 64 bytes of 0x20 (space)
@@ -666,76 +742,17 @@ pub const TlsConnection = struct {
         content[64 + context_string.len] = 0x00;
         @memcpy(content[64 + context_string.len + 1 ..], &transcript_hash);
 
-        // Sign based on key type
-        switch (private_key.key_type) {
-            .ed25519 => {
-                // Signature algorithm (Ed25519 = 0x0807)
-                try writeU16(&buffer, self.allocator, 0x0807);
-
-                // Ed25519 private key handling:
-                // - If 64 bytes: full secret key (seed + public, as used by Zig's Ed25519)
-                // - If 32 bytes: just the seed, need to derive full key
-                var secret_key: [64]u8 = undefined;
-
-                if (private_key.der.len == 64) {
-                    // Full 64-byte secret key
-                    @memcpy(&secret_key, private_key.der[0..64]);
-                } else if (private_key.der.len >= 32) {
-                    // 32-byte seed - generate full keypair
-                    var seed: [32]u8 = undefined;
-                    @memcpy(&seed, private_key.der[0..32]);
-                    const keypair = asym.ed25519.generateFromSeed(seed);
-                    secret_key = keypair.private_key;
-                } else {
-                    return error.InvalidPrivateKeySize;
-                }
-
-                // Create signature using ed25519.sign which takes 64-byte private key
-                const signature = try asym.ed25519.sign(&content, secret_key);
-
-                // Signature length (64 bytes for Ed25519)
-                try writeU16(&buffer, self.allocator, 64);
-
-                // Signature data
-                try writeBytes(&buffer, self.allocator, &signature);
-            },
-            .ecdsa_p256 => {
-                // ECDSA P-256 with SHA-256 (0x0403)
-                try writeU16(&buffer, self.allocator, 0x0403);
-
-                // TODO: Implement ECDSA P-256 signing
-                std.log.warn("ECDSA P-256 signing not yet fully implemented", .{});
-
-                // For now, use the secp256r1 implementation if available
-                if (private_key.der.len >= 32) {
-                    const private_bytes: [32]u8 = private_key.der[0..32].*;
-                    const ecdsa_keypair = asym.secp256r1.fromPrivateKey(private_bytes);
-                    const signature = asym.secp256r1.sign(&content, ecdsa_keypair);
-
-                    // ECDSA signatures are DER-encoded, typically 70-72 bytes
-                    try writeU16(&buffer, self.allocator, @intCast(signature.len));
-                    try writeBytes(&buffer, self.allocator, &signature);
-                } else {
-                    return error.InvalidPrivateKeySize;
-                }
-            },
-            .rsa => {
-                // RSA-PSS with SHA-256 (0x0804)
-                try writeU16(&buffer, self.allocator, 0x0804);
-
-                // TODO: Implement RSA-PSS signing
-                std.log.err("RSA-PSS signing not implemented", .{});
-                return error.UnsupportedKeyType;
-            },
-            else => {
-                std.log.err("Unsupported private key type for CertificateVerify", .{});
-                return error.UnsupportedKeyType;
-            },
-        }
+        const sig_block = try buildCertVerifySignature(
+            self.allocator,
+            private_key.key_type,
+            private_key.der,
+            &content,
+        );
+        defer self.allocator.free(sig_block);
 
         // Update transcript and send
-        self.transcript.update(buffer.items);
-        try self.writeHandshakeMessage(.certificate_verify, buffer.items);
+        self.transcript.update(sig_block);
+        try self.writeHandshakeMessage(.certificate_verify, sig_block);
     }
 
     fn sendFinished(self: *TlsConnection) !void {
@@ -1509,4 +1526,61 @@ test "TLS connection helpers" {
     const suite = tls_config.CipherSuite.TLS_AES_128_GCM_SHA256;
     try std.testing.expectEqual(@as(usize, 16), suite.keySize());
     try std.testing.expectEqual(tls_config.HashAlgorithm.sha256, suite.hashAlgorithm());
+}
+
+test "CertificateVerify signer: Ed25519 wire block round trips" {
+    const allocator = std.testing.allocator;
+    const kp = asym.ed25519.generate();
+    const content = "TLS 1.3, server CertificateVerify content (ed25519)";
+
+    const block = try TlsConnection.buildCertVerifySignature(allocator, .ed25519, &kp.private_key, content);
+    defer allocator.free(block);
+
+    // Wire layout: scheme(2) || len(2) || signature
+    try std.testing.expect(block.len >= 4);
+    try std.testing.expectEqual(@as(u16, 0x0807), std.mem.readInt(u16, block[0..2], .big));
+    const sig_len = std.mem.readInt(u16, block[2..4], .big);
+    try std.testing.expectEqual(@as(u16, 64), sig_len);
+    const sig: [64]u8 = block[4..68].*;
+    try std.testing.expect(asym.ed25519.verify(content, sig, kp.public_key));
+
+    // Tamper: a different content must not verify under this signature.
+    try std.testing.expect(!asym.ed25519.verify("different content", sig, kp.public_key));
+}
+
+test "CertificateVerify signer: ECDSA P-256 DER wire block round trips" {
+    const allocator = std.testing.allocator;
+    const kp = asym.secp256r1.generate();
+    const content = "TLS 1.3, server CertificateVerify content (p256)";
+
+    const block = try TlsConnection.buildCertVerifySignature(allocator, .ecdsa_p256, &kp.private_key, content);
+    defer allocator.free(block);
+
+    try std.testing.expectEqual(@as(u16, 0x0403), std.mem.readInt(u16, block[0..2], .big));
+    const sig_len = std.mem.readInt(u16, block[2..4], .big);
+    const sig = block[4 .. 4 + sig_len];
+    try std.testing.expect(asym.secp256r1.verifyMessageDer(content, sig, &kp.public_key));
+    try std.testing.expect(!asym.secp256r1.verifyMessageDer("different content", sig, &kp.public_key));
+}
+
+test "CertificateVerify signer: ECDSA P-384 DER wire block round trips" {
+    const allocator = std.testing.allocator;
+    const kp = asym.secp384r1.generate();
+    const content = "TLS 1.3, server CertificateVerify content (p384)";
+
+    const block = try TlsConnection.buildCertVerifySignature(allocator, .ecdsa_p384, &kp.private_key, content);
+    defer allocator.free(block);
+
+    try std.testing.expectEqual(@as(u16, 0x0503), std.mem.readInt(u16, block[0..2], .big));
+    const sig_len = std.mem.readInt(u16, block[2..4], .big);
+    const sig = block[4 .. 4 + sig_len];
+    try std.testing.expect(asym.secp384r1.verifyMessageDer(content, sig, &kp.public_key));
+    try std.testing.expect(!asym.secp384r1.verifyMessageDer("different content", sig, &kp.public_key));
+}
+
+test "CertificateVerify signer: RSA and X25519 keys are unsupported" {
+    const allocator = std.testing.allocator;
+    const dummy_key = std.mem.zeroes([64]u8); // placeholder; rejected before use
+    try std.testing.expectError(error.UnsupportedKeyType, TlsConnection.buildCertVerifySignature(allocator, .rsa, &dummy_key, "x"));
+    try std.testing.expectError(error.UnsupportedKeyType, TlsConnection.buildCertVerifySignature(allocator, .x25519, &dummy_key, "x"));
 }

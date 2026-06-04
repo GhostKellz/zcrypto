@@ -2,6 +2,80 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.4] - 2026-06-03
+
+### Added
+
+- Added ECDSA signer/verifier primitives to `asym.zig`: a `secp384r1` namespace
+  (backed by `std.crypto.sign.ecdsa.EcdsaP384Sha384`) mirroring the existing
+  `secp256r1`, plus `signMessageDer` / `verifyMessageDer` arbitrary-length message
+  helpers (DER-encoded) on both P-256 and P-384. Covered by sign→DER→verify
+  round-trip, tamper, and malformed-DER unit tests.
+- Implemented real TLS 1.3 CertificateVerify signing and verification. Extracted
+  `buildCertVerifySignature` (`tls_server.zig`) and `verifyCertVerifySignature`
+  (`tls_client.zig`) as pure, unit-tested functions supporting `ed25519` (0x0807),
+  `ecdsa_secp256r1_sha256` (0x0403), and `ecdsa_secp384r1_sha384` (0x0503).
+- Added real post-quantum round-trip tests in `pq.zig`: ML-KEM-768 (FIPS 203)
+  encapsulate/decapsulate agreement, ML-DSA-65 (FIPS 204) sign/verify with
+  tamper detection, and both hybrid constructions (X25519+ML-KEM-768 key exchange,
+  Ed25519+ML-DSA-65 signatures), replacing the previous empty TODO tests.
+- Added `CONTRIBUTING.md` (root) and `docs/security/fips.md` documenting the FIPS
+  posture: approved/stdlib-backed vs experimental vs unsupported algorithms.
+
+### Changed
+
+- Bumped the `zsync` dependency from `v0.8.2` to `v0.8.3`, which rebases the
+  async runtime onto `std.Io`.
+- Migrated `async_crypto.zig` and the zsync example/docs off the removed
+  `zsync.BlockingIo` backend to `zsync.Runtime.init(allocator, .{})` +
+  `rt.io()`. The `AsyncCrypto` API surface (`Io`, `Future`, `init`) is
+  unchanged; only the runtime construction differs.
+- Updated `build.zig` run steps to use `addPassthruArgs()` for the current
+  Zig `0.17.0-dev` build API.
+- Raised `minimum_zig_version` to `0.17.0-dev.639+284ab0ad8`.
+- TLS CertificateVerify now returns `error.UnsupportedKeyType` for RSA and X25519
+  key types instead of logging a misleading "not yet implemented" placeholder.
+  The supported set is Ed25519 + ECDSA P-256/P-384.
+- Documentation now references `minimum_zig_version` in `build.zig.zon` instead of
+  hardcoding a Zig dev version, and points to the root `CONTRIBUTING.md`. README
+  roadmap and feature stability notes clarify zcrypto's role (primitives + QUIC
+  crypto), the experimental TLS stack, and the SLH-DSA/RSA stance.
+
+### Removed
+
+- **Removed the hand-rolled SLH-DSA-128s placeholder** from `pq.zig` (and the
+  `,SLH-DSA-128s` entry from the FFI capability string). There is no `std.crypto`
+  backend for FIPS 205 and zcrypto does not ship homemade SPHINCS+. Post-quantum
+  signatures use ML-DSA-65 (FIPS 204). Downstream `zquic` is migrated accordingly
+  (see `zquic/tasks/zcrypto_and_zig.md`).
+
+### Fixed
+
+- Removed hardcoded version strings from source header comments
+  (`bbr_crypto.zig`, `pq.zig`, `quic.zig`, `zero_copy.zig`). Version is sourced
+  only from `build.zig.zon` via `build_options.version`.
+- Modernized the last managed-`ArrayList` call site (`tls_client.zig`
+  certificate-chain parsing) to the Zig 0.17 unmanaged API (`.empty`,
+  `append(allocator, x)`, `toOwnedSlice(allocator)`).
+- Fixed a latent (never-compiled) bug in the Ed25519+ML-DSA-65 hybrid `sign`
+  path where the Ed25519 `Signature` struct was memcpy'd directly instead of its
+  `toBytes()` encoding. Now exercised by the new hybrid round-trip test.
+
+### Verified
+
+- `zig build` (pass)
+- `zig build test` (pass)
+- `zig build test -Dpost-quantum=true -Dexperimental-crypto=true --summary all`
+  (440/440 tests pass)
+- `zig build run-zsync` (pass)
+- `zig fmt --check src examples` (clean)
+
+### Notes
+
+- Downstream consumers like `/data/projects/zquic` are unaffected: the changed
+  surface (`async_crypto`/`zsync`/`BlockingIo`) is not part of the core crypto
+  API zquic consumes. See `zquic/tasks/zcrypto_update.md` for the pin bump.
+
 ## [1.0.3] - 2026-05-04
 
 ### Changed

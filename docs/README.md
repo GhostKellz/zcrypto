@@ -1,6 +1,6 @@
 # zcrypto Documentation
 
-Modular cryptography library for Zig with a stable core API, explicit experimental feature gates, and verified Zig `0.17.0-dev.9+046002d1a` support
+Modular cryptography library for Zig with a stable core API, explicit experimental feature gates, and Zig `0.17.0-dev` support (see `minimum_zig_version` in [`../build.zig.zon`](../build.zig.zon))
 
 ## Quick Navigation
 
@@ -20,8 +20,11 @@ Modular cryptography library for Zig with a stable core API, explicit experiment
 - [Basic Usage](examples/basic.md) - Simple encryption/decryption
 - [Examples Overview](examples/README.md) - All code examples
 
+### Security
+- [FIPS Posture](security/fips.md) - Approved vs experimental algorithms
+
 ### Contributing
-- [Contributing Guide](contributing/README.md) - Development guidelines
+- [Contributing Guide](../CONTRIBUTING.md) - Development guidelines
 
 ## Module Overview
 

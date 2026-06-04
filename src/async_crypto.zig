@@ -1,7 +1,7 @@
 //! Async cryptographic operations with zsync integration.
 //!
-//! This module currently targets the stable `zsync` runtime surface used by
-//! `zcrypto` (`Io`, `BlockingIo`, and related integration helpers). The
+//! This module targets the std.Io-backed `zsync` runtime surface used by
+//! `zcrypto` (`Io`, `Future`, `Runtime`, and related integration helpers). The
 //! operations below are zsync-compatible wrappers around direct crypto work,
 //! rather than runtime-scheduled offload of long-running cryptographic tasks.
 
@@ -13,7 +13,6 @@ const zsync = @import("zsync");
 /// zsync Io interface for async operations
 pub const Io = zsync.Io;
 pub const Future = zsync.Future;
-pub const BlockingIo = zsync.BlockingIo;
 
 /// Async crypto context for zsync operations
 pub const AsyncCrypto = struct {
@@ -111,9 +110,9 @@ pub const AsyncCryptoResult = struct {
 // =============================================================================
 
 test "async crypto with zsync" {
-    var blocking_io = BlockingIo.init(std.testing.allocator, 4096);
-    defer blocking_io.deinit();
-    const async_crypto = AsyncCrypto.init(blocking_io.io(), std.testing.allocator);
+    var rt = zsync.Runtime.init(std.testing.allocator, .{});
+    defer rt.deinit();
+    const async_crypto = AsyncCrypto.init(rt.io(), std.testing.allocator);
     const test_data = "test data for zsync encryption";
     const test_key = blk: {
         var bytes = std.mem.zeroes([32]u8);
@@ -133,9 +132,9 @@ test "async crypto with zsync" {
 }
 
 test "batch async encryption" {
-    var blocking_io = BlockingIo.init(std.testing.allocator, 4096);
-    defer blocking_io.deinit();
-    const async_crypto = AsyncCrypto.init(blocking_io.io(), std.testing.allocator);
+    var rt = zsync.Runtime.init(std.testing.allocator, .{});
+    defer rt.deinit();
+    const async_crypto = AsyncCrypto.init(rt.io(), std.testing.allocator);
     const test_data = [_][]const u8{ "data1", "data2", "data3" };
     const test_key = blk: {
         var bytes = std.mem.zeroes([32]u8);
@@ -157,9 +156,9 @@ test "batch async encryption" {
 }
 
 test "async hash batch" {
-    var blocking_io = BlockingIo.init(std.testing.allocator, 4096);
-    defer blocking_io.deinit();
-    const async_crypto = AsyncCrypto.init(blocking_io.io(), std.testing.allocator);
+    var rt = zsync.Runtime.init(std.testing.allocator, .{});
+    defer rt.deinit();
+    const async_crypto = AsyncCrypto.init(rt.io(), std.testing.allocator);
     const test_data = [_][]const u8{ "hash1", "hash2", "hash3" };
 
     const hashes = try async_crypto.hashBatchAsync(&test_data);
@@ -173,9 +172,9 @@ test "async hash batch" {
 }
 
 test "encrypt with timeout" {
-    var blocking_io = BlockingIo.init(std.testing.allocator, 4096);
-    defer blocking_io.deinit();
-    const async_crypto = AsyncCrypto.init(blocking_io.io(), std.testing.allocator);
+    var rt = zsync.Runtime.init(std.testing.allocator, .{});
+    defer rt.deinit();
+    const async_crypto = AsyncCrypto.init(rt.io(), std.testing.allocator);
     const test_data = "timeout test data";
     const test_key = blk: {
         var bytes = std.mem.zeroes([32]u8);

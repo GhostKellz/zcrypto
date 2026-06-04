@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Zig-0.17.0--dev.9%2B046002d1a-F7A41D?style=for-the-badge&logo=zig&logoColor=white" alt="Zig 0.17.0-dev.9+046002d1a">
+  <img src="https://img.shields.io/badge/Zig-0.17.0--dev-F7A41D?style=for-the-badge&logo=zig&logoColor=white" alt="Zig 0.17.0-dev">
   <img src="https://img.shields.io/badge/Cryptography-1F6FEB?style=for-the-badge&logo=letsencrypt&logoColor=white" alt="Cryptography">
   <img src="https://img.shields.io/badge/QUIC-0F766E?style=for-the-badge&logo=googlechrome&logoColor=white" alt="QUIC">
   <img src="https://img.shields.io/badge/TLS-2563EB?style=for-the-badge&logo=letsencrypt&logoColor=white" alt="TLS">
@@ -81,12 +81,14 @@ Zcrypto supports selective compilation with feature flags:
 
 ## 🚀 Quick Start
 
-Current toolchain baseline: Zig `0.17.0-dev.9+046002d1a`.
+Current toolchain baseline: Zig `0.17.0-dev` — see `minimum_zig_version` in
+[`build.zig.zon`](build.zig.zon) for the exact supported version.
 
 ### Installation
 
 ```bash
-zig fetch --save https://github.com/ghostkellz/zcrypto/archive/refs/tags/v1.0.3.tar.gz
+# Replace the tag with the latest release.
+zig fetch --save https://github.com/ghostkellz/zcrypto/archive/refs/tags/v1.0.4.tar.gz
 ```
 
 ### Basic Usage (Core Only)
@@ -137,7 +139,8 @@ exe.root_module.addImport("zcrypto", zcrypto.module("zcrypto"));
 - **[API Reference](docs/api/core.md)** - Stable core API documentation
 - **[Features](docs/features/README.md)** - Optional feature guides
 - **[Examples](docs/examples/README.md)** - Working code examples
-- **[Contributing](docs/contributing/README.md)** - Development guidelines
+- **[FIPS Posture](docs/security/fips.md)** - Approved vs experimental algorithms
+- **[Contributing](CONTRIBUTING.md)** - Development guidelines
 
 ---
 
@@ -179,11 +182,17 @@ zig build run-advanced -Dpost-quantum=true -Dexperimental-crypto=true -Dhardware
 * ✅ Honest separation between stable and experimental surfaces
 
 ### 🔮 Future Plans
-* [ ] Additional post-quantum schemes (Falcon, SPHINCS+)
+* [ ] SLH-DSA (FIPS 205) once a `std.crypto` backend exists (no hand-rolled impl)
+* [ ] RSA-PSS via an audited backend (currently unsupported)
 * [ ] More hardware acceleration (ARM NEON, RISC-V vectors)
 * [ ] Formal verification integration
 * [ ] WebAssembly optimizations
-* [ ] Additional blockchain protocols
+
+> **Scope & stability:** zcrypto's verified role is cryptographic primitives plus
+> QUIC crypto helpers. The standalone TLS 1.3 record/handshake stack is
+> experimental and not interop-verified. Post-quantum signatures use ML-DSA-65
+> (FIPS 204); SLH-DSA is removed and RSA is unsupported. See
+> [FIPS posture](docs/security/fips.md).
 
 ---
 

@@ -742,12 +742,12 @@ pub const TlsClient = struct {
         }
 
         // Parse certificate entries
-        var certs = std.ArrayList(tls_config.Certificate).init(self.allocator);
+        var certs: std.ArrayList(tls_config.Certificate) = .empty;
         errdefer {
             for (certs.items) |cert| {
                 cert.deinit(self.allocator);
             }
-            certs.deinit();
+            certs.deinit(self.allocator);
         }
 
         const cert_list_end = pos + cert_list_len;
@@ -773,7 +773,7 @@ pub const TlsClient = struct {
 
             // Store certificate
             const cert = try tls_config.Certificate.fromDer(self.allocator, cert_der);
-            try certs.append(cert);
+            try certs.append(self.allocator, cert);
         }
 
         if (certs.items.len == 0) {
@@ -781,7 +781,7 @@ pub const TlsClient = struct {
         }
 
         // Store certificates
-        self.server_certificates = try certs.toOwnedSlice();
+        self.server_certificates = try certs.toOwnedSlice(self.allocator);
 
         // Validate the end-entity certificate
         try self.validateServerCertificate();
@@ -844,6 +844,38 @@ pub const TlsClient = struct {
         }
     }
 
+    /// Verify a TLS 1.3 CertificateVerify signature (RFC 8446 §4.4.3) for the
+    /// given SignatureScheme over `content`, using the certificate's raw
+    /// `public_key` bytes. Mirrors the server-side signer in `tls_server.zig`.
+    ///
+    /// Supported, FIPS-aligned, stdlib-backed schemes:
+    ///   - 0x0807 ed25519                → raw 64-byte signature, 32-byte key
+    ///   - 0x0403 ecdsa_secp256r1_sha256 → DER signature, SEC1 public key
+    ///   - 0x0503 ecdsa_secp384r1_sha384 → DER signature, SEC1 public key
+    ///
+    /// Returns false on any malformed input (fail-closed). This is a pure
+    /// function (no connection state) so it is directly unit-testable.
+    fn verifyCertVerifySignature(
+        sig_algorithm: u16,
+        signature: []const u8,
+        public_key: []const u8,
+        content: []const u8,
+    ) bool {
+        return switch (sig_algorithm) {
+            0x0807 => blk: { // ed25519
+                if (public_key.len != 32 or signature.len != 64) break :blk false;
+                const pk: [32]u8 = public_key[0..32].*;
+                const sig: [64]u8 = signature[0..64].*;
+                break :blk asym.ed25519.verify(content, sig, pk);
+            },
+            // ecdsa_secp256r1_sha256: DER signature over SEC1 public key.
+            0x0403 => asym.secp256r1.verifyMessageDer(content, signature, public_key),
+            // ecdsa_secp384r1_sha384: DER signature over SEC1 public key.
+            0x0503 => asym.secp384r1.verifyMessageDer(content, signature, public_key),
+            else => false,
+        };
+    }
+
     /// Receive and validate CertificateVerify message (RFC 8446 Section 4.4.3)
     ///
     /// Verifies that the server possesses the private key for its certificate by
@@ -896,29 +928,16 @@ pub const TlsClient = struct {
         content[64 + context_string.len] = 0x00;
         @memcpy(content[64 + context_string.len + 1 ..], &transcript_hash);
 
-        // Verify signature based on algorithm
+        // Verify signature based on algorithm. RSA-PSS (0x0804) and any unknown
+        // scheme fall through to the else branch and are rejected as
+        // unsupported — zcrypto does not ship an unvetted RSA verifier.
         const verified = switch (sig_algorithm) {
-            0x0807 => blk: { // ed25519
-                if (parsed.public_key_info.public_key.len != 32) {
-                    break :blk false;
-                }
-                if (signature.len != 64) {
-                    break :blk false;
-                }
-                const public_key: [32]u8 = parsed.public_key_info.public_key[0..32].*;
-                const sig: [64]u8 = signature[0..64].*;
-                break :blk asym.ed25519.verify(&content, sig, public_key);
-            },
-            0x0403 => blk: { // ecdsa_secp256r1_sha256
-                // Would need ECDSA P-256 verification
-                std.log.warn("ECDSA P-256 signature verification not yet implemented", .{});
-                break :blk false;
-            },
-            0x0804 => blk: { // rsa_pss_rsae_sha256
-                // Would need RSA-PSS verification
-                std.log.warn("RSA-PSS signature verification not yet implemented", .{});
-                break :blk false;
-            },
+            0x0807, 0x0403, 0x0503 => verifyCertVerifySignature(
+                sig_algorithm,
+                signature,
+                parsed.public_key_info.public_key,
+                &content,
+            ),
             else => {
                 std.log.warn("Unsupported signature algorithm: 0x{x:0>4}", .{sig_algorithm});
                 return error.UnsupportedSignatureAlgorithm;
@@ -1371,4 +1390,45 @@ test "TLS client record writing" {
 
     // Test would write records here - simplified for now
     try std.testing.expect(config.certificates == null);
+}
+
+test "CertificateVerify verifier: Ed25519 accepts valid, rejects tampered" {
+    const kp = asym.ed25519.generate();
+    const content = "TLS 1.3, server CertificateVerify content (ed25519)";
+    const sig = try asym.ed25519.sign(content, kp.private_key);
+
+    try std.testing.expect(TlsClient.verifyCertVerifySignature(0x0807, &sig, &kp.public_key, content));
+    // Tampered content fails closed.
+    try std.testing.expect(!TlsClient.verifyCertVerifySignature(0x0807, &sig, &kp.public_key, "different"));
+    // Wrong-length signature fails closed (no crash).
+    try std.testing.expect(!TlsClient.verifyCertVerifySignature(0x0807, sig[0..32], &kp.public_key, content));
+}
+
+test "CertificateVerify verifier: ECDSA P-256 accepts valid DER, rejects tampered" {
+    const kp = asym.secp256r1.generate();
+    const content = "TLS 1.3, server CertificateVerify content (p256)";
+    var der_buf: [asym.secp256r1.DER_SIGNATURE_MAX]u8 = undefined;
+    const sig = try asym.secp256r1.signMessageDer(content, kp.private_key, &der_buf);
+
+    try std.testing.expect(TlsClient.verifyCertVerifySignature(0x0403, sig, &kp.public_key, content));
+    try std.testing.expect(!TlsClient.verifyCertVerifySignature(0x0403, sig, &kp.public_key, "different"));
+}
+
+test "CertificateVerify verifier: ECDSA P-384 accepts valid DER, rejects tampered" {
+    const kp = asym.secp384r1.generate();
+    const content = "TLS 1.3, server CertificateVerify content (p384)";
+    var der_buf: [asym.secp384r1.DER_SIGNATURE_MAX]u8 = undefined;
+    const sig = try asym.secp384r1.signMessageDer(content, kp.private_key, &der_buf);
+
+    try std.testing.expect(TlsClient.verifyCertVerifySignature(0x0503, sig, &kp.public_key, content));
+    try std.testing.expect(!TlsClient.verifyCertVerifySignature(0x0503, sig, &kp.public_key, "different"));
+}
+
+test "CertificateVerify verifier: unknown/RSA scheme rejected" {
+    const content = "x";
+    const sig = std.mem.zeroes([64]u8);
+    const pk = std.mem.zeroes([32]u8);
+    // RSA-PSS (0x0804) and unknown schemes are not supported → false.
+    try std.testing.expect(!TlsClient.verifyCertVerifySignature(0x0804, &sig, &pk, content));
+    try std.testing.expect(!TlsClient.verifyCertVerifySignature(0xFFFF, &sig, &pk, content));
 }

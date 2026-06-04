@@ -180,7 +180,16 @@ pub const SECP256K1_SIGNATURE_SIZE = 64;
 /// secp256r1 constants (NIST P-256)
 pub const SECP256R1_PRIVATE_KEY_SIZE = 32;
 pub const SECP256R1_PUBLIC_KEY_SIZE = 33; // Compressed
-pub const SECP256R1_SIGNATURE_SIZE = 64;
+pub const SECP256R1_SIGNATURE_SIZE = 64; // Fixed-width (r || s)
+/// Maximum DER-encoded ECDSA P-256 signature length (variable, <= this).
+pub const SECP256R1_DER_SIGNATURE_MAX = std.crypto.sign.ecdsa.EcdsaP256Sha256.Signature.der_encoded_length_max;
+
+/// secp384r1 constants (NIST P-384)
+pub const SECP384R1_PRIVATE_KEY_SIZE = 48;
+pub const SECP384R1_PUBLIC_KEY_SIZE = 49; // Compressed
+pub const SECP384R1_SIGNATURE_SIZE = 96; // Fixed-width (r || s)
+/// Maximum DER-encoded ECDSA P-384 signature length (variable, <= this).
+pub const SECP384R1_DER_SIGNATURE_MAX = std.crypto.sign.ecdsa.EcdsaP384Sha384.Signature.der_encoded_length_max;
 
 /// secp256k1 keypair for Bitcoin/Ethereum compatibility
 pub const Secp256k1KeyPair = struct {
@@ -229,6 +238,27 @@ pub const Secp256r1KeyPair = struct {
 
     /// Zero out the private key
     pub fn zeroize(self: *Secp256r1KeyPair) void {
+        std.crypto.secureZero(u8, &self.private_key);
+    }
+};
+
+/// secp384r1 keypair for NIST P-384 compatibility
+pub const Secp384r1KeyPair = struct {
+    public_key: [SECP384R1_PUBLIC_KEY_SIZE]u8,
+    private_key: [SECP384R1_PRIVATE_KEY_SIZE]u8,
+
+    /// Sign a 48-byte message with secp384r1 (fixed-width r||s output)
+    pub fn sign(self: Secp384r1KeyPair, message: [48]u8) ![SECP384R1_SIGNATURE_SIZE]u8 {
+        return signSecp384r1(message, self.private_key);
+    }
+
+    /// Verify a fixed-width signature with this keypair's public key
+    pub fn verify(self: Secp384r1KeyPair, message: [48]u8, signature: [SECP384R1_SIGNATURE_SIZE]u8) bool {
+        return verifySecp384r1(message, signature, self.public_key);
+    }
+
+    /// Zero out the private key
+    pub fn zeroize(self: *Secp384r1KeyPair) void {
         std.crypto.secureZero(u8, &self.private_key);
     }
 };
@@ -307,6 +337,36 @@ pub fn verifySecp256r1(message: [32]u8, signature: [SECP256R1_SIGNATURE_SIZE]u8,
     return true;
 }
 
+/// Generate secp384r1 keypair (NIST P-384)
+pub fn generateSecp384r1() Secp384r1KeyPair {
+    var seed: [48]u8 = undefined;
+    rand.fill(&seed);
+    const kp = std.crypto.sign.ecdsa.EcdsaP384Sha384.KeyPair.generateDeterministic(seed) catch {
+        rand.fill(&seed);
+        return generateSecp384r1();
+    };
+    return Secp384r1KeyPair{
+        .public_key = kp.public_key.toCompressedSec1(),
+        .private_key = kp.secret_key.bytes,
+    };
+}
+
+/// Sign with secp384r1 (NIST P-384), fixed-width r||s output
+pub fn signSecp384r1(message: [48]u8, private_key: [SECP384R1_PRIVATE_KEY_SIZE]u8) ![SECP384R1_SIGNATURE_SIZE]u8 {
+    const secret_key = std.crypto.sign.ecdsa.EcdsaP384Sha384.SecretKey.fromBytes(private_key) catch return error.InvalidPrivateKey;
+    const kp = std.crypto.sign.ecdsa.EcdsaP384Sha384.KeyPair.fromSecretKey(secret_key) catch return error.InvalidPrivateKey;
+    const sig = kp.sign(&message, null) catch return error.SigningFailed;
+    return sig.toBytes();
+}
+
+/// Verify secp384r1 fixed-width signature
+pub fn verifySecp384r1(message: [48]u8, signature: [SECP384R1_SIGNATURE_SIZE]u8, public_key: [SECP384R1_PUBLIC_KEY_SIZE]u8) bool {
+    const pub_key = std.crypto.sign.ecdsa.EcdsaP384Sha384.PublicKey.fromSec1(&public_key) catch return false;
+    const sig = std.crypto.sign.ecdsa.EcdsaP384Sha384.Signature.fromBytes(signature);
+    sig.verify(&message, pub_key) catch return false;
+    return true;
+}
+
 /// secp256k1 module with clean API
 pub const secp256k1 = struct {
     pub const KeyPair = Secp256k1KeyPair;
@@ -344,6 +404,92 @@ pub const secp256r1 = struct {
     /// Verify a signature
     pub fn verify(message: [32]u8, signature: [SECP256R1_SIGNATURE_SIZE]u8, public_key: [SECP256R1_PUBLIC_KEY_SIZE]u8) bool {
         return verifySecp256r1(message, signature, public_key);
+    }
+
+    /// Maximum DER-encoded signature length (use for `signMessageDer` buffer).
+    pub const DER_SIGNATURE_MAX = SECP256R1_DER_SIGNATURE_MAX;
+
+    /// Sign an arbitrary-length message and return a DER-encoded ECDSA
+    /// signature written into `buf`. The scheme hashes the message internally
+    /// (SHA-256). Returns a slice of `buf` (length <= DER_SIGNATURE_MAX).
+    /// FIPS 186 / stdlib-backed (no hand-rolled ASN.1).
+    pub fn signMessageDer(
+        message: []const u8,
+        private_key: [SECP256R1_PRIVATE_KEY_SIZE]u8,
+        buf: *[SECP256R1_DER_SIGNATURE_MAX]u8,
+    ) ![]u8 {
+        const Scheme = std.crypto.sign.ecdsa.EcdsaP256Sha256;
+        const secret_key = Scheme.SecretKey.fromBytes(private_key) catch return error.InvalidPrivateKey;
+        const kp = Scheme.KeyPair.fromSecretKey(secret_key) catch return error.InvalidPrivateKey;
+        const sig = kp.sign(message, null) catch return error.SigningFailed;
+        return sig.toDer(buf);
+    }
+
+    /// Verify a DER-encoded ECDSA signature over an arbitrary-length message.
+    /// `public_key_sec1` is a compressed (33B) or uncompressed (65B) SEC1 key.
+    pub fn verifyMessageDer(
+        message: []const u8,
+        der_sig: []const u8,
+        public_key_sec1: []const u8,
+    ) bool {
+        const Scheme = std.crypto.sign.ecdsa.EcdsaP256Sha256;
+        const pub_key = Scheme.PublicKey.fromSec1(public_key_sec1) catch return false;
+        const sig = Scheme.Signature.fromDer(der_sig) catch return false;
+        sig.verify(message, pub_key) catch return false;
+        return true;
+    }
+};
+
+/// secp384r1 module with clean API (NIST P-384)
+pub const secp384r1 = struct {
+    pub const KeyPair = Secp384r1KeyPair;
+
+    /// Generate a new keypair
+    pub fn generate() KeyPair {
+        return generateSecp384r1();
+    }
+
+    /// Sign a 48-byte message (fixed-width r||s output)
+    pub fn sign(message: [48]u8, private_key: [SECP384R1_PRIVATE_KEY_SIZE]u8) ![SECP384R1_SIGNATURE_SIZE]u8 {
+        return signSecp384r1(message, private_key);
+    }
+
+    /// Verify a fixed-width signature
+    pub fn verify(message: [48]u8, signature: [SECP384R1_SIGNATURE_SIZE]u8, public_key: [SECP384R1_PUBLIC_KEY_SIZE]u8) bool {
+        return verifySecp384r1(message, signature, public_key);
+    }
+
+    /// Maximum DER-encoded signature length (use for `signMessageDer` buffer).
+    pub const DER_SIGNATURE_MAX = SECP384R1_DER_SIGNATURE_MAX;
+
+    /// Sign an arbitrary-length message and return a DER-encoded ECDSA
+    /// signature written into `buf`. The scheme hashes the message internally
+    /// (SHA-384). Returns a slice of `buf` (length <= DER_SIGNATURE_MAX).
+    /// FIPS 186 / stdlib-backed (no hand-rolled ASN.1).
+    pub fn signMessageDer(
+        message: []const u8,
+        private_key: [SECP384R1_PRIVATE_KEY_SIZE]u8,
+        buf: *[SECP384R1_DER_SIGNATURE_MAX]u8,
+    ) ![]u8 {
+        const Scheme = std.crypto.sign.ecdsa.EcdsaP384Sha384;
+        const secret_key = Scheme.SecretKey.fromBytes(private_key) catch return error.InvalidPrivateKey;
+        const kp = Scheme.KeyPair.fromSecretKey(secret_key) catch return error.InvalidPrivateKey;
+        const sig = kp.sign(message, null) catch return error.SigningFailed;
+        return sig.toDer(buf);
+    }
+
+    /// Verify a DER-encoded ECDSA signature over an arbitrary-length message.
+    /// `public_key_sec1` is a compressed (49B) or uncompressed (97B) SEC1 key.
+    pub fn verifyMessageDer(
+        message: []const u8,
+        der_sig: []const u8,
+        public_key_sec1: []const u8,
+    ) bool {
+        const Scheme = std.crypto.sign.ecdsa.EcdsaP384Sha384;
+        const pub_key = Scheme.PublicKey.fromSec1(public_key_sec1) catch return false;
+        const sig = Scheme.Signature.fromDer(der_sig) catch return false;
+        sig.verify(message, pub_key) catch return false;
+        return true;
     }
 };
 
@@ -583,4 +729,51 @@ test "secp256r1 standalone functions" {
     const valid = secp256r1.verify(message, signature, keypair.public_key);
 
     try std.testing.expect(valid);
+}
+
+test "secp384r1 keypair generation and signing" {
+    const keypair = secp384r1.generate();
+    var message: [48]u8 = undefined;
+    @memset(&message, 0x38);
+
+    const signature = try secp384r1.sign(message, keypair.private_key);
+    try std.testing.expect(secp384r1.verify(message, signature, keypair.public_key));
+
+    var tampered = message;
+    tampered[0] ^= 0xFF;
+    try std.testing.expect(!secp384r1.verify(tampered, signature, keypair.public_key));
+}
+
+test "secp256r1 sign->DER->verify round trip" {
+    const keypair = secp256r1.generate();
+    const message = "TLS 1.3 CertificateVerify content (P-256)";
+
+    var der_buf: [secp256r1.DER_SIGNATURE_MAX]u8 = undefined;
+    const der_sig = try secp256r1.signMessageDer(message, keypair.private_key, &der_buf);
+
+    try std.testing.expect(secp256r1.verifyMessageDer(message, der_sig, &keypair.public_key));
+
+    // Tampered message must fail closed.
+    try std.testing.expect(!secp256r1.verifyMessageDer("different content", der_sig, &keypair.public_key));
+
+    // Malformed DER must fail closed, not crash.
+    const bad_der = [_]u8{ 0x30, 0x00, 0x01, 0x02 };
+    try std.testing.expect(!secp256r1.verifyMessageDer(message, &bad_der, &keypair.public_key));
+}
+
+test "secp384r1 sign->DER->verify round trip" {
+    const keypair = secp384r1.generate();
+    const message = "TLS 1.3 CertificateVerify content (P-384)";
+
+    var der_buf: [secp384r1.DER_SIGNATURE_MAX]u8 = undefined;
+    const der_sig = try secp384r1.signMessageDer(message, keypair.private_key, &der_buf);
+
+    try std.testing.expect(secp384r1.verifyMessageDer(message, der_sig, &keypair.public_key));
+
+    // Tampered message must fail closed.
+    try std.testing.expect(!secp384r1.verifyMessageDer("different content", der_sig, &keypair.public_key));
+
+    // Malformed DER must fail closed, not crash.
+    const bad_der = [_]u8{ 0x30, 0x00, 0x01, 0x02 };
+    try std.testing.expect(!secp384r1.verifyMessageDer(message, &bad_der, &keypair.public_key));
 }

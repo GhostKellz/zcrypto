@@ -1,9 +1,8 @@
-//! Post-Quantum Cryptography Module for zcrypto v1.0.0
+//! Post-Quantum Cryptography Module for zcrypto
 //!
 //! Implements NIST-standardized post-quantum algorithms:
 //! - FIPS 203: ML-KEM (Module-Lattice-Based Key-Encapsulation Mechanism)
 //! - FIPS 204: ML-DSA (Module-Lattice-Based Digital Signature Algorithm)
-//! - FIPS 205: SLH-DSA (Stateless Hash-Based Digital Signature Algorithm)
 //!
 //! Provides hybrid classical+post-quantum operations for backwards compatibility
 //! and defense-in-depth security against both classical and quantum attacks.
@@ -97,152 +96,6 @@ pub const ml_dsa = struct {
     pub const ML_DSA_44 = MlDsaWrapper(std.crypto.sign.mldsa.MLDSA44);
     pub const ML_DSA_65 = MlDsaWrapper(std.crypto.sign.mldsa.MLDSA65);
     pub const ML_DSA_87 = MlDsaWrapper(std.crypto.sign.mldsa.MLDSA87);
-};
-
-/// NIST SLH-DSA (SPHINCS+) - Stateless Hash-Based Digital Signature Algorithm
-/// FIPS 205 compliant implementation
-pub const slh_dsa = struct {
-    /// SLH-DSA-128s parameters (NIST Level 1 security, fast signing)
-    pub const SLH_DSA_128s = struct {
-        // NIST SLH-DSA-128s constants
-        pub const SECURITY_LEVEL = 1;
-        pub const N = 16; // Security parameter in bytes
-        pub const H = 63; // Height of hypertree
-        pub const D = 7; // Number of layers in hypertree
-        pub const A = 12; // Number of WOTS chains per tree
-        pub const K = 14; // Number of parallel WOTS chains
-        pub const W = 16; // Winternitz parameter
-
-        // Key and signature sizes
-        pub const PUBLIC_KEY_SIZE = 32;
-        pub const PRIVATE_KEY_SIZE = 64;
-        pub const SIGNATURE_SIZE = 7856;
-        pub const SEED_SIZE = 48;
-
-        /// SLH-DSA-128s Key Pair
-        pub const KeyPair = struct {
-            public_key: [SLH_DSA_128s.PUBLIC_KEY_SIZE]u8,
-            private_key: [SLH_DSA_128s.PRIVATE_KEY_SIZE]u8,
-
-            /// Generate SLH-DSA-128s key pair from seed
-            pub fn generate(seed: [SEED_SIZE]u8) PQError!KeyPair {
-                var keypair: KeyPair = undefined;
-
-                // Hash-based key generation
-                var hasher = std.crypto.hash.sha3.Sha3_256.init(.{});
-                hasher.update(&seed);
-
-                // Generate private key (SK.seed, SK.prf, PK.seed)
-                var sk_bytes: [64]u8 = undefined;
-                hasher.final(sk_bytes[0..32]);
-
-                // Generate second part of private key
-                hasher = std.crypto.hash.sha3.Sha3_256.init(.{});
-                hasher.update(sk_bytes[0..32]);
-                hasher.final(sk_bytes[32..64]);
-
-                @memcpy(&keypair.private_key, &sk_bytes);
-
-                // Generate public key from private key
-                hasher = std.crypto.hash.sha3.Sha3_256.init(.{});
-                hasher.update(&sk_bytes);
-                hasher.final(&keypair.public_key);
-
-                return keypair;
-            }
-
-            /// Generate SLH-DSA-128s key pair using system randomness
-            pub fn generateRandom(allocator: std.mem.Allocator) PQError!KeyPair {
-                _ = allocator;
-                var seed: [SEED_SIZE]u8 = undefined;
-                rand.fill(&seed);
-                return generate(seed);
-            }
-
-            /// Sign message with SLH-DSA-128s
-            pub fn sign(self: *const KeyPair, message: []const u8, randomness: [SEED_SIZE]u8) PQError![SIGNATURE_SIZE]u8 {
-                var signature: [SIGNATURE_SIZE]u8 = undefined;
-
-                // Hash message with private key
-                var hasher = std.crypto.hash.sha3.Sha3_256.init(.{});
-                hasher.update(message);
-                hasher.update(&self.private_key);
-                hasher.update(&randomness);
-
-                var msg_hash: [32]u8 = undefined;
-                hasher.final(&msg_hash);
-
-                // Build signature (simplified SPHINCS+ structure)
-                var offset: usize = 0;
-
-                // Add randomness
-                @memcpy(signature[offset .. offset + 32], &randomness);
-                offset += 32;
-
-                // Add message hash
-                @memcpy(signature[offset .. offset + 32], &msg_hash);
-                offset += 32;
-
-                // Add WOTS+ signature components (simplified)
-                while (offset < SIGNATURE_SIZE) {
-                    const remaining = SIGNATURE_SIZE - offset;
-                    const chunk_size = @min(32, remaining);
-
-                    hasher = std.crypto.hash.sha3.Sha3_256.init(.{});
-                    hasher.update(signature[offset - 32 .. offset]);
-                    hasher.update(&self.private_key);
-
-                    var chunk: [32]u8 = undefined;
-                    hasher.final(&chunk);
-                    @memcpy(signature[offset .. offset + chunk_size], chunk[0..chunk_size]);
-                    offset += chunk_size;
-                }
-
-                return signature;
-            }
-
-            /// Verify SLH-DSA-128s signature
-            pub fn verify(public_key: [PUBLIC_KEY_SIZE]u8, message: []const u8, signature: [SIGNATURE_SIZE]u8) PQError!bool {
-                // Extract randomness and message hash from signature
-                const sig_randomness = signature[0..32];
-                const sig_msg_hash = signature[32..64];
-
-                // Recompute message hash
-                var hasher = std.crypto.hash.sha3.Sha3_256.init(.{});
-                hasher.update(message);
-
-                // Use public key in hash computation
-                var pk_contribution: [32]u8 = undefined;
-                hasher = std.crypto.hash.sha3.Sha3_256.init(.{});
-                hasher.update(&public_key);
-                hasher.update(sig_randomness);
-                hasher.final(&pk_contribution);
-
-                hasher = std.crypto.hash.sha3.Sha3_256.init(.{});
-                hasher.update(message);
-                hasher.update(&pk_contribution);
-
-                var computed_hash: [32]u8 = undefined;
-                hasher.final(&computed_hash);
-
-                // Verify message hash
-                if (!std.mem.eql(u8, &computed_hash, sig_msg_hash)) {
-                    return false;
-                }
-
-                // Verify signature structure (simplified)
-                var expected_byte: u8 = 0;
-                for (signature[64..]) |byte| {
-                    expected_byte = expected_byte +% 1;
-                    if (byte == 0 and expected_byte != 0) {
-                        return false;
-                    }
-                }
-
-                return true;
-            }
-        };
-    };
 };
 
 /// Hybrid Classical + Post-Quantum Cryptography
@@ -381,6 +234,7 @@ pub const hybrid = struct {
                 const classical_sig = ed25519_keypair.sign(message, null) catch {
                     return PQError.SignFailed;
                 };
+                const classical_sig_bytes = classical_sig.toBytes();
 
                 // Create ML-DSA-65 signature
                 const ml_dsa_keypair = ml_dsa.ML_DSA_65.KeyPair{
@@ -396,7 +250,7 @@ pub const hybrid = struct {
                 };
 
                 // Combine signatures
-                @memcpy(hybrid_signature[0..CLASSICAL_SIG_SIZE], &classical_sig);
+                @memcpy(hybrid_signature[0..CLASSICAL_SIG_SIZE], &classical_sig_bytes);
                 @memcpy(hybrid_signature[CLASSICAL_SIG_SIZE..], &pq_sig);
 
                 return hybrid_signature;
@@ -430,22 +284,91 @@ pub const hybrid = struct {
     };
 };
 
-test "ML-KEM-768 key generation" {
-    // TODO: Add comprehensive tests once implementation is complete
+test "ML-KEM-768 encapsulate/decapsulate agree (FIPS 203)" {
+    var seed: [ml_kem.ML_KEM_768.SEED_SIZE]u8 = undefined;
+    @memset(&seed, 0x42);
+    const keypair = try ml_kem.ML_KEM_768.KeyPair.generate(seed);
+
+    var encap_rand: [ml_kem.ML_KEM_768.SEED_SIZE]u8 = undefined;
+    @memset(&encap_rand, 0x17);
+    const encap = try ml_kem.ML_KEM_768.KeyPair.encapsulate(keypair.public_key, encap_rand);
+
+    const decap = try keypair.decapsulate(encap.ciphertext);
+    try std.testing.expectEqualSlices(u8, &encap.shared_secret, &decap);
 }
 
-test "ML-DSA-65 signing and verification" {
-    // TODO: Add comprehensive tests once implementation is complete
+test "ML-DSA-65 sign/verify with tamper detection (FIPS 204)" {
+    var seed: [ml_dsa.ML_DSA_65.SEED_SIZE]u8 = undefined;
+    @memset(&seed, 0x24);
+    const keypair = try ml_dsa.ML_DSA_65.KeyPair.generate(seed);
+
+    const message = "zcrypto ML-DSA-65 round trip";
+    var noise: [ml_dsa.ML_DSA_65.NOISE_SIZE]u8 = undefined;
+    @memset(&noise, 0x55);
+    const signature = try keypair.sign(message, noise);
+
+    try std.testing.expect(try ml_dsa.ML_DSA_65.KeyPair.verify(keypair.public_key, message, signature));
+
+    // Flip one signature byte → verification must fail closed.
+    var tampered = signature;
+    tampered[0] ^= 0xFF;
+    try std.testing.expect(!try ml_dsa.ML_DSA_65.KeyPair.verify(keypair.public_key, message, tampered));
+
+    // Different message → verification must fail.
+    try std.testing.expect(!try ml_dsa.ML_DSA_65.KeyPair.verify(keypair.public_key, "other message", signature));
 }
 
-test "SLH-DSA-128s signing and verification" {
-    // TODO: Add comprehensive tests once implementation is complete
+test "Hybrid X25519+ML-KEM-768 key exchange agrees" {
+    const H = hybrid.X25519_ML_KEM_768;
+
+    // Responder (Alice) hybrid keypair.
+    const alice = try H.HybridKeyPair.generate();
+
+    // Initiator (Bob): ephemeral X25519 + ML-KEM encapsulation to Alice's PQ key.
+    var b_seed: [32]u8 = undefined;
+    rand.fill(&b_seed);
+    const basepoint = [_]u8{9} ++ std.mem.zeroes([31]u8);
+    const b_classical_public = try std.crypto.dh.X25519.scalarmult(b_seed, basepoint);
+
+    var encap_rand: [32]u8 = undefined;
+    rand.fill(&encap_rand);
+    const encap = try ml_kem.ML_KEM_768.KeyPair.encapsulate(alice.pq_public, encap_rand);
+
+    // Alice derives the shared secret from Bob's public key + ciphertext.
+    const alice_secret = try alice.exchange(b_classical_public, encap.ciphertext);
+
+    // Bob derives the same shared secret independently (mirrors exchange()).
+    const b_classical_shared = try std.crypto.dh.X25519.scalarmult(b_seed, alice.classical_public);
+    var bob_secret: [H.SHARED_SECRET_SIZE]u8 = undefined;
+    var hasher = std.crypto.hash.sha3.Sha3_512.init(.{});
+    hasher.update(&b_classical_shared);
+    hasher.update(&encap.shared_secret);
+    hasher.final(&bob_secret);
+
+    try std.testing.expectEqualSlices(u8, &alice_secret, &bob_secret);
 }
 
-test "Hybrid X25519+ML-KEM-768 key exchange" {
-    // TODO: Add comprehensive tests once implementation is complete
-}
+test "Hybrid Ed25519+ML-DSA-65 sign/verify with tamper detection" {
+    const H = hybrid.Ed25519_ML_DSA_65;
+    const keypair = try H.HybridKeyPair.generate();
 
-test "Hybrid Ed25519+ML-DSA-65 signatures" {
-    // TODO: Add comprehensive tests once implementation is complete
+    const message = "zcrypto hybrid signature round trip";
+    const signature = try keypair.sign(message);
+
+    try std.testing.expect(try H.HybridKeyPair.verify(
+        keypair.classical_public,
+        keypair.pq_public,
+        message,
+        signature,
+    ));
+
+    // Tamper with the classical half → must fail (both halves required).
+    var tampered = signature;
+    tampered[0] ^= 0xFF;
+    try std.testing.expect(!try H.HybridKeyPair.verify(
+        keypair.classical_public,
+        keypair.pq_public,
+        message,
+        tampered,
+    ));
 }

@@ -159,12 +159,12 @@ const zsync = @import("zsync");
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
 
-    // Create async crypto instance on the supported BlockingIo path
-    var blocking_io = zsync.BlockingIo.init(allocator, 4096);
-    defer blocking_io.deinit();
+    // Create async crypto instance on the std.Io-backed zsync runtime
+    var rt = zsync.Runtime.init(allocator, .{});
+    defer rt.deinit();
 
     const async_crypto = zcrypto.async_crypto.AsyncCrypto.init(
-        blocking_io.io(),
+        rt.io(),
         allocator
     );
 

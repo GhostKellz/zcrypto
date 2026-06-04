@@ -14,11 +14,11 @@ pub fn main() !void {
 
     std.log.info("=== zcrypto zsync Integration Demo ===", .{});
 
-    // Initialize zsync with BlockingIo for simplicity
-    var io = zsync.BlockingIo.init(allocator, 4096);
-    defer io.deinit();
+    // Initialize the std.Io-backed zsync runtime
+    var rt = zsync.Runtime.init(allocator, .{});
+    defer rt.deinit();
 
-    try runAsyncCryptoExamples(io.io(), allocator);
+    try runAsyncCryptoExamples(rt.io(), allocator);
 }
 
 fn runAsyncCryptoExamples(io: zsync.Io, allocator: std.mem.Allocator) !void {

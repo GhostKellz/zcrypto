@@ -98,7 +98,7 @@ fn quicLevelRequiresDerivedKeys(level: quic.EncryptionLevel) bool {
 
 fn supportedAlgorithmsString() []const u8 {
     return if (build_options.enable_post_quantum)
-        "Ed25519,X25519,AES-256-GCM,ChaCha20-Poly1305,ML-KEM-768,ML-DSA-65,SLH-DSA-128s,Hybrid-X25519-ML-KEM-768,QUIC-PQ"
+        "Ed25519,X25519,AES-256-GCM,ChaCha20-Poly1305,ML-KEM-768,ML-DSA-65,Hybrid-X25519-ML-KEM-768,QUIC-PQ"
     else
         "Ed25519,X25519,AES-256-GCM,ChaCha20-Poly1305";
 }

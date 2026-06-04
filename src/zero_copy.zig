@@ -1,7 +1,7 @@
-//! Zero-Copy Crypto API for zcrypto v0.7.0
+//! Zero-Copy Crypto API for zcrypto
 //!
 //! High-performance, allocation-free cryptographic operations designed for
-//! zquic v0.7.0's zero-copy packet processing requirements.
+//! zquic's zero-copy packet processing requirements.
 //!
 //! Key features:
 //! - Direct buffer manipulation without copying

@@ -1,4 +1,4 @@
-//! BBR Crypto Profiling for zcrypto v0.7.0
+//! BBR Crypto Profiling for zcrypto
 //!
 //! Provides real-time crypto performance metrics to help zquic's BBR congestion
 //! control make intelligent decisions about bandwidth and pacing based on

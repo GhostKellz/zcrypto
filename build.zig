@@ -240,7 +240,7 @@ pub fn build(b: *std.Build) !void {
         const run_zsync_step = b.step("run-zsync", "Run the zsync crypto example");
         const run_zsync_cmd = b.addRunArtifact(zsync_example);
         run_zsync_cmd.step.dependOn(b.getInstallStep());
-        if (b.args) |args| run_zsync_cmd.addArgs(args);
+        run_zsync_cmd.addPassthruArgs();
         run_zsync_step.dependOn(&run_zsync_cmd.step);
     }
 
@@ -276,21 +276,21 @@ pub fn build(b: *std.Build) !void {
     const run_step = b.step("run", "Run the demo");
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run_cmd.addArgs(args);
+    run_cmd.addPassthruArgs();
     run_step.dependOn(&run_cmd.step);
 
     // Advanced features example run step
     const run_advanced_step = b.step("run-advanced", "Run the advanced features example");
     const run_advanced_cmd = b.addRunArtifact(advanced_example);
     run_advanced_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run_advanced_cmd.addArgs(args);
+    run_advanced_cmd.addPassthruArgs();
     run_advanced_step.dependOn(&run_advanced_cmd.step);
 
     // Benchmark step
     const bench_step = b.step("bench", "Run performance benchmarks");
     const bench_cmd = b.addRunArtifact(bench);
     bench_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| bench_cmd.addArgs(args);
+    bench_cmd.addPassthruArgs();
     bench_step.dependOn(&bench_cmd.step);
 
     // Test steps

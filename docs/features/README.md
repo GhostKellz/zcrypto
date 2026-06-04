@@ -21,7 +21,7 @@ zcrypto supports optional feature flags for modular compilation. Stable builds c
 Some features have additional stability considerations:
 
 - **async** → requires zsync dependency
-- **async** → currently targets the stable `zsync` core surface (`Io`, `BlockingIo`, `ThreadPoolIo`, runtime helpers)
+- **async** → currently targets the std.Io-backed `zsync` surface (`Io`, `Future`, `Runtime`, runtime helpers)
 - **tls** → can use hardware_accel for performance
 - **blockchain** → can use zkp for advanced features
 - **post-quantum** → requires `-Dexperimental-crypto=true`
@@ -111,5 +111,18 @@ See **[Build Configuration](../getting-started/build-config.md)** for detailed s
 
 ## Stability Notes
 
-- Core modules are the intended stable surface.
-- Experimental modules are available for research and iteration, but should not be treated as frozen production APIs.
+- Core modules (hashing, symmetric, asymmetric primitives, KDF, random) are the
+  intended stable surface, along with the QUIC crypto helpers.
+- The standalone TLS 1.3 record/handshake stack is experimental and not
+  interop-verified against external implementations. Use it as a building block,
+  not a turnkey TLS endpoint.
+- Post-quantum signatures use **ML-DSA-65 (FIPS 204)** and key exchange uses
+  **ML-KEM-768 (FIPS 203)**, both stdlib-backed. **SLH-DSA (FIPS 205) is not
+  provided** — there is no `std.crypto` backend and zcrypto does not ship a
+  hand-rolled SPHINCS+.
+- **RSA / RSA-PSS is unsupported.** TLS CertificateVerify returns
+  `error.UnsupportedKeyType` for RSA keys.
+- Experimental modules are available for research and iteration, but should not
+  be treated as frozen production APIs.
+- See [FIPS posture](../security/fips.md) for the full approved/experimental/
+  unsupported breakdown.
