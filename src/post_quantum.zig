@@ -341,7 +341,7 @@ pub const HybridKeyExchange = struct {
 pub const HybridSignature = struct {
     pub const ClassicalKeyPair = struct {
         public_key: [32]u8, // Ed25519 public key
-        private_key: [32]u8, // Ed25519 private key
+        private_key: [64]u8, // Ed25519 secret key
     };
 
     pub const PQKeyPair = struct {
@@ -372,9 +372,14 @@ pub const HybridSignature = struct {
             },
         };
 
-        // Generate Ed25519 keypair (stub)
-        rand.fill(&keypair.classical.private_key);
-        rand.fill(&keypair.classical.public_key);
+        // Generate Ed25519 keypair
+        var classical_seed: [32]u8 = undefined;
+        rand.fill(&classical_seed);
+        const classical_keypair = crypto.sign.Ed25519.KeyPair.generateDeterministic(classical_seed) catch {
+            return PostQuantumError.KeyGenerationFailed;
+        };
+        keypair.classical.public_key = classical_keypair.public_key.toBytes();
+        keypair.classical.private_key = classical_keypair.secret_key.toBytes();
 
         // Generate ML-DSA-65 keypair
         const pq_keypair = try ML_DSA_65.generateKeypair();
@@ -386,15 +391,17 @@ pub const HybridSignature = struct {
     }
 
     pub fn sign(allocator: std.mem.Allocator, keypair: HybridKeyPair, message: []const u8) ![]u8 {
-        // Ed25519 signature (stub)
-        var classical_sig: [64]u8 = undefined;
-        var hasher = crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(&keypair.classical.private_key);
-        hasher.update(message);
-        var hash: [32]u8 = undefined;
-        hasher.final(&hash);
-        @memcpy(classical_sig[0..32], &hash);
-        @memcpy(classical_sig[32..64], &hash);
+        // Ed25519 signature
+        const secret_key = crypto.sign.Ed25519.SecretKey.fromBytes(keypair.classical.private_key) catch {
+            return PostQuantumError.InvalidPrivateKey;
+        };
+        const classical_keypair = crypto.sign.Ed25519.KeyPair.fromSecretKey(secret_key) catch {
+            return PostQuantumError.InvalidPrivateKey;
+        };
+        const classical_sig = classical_keypair.sign(message, null) catch {
+            return PostQuantumError.SigningFailed;
+        };
+        const classical_sig_bytes = classical_sig.toBytes();
 
         // ML-DSA-65 signature
         const pq_sig = try ML_DSA_65.sign(keypair.post_quantum.private_key, message);
@@ -402,7 +409,7 @@ pub const HybridSignature = struct {
         // Combine signatures
         const combined_size = 64 + ML_DSA_65.SIGNATURE_SIZE;
         const combined = try allocator.alloc(u8, combined_size);
-        @memcpy(combined[0..64], &classical_sig);
+        @memcpy(combined[0..64], &classical_sig_bytes);
         @memcpy(combined[64..combined_size], &pq_sig);
 
         return combined;
@@ -411,21 +418,19 @@ pub const HybridSignature = struct {
     pub fn verify(hybrid_public: HybridKeyPair, message: []const u8, signature: []const u8) !bool {
         if (signature.len != 64 + ML_DSA_65.SIGNATURE_SIZE) return false;
 
-        // Verify Ed25519 signature (stub)
+        // Verify Ed25519 signature
         const classical_sig = signature[0..64];
-        var hasher = crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(&hybrid_public.classical.public_key);
-        hasher.update(message);
-        hasher.update(classical_sig);
-        var hash: [32]u8 = undefined;
-        hasher.final(&hash);
-        const classical_valid = hash[0] != 0;
+        const public_key = crypto.sign.Ed25519.PublicKey.fromBytes(hybrid_public.classical.public_key) catch {
+            return false;
+        };
+        const classical_signature = crypto.sign.Ed25519.Signature.fromBytes(classical_sig[0..64].*);
+        classical_signature.verify(message, public_key) catch return false;
 
         // Verify ML-DSA-65 signature
         const pq_sig_array: [ML_DSA_65.SIGNATURE_SIZE]u8 = signature[64..][0..ML_DSA_65.SIGNATURE_SIZE].*;
         const pq_valid = try ML_DSA_65.verify(hybrid_public.post_quantum.public_key, message, pq_sig_array);
 
-        return classical_valid and pq_valid;
+        return pq_valid;
     }
 };
 
@@ -474,4 +479,17 @@ test "hybrid signature" {
 
     const valid = try HybridSignature.verify(keypair, message, signature);
     try testing.expect(valid);
+
+    var tampered = try allocator.dupe(u8, signature);
+    defer allocator.free(tampered);
+
+    tampered[0] ^= 0xFF;
+    try testing.expect(!try HybridSignature.verify(keypair, message, tampered));
+
+    @memcpy(tampered, signature);
+    tampered[64] ^= 0xFF;
+    try testing.expect(!try HybridSignature.verify(keypair, message, tampered));
+
+    try testing.expect(!try HybridSignature.verify(keypair, "different message", signature));
+    try testing.expect(!try HybridSignature.verify(keypair, message, signature[0 .. signature.len - 1]));
 }

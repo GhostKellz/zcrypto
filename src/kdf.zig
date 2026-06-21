@@ -7,6 +7,12 @@ const std = @import("std");
 
 const HkdfSha384 = std.crypto.kdf.hkdf.Hkdf(std.crypto.auth.hmac.sha2.HmacSha384);
 
+fn decodeHex(comptime N: usize, hex: []const u8) [N]u8 {
+    var out: [N]u8 = undefined;
+    _ = std.fmt.hexToBytes(&out, hex) catch unreachable;
+    return out;
+}
+
 fn hkdfExpandFromSecret(secret: []const u8, info: []const u8, output: []u8) !void {
     switch (secret.len) {
         32 => std.crypto.kdf.hkdf.HkdfSha256.expand(output, info, secret[0..32].*),
@@ -246,6 +252,24 @@ test "hkdf sha256 basic" {
     try std.testing.expectEqual(@as(usize, 32), derived.len);
 }
 
+test "hkdf sha256 RFC 5869 test case 1" {
+    const allocator = std.testing.allocator;
+
+    const ikm = blk: {
+        var bytes = std.mem.zeroes([22]u8);
+        @memset(bytes[0..], 0x0b);
+        break :blk bytes;
+    };
+    const salt = decodeHex(13, "000102030405060708090a0b0c");
+    const info = decodeHex(10, "f0f1f2f3f4f5f6f7f8f9");
+    const expected = decodeHex(42, "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865");
+
+    const actual = try hkdfSha256(allocator, &ikm, &salt, &info, expected.len);
+    defer allocator.free(actual);
+
+    try std.testing.expectEqualSlices(u8, &expected, actual);
+}
+
 test "tls 1.3 hkdf expand label" {
     const allocator = std.testing.allocator;
 
@@ -312,6 +336,20 @@ test "pbkdf2 password stretching" {
     defer allocator.free(key2);
 
     try std.testing.expectEqualSlices(u8, key, key2);
+}
+
+test "pbkdf2 sha256 known-answer vectors" {
+    const allocator = std.testing.allocator;
+
+    const expected_1 = decodeHex(32, "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b");
+    const actual_1 = try pbkdf2Sha256(allocator, "password", "salt", 1, expected_1.len);
+    defer allocator.free(actual_1);
+    try std.testing.expectEqualSlices(u8, &expected_1, actual_1);
+
+    const expected_2 = decodeHex(32, "ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43");
+    const actual_2 = try pbkdf2Sha256(allocator, "password", "salt", 2, expected_2.len);
+    defer allocator.free(actual_2);
+    try std.testing.expectEqualSlices(u8, &expected_2, actual_2);
 }
 
 test "derive key convenience function" {

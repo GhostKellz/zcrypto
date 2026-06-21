@@ -33,7 +33,12 @@ This directory contains official test vectors from various RFC specifications an
 
 ## Usage
 
-Test vectors are used in the test suites to verify that zcrypto implementations match the official specifications. Each module includes comprehensive tests using these vectors.
+Test vectors are used in the test suites to verify that zcrypto implementations match the official specifications. Current v1.0.5 coverage is embedded directly in module tests so vectors stay close to the APIs they validate:
+
+- `src/hash.zig`: SHA-256, SHA-384, SHA-512, Blake2b-512, and RFC 4231 HMAC vectors.
+- `src/kdf.zig`: RFC 5869 HKDF-SHA256 and PBKDF2-HMAC-SHA256 vectors.
+- `src/sym.zig`: NIST AES-GCM vectors plus negative AEAD decrypt coverage.
+- `src/asym.zig`: RFC 8032 Ed25519 and RFC 7748 X25519 vectors.
 
 ## Sources
 

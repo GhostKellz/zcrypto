@@ -46,6 +46,22 @@ pub const ml_dsa = struct {
                 public_key: [PUBLIC_KEY_SIZE]u8,
                 private_key: [PRIVATE_KEY_SIZE]u8,
 
+                pub fn fromBytes(public_key: []const u8, private_key: []const u8) PQError!KeyPair {
+                    if (public_key.len != PUBLIC_KEY_SIZE) return PQError.InvalidPublicKey;
+                    if (private_key.len != PRIVATE_KEY_SIZE) return PQError.InvalidPrivateKey;
+
+                    const public_key_array: [PUBLIC_KEY_SIZE]u8 = public_key[0..PUBLIC_KEY_SIZE].*;
+                    const private_key_array: [PRIVATE_KEY_SIZE]u8 = private_key[0..PRIVATE_KEY_SIZE].*;
+
+                    _ = Mode.PublicKey.fromBytes(public_key_array) catch return PQError.InvalidPublicKey;
+                    _ = Mode.SecretKey.fromBytes(private_key_array) catch return PQError.InvalidPrivateKey;
+
+                    return .{
+                        .public_key = public_key_array,
+                        .private_key = private_key_array,
+                    };
+                }
+
                 pub fn generate(seed: [SEED_SIZE]u8) PQError!KeyPair {
                     const keypair = Mode.KeyPair.generateDeterministic(seed) catch {
                         return PQError.KeyGenFailed;
@@ -88,6 +104,25 @@ pub const ml_dsa = struct {
                         return false;
                     };
                     return true;
+                }
+
+                pub fn signBytes(private_key: []const u8, message: []const u8, randomness: ?[NOISE_SIZE]u8) PQError![SIGNATURE_SIZE]u8 {
+                    if (private_key.len != PRIVATE_KEY_SIZE) return PQError.InvalidPrivateKey;
+                    const keypair = KeyPair{
+                        .public_key = std.mem.zeroes([PUBLIC_KEY_SIZE]u8),
+                        .private_key = private_key[0..PRIVATE_KEY_SIZE].*,
+                    };
+                    return keypair.sign(message, randomness);
+                }
+
+                pub fn verifyBytes(public_key: []const u8, message: []const u8, signature: []const u8) PQError!bool {
+                    if (public_key.len != PUBLIC_KEY_SIZE) return PQError.InvalidPublicKey;
+                    if (signature.len != SIGNATURE_SIZE) return PQError.InvalidSignature;
+                    return verify(
+                        public_key[0..PUBLIC_KEY_SIZE].*,
+                        message,
+                        signature[0..SIGNATURE_SIZE].*,
+                    );
                 }
             };
         };
@@ -318,6 +353,41 @@ test "ML-DSA-65 sign/verify with tamper detection (FIPS 204)" {
     try std.testing.expect(!try ml_dsa.ML_DSA_65.KeyPair.verify(keypair.public_key, "other message", signature));
 }
 
+test "ML-DSA-65 byte helpers reject malformed lengths" {
+    var seed: [ml_dsa.ML_DSA_65.SEED_SIZE]u8 = undefined;
+    @memset(&seed, 0x24);
+    const keypair = try ml_dsa.ML_DSA_65.KeyPair.generate(seed);
+
+    const message = "zcrypto ML-DSA-65 malformed input tests";
+    var noise: [ml_dsa.ML_DSA_65.NOISE_SIZE]u8 = undefined;
+    @memset(&noise, 0x55);
+    const signature = try keypair.sign(message, noise);
+
+    _ = try ml_dsa.ML_DSA_65.KeyPair.fromBytes(&keypair.public_key, &keypair.private_key);
+    try std.testing.expect(try ml_dsa.ML_DSA_65.KeyPair.verifyBytes(&keypair.public_key, message, &signature));
+
+    try std.testing.expectError(
+        PQError.InvalidPublicKey,
+        ml_dsa.ML_DSA_65.KeyPair.fromBytes(keypair.public_key[0 .. ml_dsa.ML_DSA_65.PUBLIC_KEY_SIZE - 1], &keypair.private_key),
+    );
+    try std.testing.expectError(
+        PQError.InvalidPrivateKey,
+        ml_dsa.ML_DSA_65.KeyPair.fromBytes(&keypair.public_key, keypair.private_key[0 .. ml_dsa.ML_DSA_65.PRIVATE_KEY_SIZE - 1]),
+    );
+    try std.testing.expectError(
+        PQError.InvalidPrivateKey,
+        ml_dsa.ML_DSA_65.KeyPair.signBytes(keypair.private_key[0 .. ml_dsa.ML_DSA_65.PRIVATE_KEY_SIZE - 1], message, noise),
+    );
+    try std.testing.expectError(
+        PQError.InvalidPublicKey,
+        ml_dsa.ML_DSA_65.KeyPair.verifyBytes(keypair.public_key[0 .. ml_dsa.ML_DSA_65.PUBLIC_KEY_SIZE - 1], message, &signature),
+    );
+    try std.testing.expectError(
+        PQError.InvalidSignature,
+        ml_dsa.ML_DSA_65.KeyPair.verifyBytes(&keypair.public_key, message, signature[0 .. ml_dsa.ML_DSA_65.SIGNATURE_SIZE - 1]),
+    );
+}
+
 test "Hybrid X25519+ML-KEM-768 key exchange agrees" {
     const H = hybrid.X25519_ML_KEM_768;
 
@@ -346,6 +416,11 @@ test "Hybrid X25519+ML-KEM-768 key exchange agrees" {
     hasher.final(&bob_secret);
 
     try std.testing.expectEqualSlices(u8, &alice_secret, &bob_secret);
+
+    var tampered_ciphertext = encap.ciphertext;
+    tampered_ciphertext[0] ^= 0x80;
+    const tampered_alice_secret = try alice.exchange(b_classical_public, tampered_ciphertext);
+    try std.testing.expect(!std.mem.eql(u8, &bob_secret, &tampered_alice_secret));
 }
 
 test "Hybrid Ed25519+ML-DSA-65 sign/verify with tamper detection" {
@@ -370,5 +445,22 @@ test "Hybrid Ed25519+ML-DSA-65 sign/verify with tamper detection" {
         keypair.pq_public,
         message,
         tampered,
+    ));
+
+    // Tamper with the ML-DSA half → must also fail.
+    tampered = signature;
+    tampered[H.CLASSICAL_SIG_SIZE] ^= 0xFF;
+    try std.testing.expect(!try H.HybridKeyPair.verify(
+        keypair.classical_public,
+        keypair.pq_public,
+        message,
+        tampered,
+    ));
+
+    try std.testing.expect(!try H.HybridKeyPair.verify(
+        keypair.classical_public,
+        keypair.pq_public,
+        "other message",
+        signature,
     ));
 }

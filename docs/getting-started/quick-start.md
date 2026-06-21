@@ -151,6 +151,9 @@ The current async integration targets the stable `zsync` core surface. In this
 release, `zcrypto.async_crypto.AsyncCrypto` is a zsync-compatible wrapper around
 direct crypto work, which is useful for shared integration patterns and tests
 without pretending that every operation is runtime-scheduled offload.
+Allocated results returned by `encryptAsync`, `decryptAsync`,
+`batchEncryptAsync`, and `hashBatchAsync` are owned by the caller and must be
+freed with the allocator passed to `AsyncCrypto.init`.
 
 ```zig
 const zcrypto = @import("zcrypto");

@@ -677,7 +677,7 @@ pub const TlsConnection = struct {
                 var secret_key: [64]u8 = undefined;
                 if (der_key.len == 64) {
                     @memcpy(&secret_key, der_key[0..64]);
-                } else if (der_key.len >= 32) {
+                } else if (der_key.len == 32) {
                     var seed: [32]u8 = undefined;
                     @memcpy(&seed, der_key[0..32]);
                     const keypair = asym.ed25519.generateFromSeed(seed);
@@ -1583,4 +1583,33 @@ test "CertificateVerify signer: RSA and X25519 keys are unsupported" {
     const dummy_key = std.mem.zeroes([64]u8); // placeholder; rejected before use
     try std.testing.expectError(error.UnsupportedKeyType, TlsConnection.buildCertVerifySignature(allocator, .rsa, &dummy_key, "x"));
     try std.testing.expectError(error.UnsupportedKeyType, TlsConnection.buildCertVerifySignature(allocator, .x25519, &dummy_key, "x"));
+}
+
+test "CertificateVerify signer: malformed private key sizes fail closed" {
+    const allocator = std.testing.allocator;
+    const content = "TLS 1.3, server CertificateVerify malformed key";
+
+    const short_ed25519 = std.mem.zeroes([31]u8);
+    try std.testing.expectError(
+        error.InvalidPrivateKeySize,
+        TlsConnection.buildCertVerifySignature(allocator, .ed25519, &short_ed25519, content),
+    );
+
+    const ambiguous_ed25519 = std.mem.zeroes([48]u8);
+    try std.testing.expectError(
+        error.InvalidPrivateKeySize,
+        TlsConnection.buildCertVerifySignature(allocator, .ed25519, &ambiguous_ed25519, content),
+    );
+
+    const short_p256 = std.mem.zeroes([asym.SECP256R1_PRIVATE_KEY_SIZE - 1]u8);
+    try std.testing.expectError(
+        error.InvalidPrivateKeySize,
+        TlsConnection.buildCertVerifySignature(allocator, .ecdsa_p256, &short_p256, content),
+    );
+
+    const short_p384 = std.mem.zeroes([asym.SECP384R1_PRIVATE_KEY_SIZE - 1]u8);
+    try std.testing.expectError(
+        error.InvalidPrivateKeySize,
+        TlsConnection.buildCertVerifySignature(allocator, .ecdsa_p384, &short_p384, content),
+    );
 }

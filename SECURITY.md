@@ -28,7 +28,7 @@ You can expect:
 
 ## Release Scope and Stability
 
-`zcrypto v1.0.0` has a stable core API and a separate set of explicitly experimental feature families.
+`zcrypto v1.0.x` has a stable core API and a separate set of explicitly experimental feature families.
 
 Stable core modules are the intended long-lived support surface for `v1.0.x`.
 
@@ -87,7 +87,7 @@ Recommendations for contributors and downstream integrators:
 
 ### Experimental Crypto
 
-Some optional modules are present for research, compatibility work, or iterative development. These are intentionally not enabled by default in `v1.0.0`.
+Some optional modules are present for research, compatibility work, or iterative development. These are intentionally not enabled by default in the `v1.0.x` release line.
 
 If you enable them:
 

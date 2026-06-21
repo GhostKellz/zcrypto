@@ -143,6 +143,12 @@ pub fn toHex(comptime T: type, hash: T, buf: []u8) []u8 {
     return buf;
 }
 
+fn decodeHex(comptime N: usize, hex: []const u8) [N]u8 {
+    var out: [N]u8 = undefined;
+    _ = std.fmt.hexToBytes(&out, hex) catch unreachable;
+    return out;
+}
+
 test "sha256 basic" {
     const input = "hello world";
     const expected_hex = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
@@ -152,6 +158,20 @@ test "sha256 basic" {
     const hex = toHex([32]u8, result, &hex_buf);
 
     try std.testing.expectEqualSlices(u8, expected_hex, hex);
+}
+
+test "hash known-answer vectors" {
+    const sha256_empty = decodeHex(32, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    const sha256_abc = decodeHex(32, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    const sha384_abc = decodeHex(48, "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7");
+    const sha512_abc = decodeHex(64, "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f");
+    const blake2b_empty = decodeHex(64, "786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce");
+
+    try std.testing.expectEqualSlices(u8, &sha256_empty, &sha256(""));
+    try std.testing.expectEqualSlices(u8, &sha256_abc, &sha256("abc"));
+    try std.testing.expectEqualSlices(u8, &sha384_abc, &sha384("abc"));
+    try std.testing.expectEqualSlices(u8, &sha512_abc, &sha512("abc"));
+    try std.testing.expectEqualSlices(u8, &blake2b_empty, &blake2b(""));
 }
 
 test "sha512 basic" {
@@ -199,6 +219,20 @@ test "hmac sha256" {
     // Test deterministic - same input should give same output
     const result2 = hmacSha256(message, key);
     try std.testing.expectEqualSlices(u8, &result, &result2);
+}
+
+test "hmac RFC 4231 test case 1" {
+    const key = blk: {
+        var bytes = std.mem.zeroes([20]u8);
+        @memset(bytes[0..], 0x0b);
+        break :blk bytes;
+    };
+    const message = "Hi There";
+    const expected_sha256 = decodeHex(32, "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7");
+    const expected_sha512 = decodeHex(64, "87aa7cdea5ef619d4ff0b4241a1d6cb02379f4e2ce4ec2787ad0b30545e17cdedaa833b7d6b8a702038b274eaea3f4e4be9d914eeb61f1702e696c203a126854");
+
+    try std.testing.expectEqualSlices(u8, &expected_sha256, &hmacSha256(message, &key));
+    try std.testing.expectEqualSlices(u8, &expected_sha512, &hmacSha512(message, &key));
 }
 
 test "hmac sha512" {

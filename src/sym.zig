@@ -35,6 +35,12 @@ pub const SymError = error{
     OutOfMemory,
 };
 
+fn decodeHex(comptime N: usize, hex: []const u8) [N]u8 {
+    var out: [N]u8 = undefined;
+    _ = std.fmt.hexToBytes(&out, hex) catch unreachable;
+    return out;
+}
+
 /// Authenticated encryption result
 pub const Ciphertext = struct {
     data: []u8,
@@ -361,6 +367,69 @@ test "aes-128-gcm round trip" {
 
     try std.testing.expect(decrypted != null);
     try std.testing.expectEqualSlices(u8, plaintext, decrypted.?);
+}
+
+test "aes-gcm NIST known-answer vectors" {
+    const allocator = std.testing.allocator;
+    const key128 = std.mem.zeroes([AES_128_KEY_SIZE]u8);
+    const key256 = std.mem.zeroes([AES_256_KEY_SIZE]u8);
+    const nonce = std.mem.zeroes([GCM_NONCE_SIZE]u8);
+
+    const empty128 = try encryptAes128Gcm(allocator, key128, nonce, "", "");
+    defer empty128.deinit();
+    const expected_empty128_tag = decodeHex(16, "58e2fccefa7e3061367f1d57a4e7455a");
+    try std.testing.expectEqual(@as(usize, 0), empty128.data.len);
+    try std.testing.expectEqualSlices(u8, &expected_empty128_tag, &empty128.tag);
+
+    const empty256 = try encryptAes256Gcm(allocator, key256, nonce, "", "");
+    defer empty256.deinit();
+    const expected_empty256_tag = decodeHex(16, "530f8afbc74536b9a963b4f1c4cb738b");
+    try std.testing.expectEqual(@as(usize, 0), empty256.data.len);
+    try std.testing.expectEqualSlices(u8, &expected_empty256_tag, &empty256.tag);
+
+    const plaintext = std.mem.zeroes([16]u8);
+    const encrypted128 = try encryptAes128Gcm(allocator, key128, nonce, &plaintext, "");
+    defer encrypted128.deinit();
+    const expected_ciphertext128 = decodeHex(16, "0388dace60b6a392f328c2b971b2fe78");
+    const expected_tag128 = decodeHex(16, "ab6e47d42cec13bdf53a67b21257bddf");
+    try std.testing.expectEqualSlices(u8, &expected_ciphertext128, encrypted128.data);
+    try std.testing.expectEqualSlices(u8, &expected_tag128, &encrypted128.tag);
+}
+
+test "aead decrypt rejects tampered tag aad and truncated simplified inputs" {
+    const allocator = std.testing.allocator;
+    const aes_key = blk: {
+        var bytes = std.mem.zeroes([AES_256_KEY_SIZE]u8);
+        @memset(bytes[0..], 0x42);
+        break :blk bytes;
+    };
+    const nonce = blk: {
+        var bytes = std.mem.zeroes([GCM_NONCE_SIZE]u8);
+        @memset(bytes[0..], 0x24);
+        break :blk bytes;
+    };
+    const plaintext = "authenticated plaintext";
+    const aad = "aad";
+
+    const encrypted = try encryptAes256Gcm(allocator, aes_key, nonce, plaintext, aad);
+    defer encrypted.deinit();
+
+    var bad_tag = encrypted.tag;
+    bad_tag[0] ^= 0x01;
+    const bad_tag_plaintext = try decryptAes256Gcm(allocator, aes_key, nonce, encrypted.data, bad_tag, aad);
+    try std.testing.expect(bad_tag_plaintext == null);
+
+    const bad_aad_plaintext = try decryptAes256Gcm(allocator, aes_key, nonce, encrypted.data, encrypted.tag, "bad aad");
+    try std.testing.expect(bad_aad_plaintext == null);
+
+    try std.testing.expectError(SymError.AuthenticationFailed, decryptAesGcm(allocator, "too short", &aes_key));
+
+    const chacha_key = blk: {
+        var bytes = std.mem.zeroes([CHACHA20_KEY_SIZE]u8);
+        @memset(bytes[0..], 0x55);
+        break :blk bytes;
+    };
+    try std.testing.expectError(SymError.AuthenticationFailed, decryptChaCha20(allocator, "too short", &chacha_key));
 }
 
 test "chacha20-poly1305 round trip" {

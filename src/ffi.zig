@@ -199,6 +199,14 @@ fn validateOutputBuffer(ptr: [*]u8, capacity: u32, required: u32) bool {
 /// Maximum allowed input size (16 MB)
 const MAX_INPUT_SIZE: u32 = 16 * 1024 * 1024;
 
+const ML_KEM_768_PUBLIC_KEY_SIZE = pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE;
+const ML_KEM_768_PRIVATE_KEY_SIZE = pq.ml_kem.ML_KEM_768.PRIVATE_KEY_SIZE;
+const ML_KEM_768_CIPHERTEXT_SIZE = pq.ml_kem.ML_KEM_768.CIPHERTEXT_SIZE;
+const ML_KEM_768_SHARED_SECRET_SIZE = pq.ml_kem.ML_KEM_768.SHARED_SECRET_SIZE;
+const ML_DSA_65_PUBLIC_KEY_SIZE = pq.ml_dsa.ML_DSA_65.PUBLIC_KEY_SIZE;
+const ML_DSA_65_PRIVATE_KEY_SIZE = pq.ml_dsa.ML_DSA_65.PRIVATE_KEY_SIZE;
+const ML_DSA_65_SIGNATURE_SIZE = pq.ml_dsa.ML_DSA_65.SIGNATURE_SIZE;
+
 // ============================================================================
 // HASH FUNCTIONS
 // ============================================================================
@@ -396,6 +404,18 @@ pub export fn zcrypto_ml_kem_768_keygen(public_key: [*]u8, private_key: [*]u8) c
     return CryptoResult.SUCCESS;
 }
 
+/// Generate ML-KEM-768 key pair with explicit output lengths.
+pub export fn zcrypto_ml_kem_768_keygen_checked(public_key: [*]u8, public_key_len: u32, private_key: [*]u8, private_key_len: u32) callconv(.c) CryptoResult {
+    if (!validateOutputBuffer(public_key, public_key_len, ML_KEM_768_PUBLIC_KEY_SIZE)) {
+        return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
+    }
+    if (!validateOutputBuffer(private_key, private_key_len, ML_KEM_768_PRIVATE_KEY_SIZE)) {
+        return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
+    }
+
+    return zcrypto_ml_kem_768_keygen(public_key, private_key);
+}
+
 /// ML-KEM-768 encapsulation
 /// @param public_key: Public key (1184 bytes)
 /// @param ciphertext: Output buffer for ciphertext (1088 bytes)
@@ -412,6 +432,30 @@ pub export fn zcrypto_ml_kem_768_encaps(public_key: [*]const u8, ciphertext: [*]
 
     @memcpy(ciphertext[0..pq.ml_kem.ML_KEM_768.CIPHERTEXT_SIZE], &result.ciphertext);
     @memcpy(shared_secret[0..32], &result.shared_secret);
+    return CryptoResult.SUCCESS;
+}
+
+/// ML-KEM-768 encapsulation with explicit input/output lengths.
+pub export fn zcrypto_ml_kem_768_encaps_checked(public_key: [*]const u8, public_key_len: u32, ciphertext: [*]u8, ciphertext_len: u32, shared_secret: [*]u8, shared_secret_len: u32) callconv(.c) CryptoResult {
+    if (!validatePtr(public_key) or public_key_len != ML_KEM_768_PUBLIC_KEY_SIZE) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+    if (!validateOutputBuffer(ciphertext, ciphertext_len, ML_KEM_768_CIPHERTEXT_SIZE)) {
+        return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
+    }
+    if (!validateOutputBuffer(shared_secret, shared_secret_len, ML_KEM_768_SHARED_SECRET_SIZE)) {
+        return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
+    }
+
+    var randomness: [pq.ml_kem.ML_KEM_768.SEED_SIZE]u8 = undefined;
+    rand.fill(&randomness);
+
+    const result = pq.ml_kem.ML_KEM_768.KeyPair.encapsulateBytes(public_key[0..public_key_len], randomness) catch {
+        return CryptoResult.failure(FFI_ERROR_POST_QUANTUM_FAILED);
+    };
+
+    @memcpy(ciphertext[0..ML_KEM_768_CIPHERTEXT_SIZE], &result.ciphertext);
+    @memcpy(shared_secret[0..ML_KEM_768_SHARED_SECRET_SIZE], &result.shared_secret);
     return CryptoResult.SUCCESS;
 }
 
@@ -438,6 +482,31 @@ pub export fn zcrypto_ml_kem_768_decaps(private_key: [*]const u8, ciphertext: [*
     return CryptoResult.SUCCESS;
 }
 
+/// ML-KEM-768 decapsulation with explicit input/output lengths.
+pub export fn zcrypto_ml_kem_768_decaps_checked(private_key: [*]const u8, private_key_len: u32, ciphertext: [*]const u8, ciphertext_len: u32, shared_secret: [*]u8, shared_secret_len: u32) callconv(.c) CryptoResult {
+    if (!validatePtr(private_key) or private_key_len != ML_KEM_768_PRIVATE_KEY_SIZE) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+    if (!validatePtr(ciphertext) or ciphertext_len != ML_KEM_768_CIPHERTEXT_SIZE) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+    if (!validateOutputBuffer(shared_secret, shared_secret_len, ML_KEM_768_SHARED_SECRET_SIZE)) {
+        return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
+    }
+
+    const keypair = pq.ml_kem.ML_KEM_768.KeyPair{
+        .public_key = std.mem.zeroes([ML_KEM_768_PUBLIC_KEY_SIZE]u8),
+        .private_key = private_key[0..ML_KEM_768_PRIVATE_KEY_SIZE].*,
+    };
+
+    const secret = keypair.decapsulateBytes(ciphertext[0..ciphertext_len]) catch {
+        return CryptoResult.failure(FFI_ERROR_POST_QUANTUM_FAILED);
+    };
+
+    @memcpy(shared_secret[0..ML_KEM_768_SHARED_SECRET_SIZE], &secret);
+    return CryptoResult.SUCCESS;
+}
+
 /// Generate ML-DSA-65 key pair
 /// @param public_key: Output buffer for public key (1952 bytes)
 /// @param private_key: Output buffer for private key (4032 bytes)
@@ -450,6 +519,18 @@ pub export fn zcrypto_ml_dsa_65_keygen(public_key: [*]u8, private_key: [*]u8) ca
     @memcpy(public_key[0..pq.ml_dsa.ML_DSA_65.PUBLIC_KEY_SIZE], &keypair.public_key);
     @memcpy(private_key[0..pq.ml_dsa.ML_DSA_65.PRIVATE_KEY_SIZE], &keypair.private_key);
     return CryptoResult.SUCCESS;
+}
+
+/// Generate ML-DSA-65 key pair with explicit output lengths.
+pub export fn zcrypto_ml_dsa_65_keygen_checked(public_key: [*]u8, public_key_len: u32, private_key: [*]u8, private_key_len: u32) callconv(.c) CryptoResult {
+    if (!validateOutputBuffer(public_key, public_key_len, ML_DSA_65_PUBLIC_KEY_SIZE)) {
+        return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
+    }
+    if (!validateOutputBuffer(private_key, private_key_len, ML_DSA_65_PRIVATE_KEY_SIZE)) {
+        return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
+    }
+
+    return zcrypto_ml_dsa_65_keygen(public_key, private_key);
 }
 
 /// ML-DSA-65 signing
@@ -477,6 +558,54 @@ pub export fn zcrypto_ml_dsa_65_sign(private_key: [*]const u8, message: [*]const
 
     @memcpy(signature[0..pq.ml_dsa.ML_DSA_65.SIGNATURE_SIZE], &sig);
     return CryptoResult.successWithLen(pq.ml_dsa.ML_DSA_65.SIGNATURE_SIZE);
+}
+
+/// ML-DSA-65 signing with explicit input/output lengths.
+pub export fn zcrypto_ml_dsa_65_sign_checked(private_key: [*]const u8, private_key_len: u32, message: [*]const u8, message_len: u32, signature: [*]u8, signature_len: u32) callconv(.c) CryptoResult {
+    if (!validatePtr(private_key) or private_key_len != ML_DSA_65_PRIVATE_KEY_SIZE) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+    if (!validateInputSlice(message, message_len, MAX_INPUT_SIZE)) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+    if (!validateOutputBuffer(signature, signature_len, ML_DSA_65_SIGNATURE_SIZE)) {
+        return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
+    }
+
+    var randomness: [pq.ml_dsa.ML_DSA_65.NOISE_SIZE]u8 = undefined;
+    rand.fill(&randomness);
+
+    const message_slice = if (message_len > 0) message[0..message_len] else "";
+    const sig = pq.ml_dsa.ML_DSA_65.KeyPair.signBytes(private_key[0..ML_DSA_65_PRIVATE_KEY_SIZE], message_slice, randomness) catch {
+        return CryptoResult.failure(FFI_ERROR_SIGNATURE_FAILED);
+    };
+
+    @memcpy(signature[0..ML_DSA_65_SIGNATURE_SIZE], &sig);
+    return CryptoResult.successWithLen(ML_DSA_65_SIGNATURE_SIZE);
+}
+
+/// ML-DSA-65 verification with explicit input lengths.
+pub export fn zcrypto_ml_dsa_65_verify_checked(public_key: [*]const u8, public_key_len: u32, message: [*]const u8, message_len: u32, signature: [*]const u8, signature_len: u32) callconv(.c) CryptoResult {
+    if (!validatePtr(public_key) or public_key_len != ML_DSA_65_PUBLIC_KEY_SIZE) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+    if (!validateInputSlice(message, message_len, MAX_INPUT_SIZE)) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+    if (!validatePtr(signature) or signature_len != ML_DSA_65_SIGNATURE_SIZE) {
+        return CryptoResult.failure(FFI_ERROR_INVALID_INPUT);
+    }
+
+    const message_slice = if (message_len > 0) message[0..message_len] else "";
+    const valid = pq.ml_dsa.ML_DSA_65.KeyPair.verifyBytes(
+        public_key[0..ML_DSA_65_PUBLIC_KEY_SIZE],
+        message_slice,
+        signature[0..ML_DSA_65_SIGNATURE_SIZE],
+    ) catch {
+        return CryptoResult.failure(FFI_ERROR_VERIFICATION_FAILED);
+    };
+
+    return if (valid) CryptoResult.SUCCESS else CryptoResult.failure(FFI_ERROR_VERIFICATION_FAILED);
 }
 
 /// Generate hybrid X25519 + ML-KEM-768 key pair
@@ -985,8 +1114,11 @@ pub export fn zcrypto_aes256_gcm_decrypt(key: [*]const u8, key_len: u32, nonce: 
 /// @param buffer: Output buffer for version string
 /// @param buffer_len: Buffer capacity
 /// @return CryptoResult with version string length
-pub export fn zcrypto_version(buffer: [*]u8, buffer_len: u32) callconv(.c) CryptoResult {
+pub export fn zcrypto_version(buffer: [*]allowzero u8, buffer_len: u32) callconv(.c) CryptoResult {
     const version = "zcrypto v" ++ build_options.version;
+    if (!validatePtr(buffer)) {
+        return CryptoResult.failure(FFI_ERROR_NULL_POINTER);
+    }
     if (buffer_len < version.len) {
         return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
     }
@@ -1009,9 +1141,12 @@ pub export fn zcrypto_has_post_quantum() callconv(.c) CryptoResult {
 /// @param buffer: Output buffer for algorithm names (comma-separated)
 /// @param buffer_len: Buffer capacity
 /// @return CryptoResult with string length
-pub export fn zcrypto_supported_algorithms(buffer: [*]u8, buffer_len: u32) callconv(.c) CryptoResult {
+pub export fn zcrypto_supported_algorithms(buffer: [*]allowzero u8, buffer_len: u32) callconv(.c) CryptoResult {
     const algorithms = supportedAlgorithmsString();
 
+    if (!validatePtr(buffer)) {
+        return CryptoResult.failure(FFI_ERROR_NULL_POINTER);
+    }
     if (buffer_len < algorithms.len) {
         return CryptoResult.failure(FFI_ERROR_INSUFFICIENT_BUFFER);
     }
@@ -1025,7 +1160,11 @@ pub export fn zcrypto_supported_algorithms(buffer: [*]u8, buffer_len: u32) callc
 /// @param key_len: Output for key length
 /// @param hash_len: Output for hash length
 /// @return CryptoResult with success/failure status
-pub export fn zcrypto_cipher_suite_info(cipher_suite: u32, key_len: [*]u32, hash_len: [*]u32) callconv(.c) CryptoResult {
+pub export fn zcrypto_cipher_suite_info(cipher_suite: u32, key_len: [*]allowzero u32, hash_len: [*]allowzero u32) callconv(.c) CryptoResult {
+    if (!validatePtr(key_len) or !validatePtr(hash_len)) {
+        return CryptoResult.failure(FFI_ERROR_NULL_POINTER);
+    }
+
     const cs = switch (cipher_suite) {
         0 => quic.CipherSuite.TLS_AES_128_GCM_SHA256,
         1 => quic.CipherSuite.TLS_AES_256_GCM_SHA384,
@@ -1048,7 +1187,11 @@ pub export fn zcrypto_cipher_suite_info(cipher_suite: u32, key_len: [*]u32, hash
 /// Get library feature flags
 /// @param features: Output buffer for feature bit flags
 /// @return CryptoResult with success status
-pub export fn zcrypto_get_features(features: [*]u32) callconv(.c) CryptoResult {
+pub export fn zcrypto_get_features(features: [*]allowzero u32) callconv(.c) CryptoResult {
+    if (!validatePtr(features)) {
+        return CryptoResult.failure(FFI_ERROR_NULL_POINTER);
+    }
+
     const FEATURE_POST_QUANTUM = 0x01;
     const FEATURE_ZERO_KNOWLEDGE = 0x02;
     const FEATURE_QUIC_CRYPTO = 0x04;
@@ -1080,8 +1223,16 @@ pub export fn zcrypto_get_features(features: [*]u32) callconv(.c) CryptoResult {
 /// @param ptr: Memory pointer
 /// @param len: Memory length
 /// @return CryptoResult with success status
-pub export fn zcrypto_secure_zero(ptr: [*]u8, len: u32) callconv(.c) CryptoResult {
-    const slice = ptr[0..len];
+pub export fn zcrypto_secure_zero(ptr: [*]allowzero u8, len: u32) callconv(.c) CryptoResult {
+    if (len == 0) {
+        return CryptoResult.SUCCESS;
+    }
+    if (!validatePtr(ptr)) {
+        return CryptoResult.failure(FFI_ERROR_NULL_POINTER);
+    }
+
+    const non_null_ptr: [*]u8 = @ptrFromInt(@intFromPtr(ptr));
+    const slice = non_null_ptr[0..len];
     std.crypto.secureZero(u8, slice);
     return CryptoResult.SUCCESS;
 }
@@ -1091,9 +1242,18 @@ pub export fn zcrypto_secure_zero(ptr: [*]u8, len: u32) callconv(.c) CryptoResul
 /// @param b: Second buffer
 /// @param len: Buffer length
 /// @return CryptoResult with success=equal
-pub export fn zcrypto_secure_memcmp(a: [*]const u8, b: [*]const u8, len: u32) callconv(.c) CryptoResult {
-    const slice_a = a[0..len];
-    const slice_b = b[0..len];
+pub export fn zcrypto_secure_memcmp(a: [*]allowzero const u8, b: [*]allowzero const u8, len: u32) callconv(.c) CryptoResult {
+    if (len == 0) {
+        return CryptoResult.SUCCESS;
+    }
+    if (!validatePtr(a) or !validatePtr(b)) {
+        return CryptoResult.failure(FFI_ERROR_NULL_POINTER);
+    }
+
+    const non_null_a: [*]const u8 = @ptrFromInt(@intFromPtr(a));
+    const non_null_b: [*]const u8 = @ptrFromInt(@intFromPtr(b));
+    const slice_a = non_null_a[0..len];
+    const slice_b = non_null_b[0..len];
 
     var result: u8 = 0;
     for (slice_a, slice_b) |byte_a, byte_b| {
@@ -1283,6 +1443,159 @@ test "FFI ML-KEM-768 operations" {
     try std.testing.expect(std.mem.eql(u8, &shared_secret1, &shared_secret2));
 }
 
+test "FFI ML-KEM-768 checked APIs validate buffers" {
+    var public_key: [ML_KEM_768_PUBLIC_KEY_SIZE]u8 = undefined;
+    var private_key: [ML_KEM_768_PRIVATE_KEY_SIZE]u8 = undefined;
+
+    var small_public: [ML_KEM_768_PUBLIC_KEY_SIZE - 1]u8 = undefined;
+    const small_keygen = zcrypto_ml_kem_768_keygen_checked(
+        &small_public,
+        small_public.len,
+        &private_key,
+        private_key.len,
+    );
+    try std.testing.expect(!small_keygen.success);
+    try std.testing.expectEqual(@as(u32, FFI_ERROR_INSUFFICIENT_BUFFER), small_keygen.error_code);
+
+    const keygen = zcrypto_ml_kem_768_keygen_checked(
+        &public_key,
+        public_key.len,
+        &private_key,
+        private_key.len,
+    );
+    try std.testing.expect(keygen.success);
+
+    var ciphertext: [ML_KEM_768_CIPHERTEXT_SIZE]u8 = undefined;
+    var shared_secret1: [ML_KEM_768_SHARED_SECRET_SIZE]u8 = undefined;
+    var small_ciphertext: [ML_KEM_768_CIPHERTEXT_SIZE - 1]u8 = undefined;
+
+    const small_encaps = zcrypto_ml_kem_768_encaps_checked(
+        &public_key,
+        public_key.len,
+        &small_ciphertext,
+        small_ciphertext.len,
+        &shared_secret1,
+        shared_secret1.len,
+    );
+    try std.testing.expect(!small_encaps.success);
+    try std.testing.expectEqual(@as(u32, FFI_ERROR_INSUFFICIENT_BUFFER), small_encaps.error_code);
+
+    const bad_public = zcrypto_ml_kem_768_encaps_checked(
+        &public_key,
+        public_key.len - 1,
+        &ciphertext,
+        ciphertext.len,
+        &shared_secret1,
+        shared_secret1.len,
+    );
+    try std.testing.expect(!bad_public.success);
+    try std.testing.expectEqual(@as(u32, FFI_ERROR_INVALID_INPUT), bad_public.error_code);
+
+    const encaps = zcrypto_ml_kem_768_encaps_checked(
+        &public_key,
+        public_key.len,
+        &ciphertext,
+        ciphertext.len,
+        &shared_secret1,
+        shared_secret1.len,
+    );
+    try std.testing.expect(encaps.success);
+
+    var shared_secret2: [ML_KEM_768_SHARED_SECRET_SIZE]u8 = undefined;
+    const bad_ciphertext = zcrypto_ml_kem_768_decaps_checked(
+        &private_key,
+        private_key.len,
+        &ciphertext,
+        ciphertext.len - 1,
+        &shared_secret2,
+        shared_secret2.len,
+    );
+    try std.testing.expect(!bad_ciphertext.success);
+    try std.testing.expectEqual(@as(u32, FFI_ERROR_INVALID_INPUT), bad_ciphertext.error_code);
+
+    const decaps = zcrypto_ml_kem_768_decaps_checked(
+        &private_key,
+        private_key.len,
+        &ciphertext,
+        ciphertext.len,
+        &shared_secret2,
+        shared_secret2.len,
+    );
+    try std.testing.expect(decaps.success);
+    try std.testing.expectEqualSlices(u8, &shared_secret1, &shared_secret2);
+}
+
+test "FFI ML-DSA-65 checked APIs validate buffers and verify" {
+    var public_key: [ML_DSA_65_PUBLIC_KEY_SIZE]u8 = undefined;
+    var private_key: [ML_DSA_65_PRIVATE_KEY_SIZE]u8 = undefined;
+    var small_private: [ML_DSA_65_PRIVATE_KEY_SIZE - 1]u8 = undefined;
+
+    const small_keygen = zcrypto_ml_dsa_65_keygen_checked(
+        &public_key,
+        public_key.len,
+        &small_private,
+        small_private.len,
+    );
+    try std.testing.expect(!small_keygen.success);
+    try std.testing.expectEqual(@as(u32, FFI_ERROR_INSUFFICIENT_BUFFER), small_keygen.error_code);
+
+    const keygen = zcrypto_ml_dsa_65_keygen_checked(
+        &public_key,
+        public_key.len,
+        &private_key,
+        private_key.len,
+    );
+    try std.testing.expect(keygen.success);
+
+    const message = "ffi mldsa checked message";
+    var signature: [ML_DSA_65_SIGNATURE_SIZE]u8 = undefined;
+    var small_signature: [ML_DSA_65_SIGNATURE_SIZE - 1]u8 = undefined;
+
+    const small_sign = zcrypto_ml_dsa_65_sign_checked(
+        &private_key,
+        private_key.len,
+        message.ptr,
+        message.len,
+        &small_signature,
+        small_signature.len,
+    );
+    try std.testing.expect(!small_sign.success);
+    try std.testing.expectEqual(@as(u32, FFI_ERROR_INSUFFICIENT_BUFFER), small_sign.error_code);
+
+    const sign = zcrypto_ml_dsa_65_sign_checked(
+        &private_key,
+        private_key.len,
+        message.ptr,
+        message.len,
+        &signature,
+        signature.len,
+    );
+    try std.testing.expect(sign.success);
+    try std.testing.expectEqual(@as(u32, ML_DSA_65_SIGNATURE_SIZE), sign.data_len);
+
+    const verify = zcrypto_ml_dsa_65_verify_checked(
+        &public_key,
+        public_key.len,
+        message.ptr,
+        message.len,
+        &signature,
+        signature.len,
+    );
+    try std.testing.expect(verify.success);
+
+    signature[0] ^= 0x01;
+    const tampered = zcrypto_ml_dsa_65_verify_checked(
+        &public_key,
+        public_key.len,
+        message.ptr,
+        message.len,
+        &signature,
+        signature.len,
+    );
+    try std.testing.expect(!tampered.success);
+    try std.testing.expectEqual(@as(u32, FFI_ERROR_VERIFICATION_FAILED), tampered.error_code);
+}
+
 test "FFI hybrid operations" {
     var classical_public: [32]u8 = undefined;
     var classical_private: [32]u8 = undefined;
@@ -1410,6 +1723,50 @@ test "FFI library features" {
     try std.testing.expectEqual(build_options.enable_post_quantum, (features & FEATURE_HYBRID_CRYPTO) != 0);
 }
 
+test "FFI capability reporting and pointer validation" {
+    const null_u8: [*]allowzero u8 = @ptrFromInt(0);
+    const null_u32: [*]allowzero u32 = @ptrFromInt(0);
+
+    var algorithms_buffer: [256]u8 = undefined;
+    var small_buffer: [8]u8 = undefined;
+    const small_algorithms = zcrypto_supported_algorithms(&small_buffer, small_buffer.len);
+    try std.testing.expect(!small_algorithms.success);
+    try std.testing.expectEqual(@as(u32, FFI_ERROR_INSUFFICIENT_BUFFER), small_algorithms.error_code);
+
+    const null_algorithms = zcrypto_supported_algorithms(null_u8, algorithms_buffer.len);
+    try std.testing.expect(!null_algorithms.success);
+    try std.testing.expectEqual(@as(u32, FFI_ERROR_NULL_POINTER), null_algorithms.error_code);
+
+    const algorithms = zcrypto_supported_algorithms(&algorithms_buffer, algorithms_buffer.len);
+    try std.testing.expect(algorithms.success);
+    const algorithm_slice = algorithms_buffer[0..algorithms.data_len];
+    try std.testing.expect(std.mem.indexOf(u8, algorithm_slice, "Ed25519") != null);
+    try std.testing.expect(std.mem.indexOf(u8, algorithm_slice, "AES-256-GCM") != null);
+    try std.testing.expectEqual(
+        build_options.enable_post_quantum,
+        std.mem.indexOf(u8, algorithm_slice, "ML-KEM-768") != null,
+    );
+
+    const null_features = zcrypto_get_features(null_u32);
+    try std.testing.expect(!null_features.success);
+    try std.testing.expectEqual(@as(u32, FFI_ERROR_NULL_POINTER), null_features.error_code);
+
+    var key_len: u32 = undefined;
+    var hash_len: u32 = undefined;
+    const null_suite = zcrypto_cipher_suite_info(0, null_u32, @ptrCast(&hash_len));
+    try std.testing.expect(!null_suite.success);
+    try std.testing.expectEqual(@as(u32, FFI_ERROR_NULL_POINTER), null_suite.error_code);
+
+    const suite = zcrypto_cipher_suite_info(0, @ptrCast(&key_len), @ptrCast(&hash_len));
+    try std.testing.expect(suite.success);
+    try std.testing.expectEqual(@as(u32, 16), key_len);
+    try std.testing.expectEqual(@as(u32, 32), hash_len);
+
+    const null_version = zcrypto_version(null_u8, algorithms_buffer.len);
+    try std.testing.expect(!null_version.success);
+    try std.testing.expectEqual(@as(u32, FFI_ERROR_NULL_POINTER), null_version.error_code);
+}
+
 test "FFI post quantum reporting matches build flags" {
     const result = zcrypto_has_post_quantum();
     try std.testing.expectEqual(build_options.enable_post_quantum, result.success);
@@ -1462,4 +1819,17 @@ test "FFI secure operations" {
     for (secret_data) |byte| {
         try std.testing.expect(byte == 0);
     }
+
+    const null_mut: [*]allowzero u8 = @ptrFromInt(0);
+    const null_const: [*]allowzero const u8 = @ptrFromInt(0);
+    try std.testing.expect(zcrypto_secure_zero(null_mut, 0).success);
+
+    const null_zero = zcrypto_secure_zero(null_mut, 4);
+    try std.testing.expect(!null_zero.success);
+    try std.testing.expectEqual(@as(u32, FFI_ERROR_NULL_POINTER), null_zero.error_code);
+
+    try std.testing.expect(zcrypto_secure_memcmp(null_const, null_const, 0).success);
+    const null_cmp = zcrypto_secure_memcmp(null_const, data2.ptr, data2.len);
+    try std.testing.expect(!null_cmp.success);
+    try std.testing.expectEqual(@as(u32, FFI_ERROR_NULL_POINTER), null_cmp.error_code);
 }

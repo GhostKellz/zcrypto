@@ -24,6 +24,28 @@ pub const X25519 = struct {
     pub const KeyPair = struct {
         public_key: [PUBLIC_KEY_SIZE]u8,
         private_key: [PRIVATE_KEY_SIZE]u8,
+
+        /// Import a keypair from raw bytes and verify the public key matches.
+        pub fn fromBytes(public_key: [PUBLIC_KEY_SIZE]u8, private_key: [PRIVATE_KEY_SIZE]u8) !KeyPair {
+            const derived_public = try X25519.derivePublicKey(private_key);
+            if (!std.mem.eql(u8, &derived_public, &public_key)) return error.InvalidKey;
+            return .{ .public_key = public_key, .private_key = private_key };
+        }
+
+        /// Export public key bytes.
+        pub fn publicKeyBytes(self: KeyPair) [PUBLIC_KEY_SIZE]u8 {
+            return self.public_key;
+        }
+
+        /// Export private key bytes. Callers own zeroization of returned copies.
+        pub fn privateKeyBytes(self: KeyPair) [PRIVATE_KEY_SIZE]u8 {
+            return self.private_key;
+        }
+
+        /// Zero private key material in this keypair.
+        pub fn zeroize(self: *KeyPair) void {
+            crypto.secureZero(u8, &self.private_key);
+        }
     };
 
     /// Generate a new X25519 key pair
@@ -46,6 +68,11 @@ pub const X25519 = struct {
     pub fn derivePublicKey(private_key: [PRIVATE_KEY_SIZE]u8) ![PUBLIC_KEY_SIZE]u8 {
         // Use real X25519 implementation from Zig's std.crypto
         return crypto.dh.X25519.recoverPublicKey(private_key) catch error.InvalidKey;
+    }
+
+    /// Import a keypair from raw bytes and verify the public key matches.
+    pub fn fromBytes(public_key: [PUBLIC_KEY_SIZE]u8, private_key: [PRIVATE_KEY_SIZE]u8) !KeyPair {
+        return KeyPair.fromBytes(public_key, private_key);
     }
 
     /// Compute shared secret from our private key and peer's public key
@@ -164,6 +191,28 @@ pub const Ed25519 = struct {
     pub const KeyPair = struct {
         public_key: [PUBLIC_KEY_SIZE]u8,
         private_key: [PRIVATE_KEY_SIZE]u8,
+
+        /// Import a keypair from raw bytes and verify the public key matches.
+        pub fn fromBytes(public_key: [PUBLIC_KEY_SIZE]u8, private_key: [PRIVATE_KEY_SIZE]u8) !KeyPair {
+            const derived_public = try Ed25519.derivePublicKey(private_key);
+            if (!std.mem.eql(u8, &derived_public, &public_key)) return error.InvalidKey;
+            return .{ .public_key = public_key, .private_key = private_key };
+        }
+
+        /// Export public key bytes.
+        pub fn publicKeyBytes(self: KeyPair) [PUBLIC_KEY_SIZE]u8 {
+            return self.public_key;
+        }
+
+        /// Export private key bytes. Callers own zeroization of returned copies.
+        pub fn privateKeyBytes(self: KeyPair) [PRIVATE_KEY_SIZE]u8 {
+            return self.private_key;
+        }
+
+        /// Zero private key material in this keypair.
+        pub fn zeroize(self: *KeyPair) void {
+            crypto.secureZero(u8, &self.private_key);
+        }
     };
 
     pub fn generateKeypair() !KeyPair {
@@ -185,6 +234,11 @@ pub const Ed25519 = struct {
         const secret_key = crypto.sign.Ed25519.SecretKey.fromBytes(private_key) catch return error.InvalidKey;
         const key_pair = crypto.sign.Ed25519.KeyPair.fromSecretKey(secret_key) catch return error.InvalidKey;
         return key_pair.public_key.bytes;
+    }
+
+    /// Import a keypair from raw bytes and verify the public key matches.
+    pub fn fromBytes(public_key: [PUBLIC_KEY_SIZE]u8, private_key: [PRIVATE_KEY_SIZE]u8) !KeyPair {
+        return KeyPair.fromBytes(public_key, private_key);
     }
 
     pub fn sign(private_key: [PRIVATE_KEY_SIZE]u8, message: []const u8) ![SIGNATURE_SIZE]u8 {
@@ -462,6 +516,22 @@ test "X25519 key exchange" {
     try testing.expectEqualSlices(u8, &alice_shared, &bob_shared);
 }
 
+test "X25519 key import export validates matching public key" {
+    const keypair = try X25519.generateKeypair();
+
+    const public_key = keypair.publicKeyBytes();
+    var private_key = keypair.privateKeyBytes();
+    defer crypto.secureZero(u8, &private_key);
+
+    const imported = try X25519.fromBytes(public_key, private_key);
+    try testing.expectEqualSlices(u8, &public_key, &imported.public_key);
+    try testing.expectEqualSlices(u8, &private_key, &imported.private_key);
+
+    var wrong_public = public_key;
+    wrong_public[0] ^= 0x01;
+    try testing.expectError(error.InvalidKey, X25519.fromBytes(wrong_public, private_key));
+}
+
 test "Ed25519 signature" {
     const keypair = try Ed25519.generateKeypair();
     const message = "test message for ed25519";
@@ -470,6 +540,22 @@ test "Ed25519 signature" {
     const valid = try Ed25519.verify(keypair.public_key, message, signature);
 
     try testing.expect(valid);
+}
+
+test "Ed25519 key import export validates matching public key" {
+    const keypair = try Ed25519.generateKeypair();
+
+    const public_key = keypair.publicKeyBytes();
+    var private_key = keypair.privateKeyBytes();
+    defer crypto.secureZero(u8, &private_key);
+
+    const imported = try Ed25519.fromBytes(public_key, private_key);
+    try testing.expectEqualSlices(u8, &public_key, &imported.public_key);
+    try testing.expectEqualSlices(u8, &private_key, &imported.private_key);
+
+    var wrong_public = public_key;
+    wrong_public[0] ^= 0x01;
+    try testing.expectError(error.InvalidKey, Ed25519.fromBytes(wrong_public, private_key));
 }
 
 test "Ed25519 context signing is explicitly unsupported" {

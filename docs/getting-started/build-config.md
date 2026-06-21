@@ -1,6 +1,6 @@
 # Build Configuration
 
-zcrypto v1.0.0 uses a **modular build system** that lets you include only the features you need. Experimental crypto families also require explicit opt-in.
+zcrypto v1.0.5 uses a **modular build system** that lets you include only the features you need. Experimental crypto families also require explicit opt-in.
 
 ## 🎯 Feature Flags
 
@@ -127,6 +127,7 @@ const hardware = zcrypto.hardware; // SIMD operations
 - **Core crypto is always included** - hash, symmetric crypto, basic primitives
 - **Features are additive** - enabling a feature doesn't disable others
 - **Experimental modules require opt-in** - `post-quantum`, `blockchain`, `enterprise`, and `zkp` also require `-Dexperimental-crypto=true`
+- **Experimental is not stable-core** - those modules are for research and iteration in v1.0.5; keep production code on the stable core unless you intentionally opt into churn.
 - **Dependencies are automatic** - zsync is only required when `async=true`
 - **Cross-platform** - Feature detection works on all supported platforms
 - **Feature-aware entrypoints** - disabled features no longer break the shipped demo/example targets
@@ -152,7 +153,7 @@ if (features.aes_ni) {
 // Old way (v0.8.x) - everything included
 const zcrypto = @import("zcrypto");
 
-// New way (v1.0.0) - selective features
+// New way (v1.0.x) - selective features
 const zcrypto = @import("zcrypto");
 const tls = zcrypto.tls;  // Only available if -Dtls=true
 ```

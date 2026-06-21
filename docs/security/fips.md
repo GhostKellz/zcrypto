@@ -26,7 +26,7 @@ classical one for defense-in-depth. Each half is stdlib-backed.
 
 | Algorithm | Notes |
 |-----------|-------|
-| Blockchain / ZKP / enterprise helpers | Gated behind `-Dexperimental-crypto=true`. Research surfaces, not FIPS-validated, not part of the stable contract. |
+| Blockchain / ZKP / enterprise helpers | Gated behind `-Dexperimental-crypto=true`. Research surfaces, not FIPS-validated, not part of the stable contract. APIs may change while v1.0.x hardens the stable core. |
 | ChaCha20-Poly1305 | Safe and widely used, but not a FIPS-approved AEAD. Available for QUIC/TLS interop where negotiated. |
 
 ## Unsupported

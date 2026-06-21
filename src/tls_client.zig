@@ -876,6 +876,25 @@ pub const TlsClient = struct {
         };
     }
 
+    const ParsedCertificateVerify = struct {
+        sig_algorithm: u16,
+        signature: []const u8,
+    };
+
+    fn parseCertificateVerify(data: []const u8) !ParsedCertificateVerify {
+        if (data.len < 4) return error.InvalidCertificateVerify;
+
+        const sig_algorithm = std.mem.readInt(u16, data[0..2], .big);
+        const sig_len = std.mem.readInt(u16, data[2..4], .big);
+
+        if (data.len != 4 + sig_len) return error.InvalidCertificateVerify;
+
+        return .{
+            .sig_algorithm = sig_algorithm,
+            .signature = data[4..],
+        };
+    }
+
     /// Receive and validate CertificateVerify message (RFC 8446 Section 4.4.3)
     ///
     /// Verifies that the server possesses the private key for its certificate by
@@ -891,21 +910,7 @@ pub const TlsClient = struct {
         // Don't update transcript yet - we need the hash up to (but not including) CertificateVerify
         // The transcript gets the Certificate message but we verify against that state
 
-        // Parse CertificateVerify structure:
-        // - signature_algorithm (2 bytes)
-        // - signature (2 bytes length + data)
-        if (msg.data.len < 4) {
-            return error.InvalidCertificateVerify;
-        }
-
-        const sig_algorithm = std.mem.readInt(u16, msg.data[0..2], .big);
-        const sig_len = std.mem.readInt(u16, msg.data[2..4], .big);
-
-        if (msg.data.len < 4 + sig_len) {
-            return error.InvalidCertificateVerify;
-        }
-
-        const signature = msg.data[4 .. 4 + sig_len];
+        const parsed_verify = try parseCertificateVerify(msg.data);
 
         // Get the server's public key from the certificate
         const certs = self.server_certificates orelse return error.NoCertificateReceived;
@@ -931,15 +936,15 @@ pub const TlsClient = struct {
         // Verify signature based on algorithm. RSA-PSS (0x0804) and any unknown
         // scheme fall through to the else branch and are rejected as
         // unsupported — zcrypto does not ship an unvetted RSA verifier.
-        const verified = switch (sig_algorithm) {
+        const verified = switch (parsed_verify.sig_algorithm) {
             0x0807, 0x0403, 0x0503 => verifyCertVerifySignature(
-                sig_algorithm,
-                signature,
+                parsed_verify.sig_algorithm,
+                parsed_verify.signature,
                 parsed.public_key_info.public_key,
                 &content,
             ),
             else => {
-                std.log.warn("Unsupported signature algorithm: 0x{x:0>4}", .{sig_algorithm});
+                std.log.warn("Unsupported signature algorithm: 0x{x:0>4}", .{parsed_verify.sig_algorithm});
                 return error.UnsupportedSignatureAlgorithm;
             },
         };
@@ -1412,6 +1417,10 @@ test "CertificateVerify verifier: ECDSA P-256 accepts valid DER, rejects tampere
 
     try std.testing.expect(TlsClient.verifyCertVerifySignature(0x0403, sig, &kp.public_key, content));
     try std.testing.expect(!TlsClient.verifyCertVerifySignature(0x0403, sig, &kp.public_key, "different"));
+
+    const bad_der = [_]u8{ 0x30, 0x00, 0x01, 0x02 };
+    try std.testing.expect(!TlsClient.verifyCertVerifySignature(0x0403, &bad_der, &kp.public_key, content));
+    try std.testing.expect(!TlsClient.verifyCertVerifySignature(0x0403, sig, kp.public_key[0..16], content));
 }
 
 test "CertificateVerify verifier: ECDSA P-384 accepts valid DER, rejects tampered" {
@@ -1422,6 +1431,10 @@ test "CertificateVerify verifier: ECDSA P-384 accepts valid DER, rejects tampere
 
     try std.testing.expect(TlsClient.verifyCertVerifySignature(0x0503, sig, &kp.public_key, content));
     try std.testing.expect(!TlsClient.verifyCertVerifySignature(0x0503, sig, &kp.public_key, "different"));
+
+    const bad_der = [_]u8{ 0x30, 0x00, 0x01, 0x02 };
+    try std.testing.expect(!TlsClient.verifyCertVerifySignature(0x0503, &bad_der, &kp.public_key, content));
+    try std.testing.expect(!TlsClient.verifyCertVerifySignature(0x0503, sig, kp.public_key[0..16], content));
 }
 
 test "CertificateVerify verifier: unknown/RSA scheme rejected" {
@@ -1431,4 +1444,20 @@ test "CertificateVerify verifier: unknown/RSA scheme rejected" {
     // RSA-PSS (0x0804) and unknown schemes are not supported → false.
     try std.testing.expect(!TlsClient.verifyCertVerifySignature(0x0804, &sig, &pk, content));
     try std.testing.expect(!TlsClient.verifyCertVerifySignature(0xFFFF, &sig, &pk, content));
+}
+
+test "CertificateVerify parser requires exact signature length" {
+    const valid = [_]u8{ 0x08, 0x07, 0x00, 0x02, 0xaa, 0xbb };
+    const parsed = try TlsClient.parseCertificateVerify(&valid);
+    try std.testing.expectEqual(@as(u16, 0x0807), parsed.sig_algorithm);
+    try std.testing.expectEqualSlices(u8, valid[4..], parsed.signature);
+
+    const too_short_header = [_]u8{ 0x08, 0x07, 0x00 };
+    try std.testing.expectError(error.InvalidCertificateVerify, TlsClient.parseCertificateVerify(&too_short_header));
+
+    const truncated = [_]u8{ 0x08, 0x07, 0x00, 0x03, 0xaa, 0xbb };
+    try std.testing.expectError(error.InvalidCertificateVerify, TlsClient.parseCertificateVerify(&truncated));
+
+    const trailing = [_]u8{ 0x08, 0x07, 0x00, 0x01, 0xaa, 0xbb };
+    try std.testing.expectError(error.InvalidCertificateVerify, TlsClient.parseCertificateVerify(&trailing));
 }

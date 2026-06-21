@@ -306,43 +306,16 @@ pub const QuicCrypto = struct {
     /// Applies header protection mask to first byte and packet number bytes.
     /// Sample is 16 bytes taken from the ciphertext starting at pn_offset + 4.
     pub fn protectHeader(self: *const QuicCrypto, level: EncryptionLevel, is_server: bool, header: []u8, sample: []const u8) QuicError!void {
-        if (sample.len < 16 or header.len < 1) {
+        if (sample.len < 16 or header.len == 0) {
             return QuicError.HeaderProtectionFailed;
         }
 
         const keys = try self.requireKeys(level, is_server);
+        const pn_len = self.getPacketNumberLength(header);
+        const pn_offset = self.getPacketNumberOffset(header);
+        if (pn_offset + pn_len > header.len) return QuicError.HeaderProtectionFailed;
 
-        // Generate header protection mask
-        var mask: [5]u8 = undefined;
-        switch (self.cipher_suite) {
-            .TLS_AES_128_GCM_SHA256 => {
-                // AES-ECB encrypt the sample to get mask
-                const Aes128 = std.crypto.core.aes.Aes128;
-                const ctx = Aes128.initEnc(keys.header_protection_key[0..16].*);
-                var block: [16]u8 = sample[0..16].*;
-                ctx.encrypt(&block, &block);
-                @memcpy(&mask, block[0..5]);
-            },
-            .TLS_AES_256_GCM_SHA384, .TLS_ML_KEM_768_X25519_AES256_GCM_SHA384 => {
-                // AES-256 uses only 16 bytes for HP key per RFC 9001
-                const Aes128 = std.crypto.core.aes.Aes128;
-                const ctx = Aes128.initEnc(keys.header_protection_key[0..16].*);
-                var block: [16]u8 = sample[0..16].*;
-                ctx.encrypt(&block, &block);
-                @memcpy(&mask, block[0..5]);
-            },
-            .TLS_CHACHA20_POLY1305_SHA256 => {
-                // ChaCha20: counter from sample[0..4], nonce from sample[4..16]
-                const counter = std.mem.readInt(u32, sample[0..4], .little);
-                var chacha_nonce: [12]u8 = undefined;
-                @memcpy(&chacha_nonce, sample[4..16]);
-
-                const ChaCha20 = std.crypto.stream.chacha.ChaCha20IETF;
-                var keystream: [5]u8 = std.mem.zeroes([5]u8);
-                ChaCha20.xor(&keystream, &keystream, counter, chacha_nonce, keys.header_protection_key);
-                @memcpy(&mask, &keystream);
-            },
-        }
+        const mask = self.createHeaderProtectionMask(keys, sample);
 
         // Apply mask to header
         const is_long_header = (header[0] & 0x80) != 0;
@@ -354,22 +327,65 @@ pub const QuicCrypto = struct {
             header[0] ^= (mask[0] & 0x1f);
         }
 
-        // Determine packet number length from (now masked) first byte
-        const pn_len = (header[0] & 0x03) + 1;
-        const pn_offset = self.getPacketNumberOffset(header);
-
         // Apply mask to packet number bytes
-        if (pn_offset + pn_len <= header.len) {
-            for (0..pn_len) |i| {
-                header[pn_offset + i] ^= mask[1 + i];
-            }
+        for (0..pn_len) |i| {
+            header[pn_offset + i] ^= mask[1 + i];
         }
     }
 
     /// Unprotect packet header (reverse of protectHeader)
     pub fn unprotectHeader(self: *const QuicCrypto, level: EncryptionLevel, is_server: bool, header: []u8, sample: []const u8) QuicError!void {
-        // Header protection is symmetric, so unprotection is the same as protection
-        return self.protectHeader(level, is_server, header, sample);
+        if (sample.len < 16 or header.len == 0) {
+            return QuicError.HeaderProtectionFailed;
+        }
+
+        const keys = try self.requireKeys(level, is_server);
+        const mask = self.createHeaderProtectionMask(keys, sample);
+
+        const is_long_header = (header[0] & 0x80) != 0;
+        if (is_long_header) {
+            header[0] ^= (mask[0] & 0x0f);
+        } else {
+            header[0] ^= (mask[0] & 0x1f);
+        }
+
+        const pn_len = self.getPacketNumberLength(header);
+        const pn_offset = self.getPacketNumberOffset(header);
+        if (pn_offset + pn_len > header.len) return QuicError.HeaderProtectionFailed;
+
+        for (0..pn_len) |i| {
+            header[pn_offset + i] ^= mask[1 + i];
+        }
+    }
+
+    fn createHeaderProtectionMask(self: *const QuicCrypto, keys: *const PacketKeys, sample: []const u8) [5]u8 {
+        var mask: [5]u8 = undefined;
+        switch (self.cipher_suite) {
+            .TLS_AES_128_GCM_SHA256 => {
+                const Aes128 = std.crypto.core.aes.Aes128;
+                const ctx = Aes128.initEnc(keys.header_protection_key[0..16].*);
+                var block: [16]u8 = sample[0..16].*;
+                ctx.encrypt(&block, &block);
+                @memcpy(&mask, block[0..5]);
+            },
+            .TLS_AES_256_GCM_SHA384, .TLS_ML_KEM_768_X25519_AES256_GCM_SHA384 => {
+                const Aes128 = std.crypto.core.aes.Aes128;
+                const ctx = Aes128.initEnc(keys.header_protection_key[0..16].*);
+                var block: [16]u8 = sample[0..16].*;
+                ctx.encrypt(&block, &block);
+                @memcpy(&mask, block[0..5]);
+            },
+            .TLS_CHACHA20_POLY1305_SHA256 => {
+                const counter = std.mem.readInt(u32, sample[0..4], .little);
+                const chacha_nonce: [12]u8 = sample[4..16].*;
+
+                const ChaCha20 = std.crypto.stream.chacha.ChaCha20IETF;
+                var keystream: [5]u8 = std.mem.zeroes([5]u8);
+                ChaCha20.xor(&keystream, &keystream, counter, keys.header_protection_key, chacha_nonce);
+                @memcpy(&mask, &keystream);
+            },
+        }
+        return mask;
     }
 
     /// Get keys for encryption level and direction
@@ -889,6 +905,46 @@ test "QUIC rejects uninitialized handshake keys" {
     try std.testing.expectError(
         QuicError.InvalidKeys,
         crypto.encryptPacket(.handshake, false, 1, &header, payload, &encrypted),
+    );
+}
+
+test "QUIC header protection round trip preserves packet number length" {
+    var crypto = QuicCrypto.init(.TLS_AES_128_GCM_SHA256);
+    const connection_id = [_]u8{ 0x83, 0x94, 0xc8, 0xf0, 0x3e, 0x51, 0x57, 0x08 };
+    try crypto.deriveInitialKeys(&connection_id);
+
+    var header = [_]u8{ 0x43, 0x11, 0x22, 0x33, 0x44 };
+    const original = header;
+    const sample = [_]u8{
+        0x00, 0x11, 0x22, 0x33,
+        0x44, 0x55, 0x66, 0x77,
+        0x88, 0x99, 0xaa, 0xbb,
+        0xcc, 0xdd, 0xee, 0xff,
+    };
+
+    try crypto.protectHeader(.initial, false, &header, &sample);
+    try std.testing.expect(!std.mem.eql(u8, &original, &header));
+
+    try crypto.unprotectHeader(.initial, false, &header, &sample);
+    try std.testing.expectEqualSlices(u8, &original, &header);
+}
+
+test "QUIC header protection rejects truncated packet number bytes" {
+    var crypto = QuicCrypto.init(.TLS_AES_128_GCM_SHA256);
+    const connection_id = [_]u8{ 0x83, 0x94, 0xc8, 0xf0, 0x3e, 0x51, 0x57, 0x08 };
+    try crypto.deriveInitialKeys(&connection_id);
+
+    var header = [_]u8{ 0x43, 0x11, 0x22 };
+    const sample = [_]u8{
+        0x00, 0x11, 0x22, 0x33,
+        0x44, 0x55, 0x66, 0x77,
+        0x88, 0x99, 0xaa, 0xbb,
+        0xcc, 0xdd, 0xee, 0xff,
+    };
+
+    try std.testing.expectError(
+        QuicError.HeaderProtectionFailed,
+        crypto.protectHeader(.initial, false, &header, &sample),
     );
 }
 

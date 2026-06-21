@@ -51,6 +51,22 @@ fn MlKemWrapper(comptime Mode: type) type {
                 shared_secret: [SHARED_SECRET_SIZE]u8,
             };
 
+            pub fn fromBytes(public_key: []const u8, private_key: []const u8) pq.PQError!KeyPair {
+                if (public_key.len != PUBLIC_KEY_SIZE) return pq.PQError.InvalidPublicKey;
+                if (private_key.len != PRIVATE_KEY_SIZE) return pq.PQError.InvalidPrivateKey;
+
+                const public_key_array: [PUBLIC_KEY_SIZE]u8 = public_key[0..PUBLIC_KEY_SIZE].*;
+                const private_key_array: [PRIVATE_KEY_SIZE]u8 = private_key[0..PRIVATE_KEY_SIZE].*;
+
+                _ = Mode.PublicKey.fromBytes(&public_key_array) catch return pq.PQError.InvalidPublicKey;
+                _ = Mode.SecretKey.fromBytes(&private_key_array) catch return pq.PQError.InvalidPrivateKey;
+
+                return .{
+                    .public_key = public_key_array,
+                    .private_key = private_key_array,
+                };
+            }
+
             pub fn encapsulate(public_key: [PUBLIC_KEY_SIZE]u8, randomness: [SEED_SIZE]u8) pq.PQError!EncapsulationResult {
                 const pk = Mode.PublicKey.fromBytes(&public_key) catch {
                     return pq.PQError.InvalidPublicKey;
@@ -63,6 +79,11 @@ fn MlKemWrapper(comptime Mode: type) type {
                 };
             }
 
+            pub fn encapsulateBytes(public_key: []const u8, randomness: [SEED_SIZE]u8) pq.PQError!EncapsulationResult {
+                if (public_key.len != PUBLIC_KEY_SIZE) return pq.PQError.InvalidPublicKey;
+                return encapsulate(public_key[0..PUBLIC_KEY_SIZE].*, randomness);
+            }
+
             pub fn decapsulate(self: *const KeyPair, ciphertext: [CIPHERTEXT_SIZE]u8) pq.PQError![SHARED_SECRET_SIZE]u8 {
                 const sk = Mode.SecretKey.fromBytes(&self.private_key) catch {
                     return pq.PQError.InvalidPrivateKey;
@@ -70,6 +91,11 @@ fn MlKemWrapper(comptime Mode: type) type {
                 return sk.decaps(&ciphertext) catch {
                     return pq.PQError.DecapsFailed;
                 };
+            }
+
+            pub fn decapsulateBytes(self: *const KeyPair, ciphertext: []const u8) pq.PQError![SHARED_SECRET_SIZE]u8 {
+                if (ciphertext.len != CIPHERTEXT_SIZE) return pq.PQError.InvalidCiphertext;
+                return self.decapsulate(ciphertext[0..CIPHERTEXT_SIZE].*);
             }
         };
     };
@@ -115,4 +141,39 @@ test "ML-KEM-768 encapsulation and decapsulation derive same shared secret" {
     const decap = try keypair.decapsulate(encap.ciphertext);
 
     try std.testing.expectEqualSlices(u8, &encap.shared_secret, &decap);
+}
+
+test "ML-KEM-768 byte helpers reject malformed lengths" {
+    const seed = blk: {
+        var bytes = std.mem.zeroes([ML_KEM_768.SEED_SIZE]u8);
+        @memset(bytes[0..], 0x42);
+        break :blk bytes;
+    };
+    const randomness = blk: {
+        var bytes = std.mem.zeroes([ML_KEM_768.SEED_SIZE]u8);
+        @memset(bytes[0..], 0x24);
+        break :blk bytes;
+    };
+
+    const keypair = try ML_KEM_768.KeyPair.generate(seed);
+    _ = try ML_KEM_768.KeyPair.fromBytes(&keypair.public_key, &keypair.private_key);
+
+    try std.testing.expectError(
+        pq.PQError.InvalidPublicKey,
+        ML_KEM_768.KeyPair.fromBytes(keypair.public_key[0 .. ML_KEM_768.PUBLIC_KEY_SIZE - 1], &keypair.private_key),
+    );
+    try std.testing.expectError(
+        pq.PQError.InvalidPrivateKey,
+        ML_KEM_768.KeyPair.fromBytes(&keypair.public_key, keypair.private_key[0 .. ML_KEM_768.PRIVATE_KEY_SIZE - 1]),
+    );
+    try std.testing.expectError(
+        pq.PQError.InvalidPublicKey,
+        ML_KEM_768.KeyPair.encapsulateBytes(keypair.public_key[0 .. ML_KEM_768.PUBLIC_KEY_SIZE - 1], randomness),
+    );
+
+    const encap = try ML_KEM_768.KeyPair.encapsulate(keypair.public_key, randomness);
+    try std.testing.expectError(
+        pq.PQError.InvalidCiphertext,
+        keypair.decapsulateBytes(encap.ciphertext[0 .. ML_KEM_768.CIPHERTEXT_SIZE - 1]),
+    );
 }

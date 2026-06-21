@@ -6,6 +6,12 @@
 const std = @import("std");
 const rand = @import("rand.zig");
 
+fn decodeHex(comptime N: usize, hex: []const u8) [N]u8 {
+    var out: [N]u8 = undefined;
+    _ = std.fmt.hexToBytes(&out, hex) catch unreachable;
+    return out;
+}
+
 /// Ed25519 public key size
 pub const ED25519_PUBLIC_KEY_SIZE = 32;
 
@@ -25,6 +31,23 @@ pub const CURVE25519_PRIVATE_KEY_SIZE = 32;
 pub const Ed25519KeyPair = struct {
     public_key: [ED25519_PUBLIC_KEY_SIZE]u8,
     private_key: [ED25519_PRIVATE_KEY_SIZE]u8,
+
+    /// Import a keypair from raw bytes and verify the public key matches.
+    pub fn fromBytes(public_key: [ED25519_PUBLIC_KEY_SIZE]u8, private_key: [ED25519_PRIVATE_KEY_SIZE]u8) !Ed25519KeyPair {
+        const derived_public = try ed25519PublicKey(private_key);
+        if (!std.mem.eql(u8, &derived_public, &public_key)) return error.InvalidPublicKey;
+        return .{ .public_key = public_key, .private_key = private_key };
+    }
+
+    /// Export public key bytes.
+    pub fn publicKeyBytes(self: Ed25519KeyPair) [ED25519_PUBLIC_KEY_SIZE]u8 {
+        return self.public_key;
+    }
+
+    /// Export private key bytes. Callers own zeroization of returned copies.
+    pub fn privateKeyBytes(self: Ed25519KeyPair) [ED25519_PRIVATE_KEY_SIZE]u8 {
+        return self.private_key;
+    }
 
     /// Sign a message with this keypair
     pub fn sign(self: Ed25519KeyPair, message: []const u8) ![ED25519_SIGNATURE_SIZE]u8 {
@@ -49,6 +72,23 @@ pub const Ed25519KeyPair = struct {
 pub const Curve25519KeyPair = struct {
     public_key: [CURVE25519_PUBLIC_KEY_SIZE]u8,
     private_key: [CURVE25519_PRIVATE_KEY_SIZE]u8,
+
+    /// Import a keypair from raw bytes and verify the public key matches.
+    pub fn fromBytes(public_key: [CURVE25519_PUBLIC_KEY_SIZE]u8, private_key: [CURVE25519_PRIVATE_KEY_SIZE]u8) !Curve25519KeyPair {
+        const derived_public = try x25519PublicKeyChecked(private_key);
+        if (!std.mem.eql(u8, &derived_public, &public_key)) return error.InvalidPublicKey;
+        return .{ .public_key = public_key, .private_key = private_key };
+    }
+
+    /// Export public key bytes.
+    pub fn publicKeyBytes(self: Curve25519KeyPair) [CURVE25519_PUBLIC_KEY_SIZE]u8 {
+        return self.public_key;
+    }
+
+    /// Export private key bytes. Callers own zeroization of returned copies.
+    pub fn privateKeyBytes(self: Curve25519KeyPair) [CURVE25519_PRIVATE_KEY_SIZE]u8 {
+        return self.private_key;
+    }
 
     /// Perform Diffie-Hellman key exchange
     pub fn dh(self: Curve25519KeyPair, other_public_key: [CURVE25519_PUBLIC_KEY_SIZE]u8) ![CURVE25519_PUBLIC_KEY_SIZE]u8 {
@@ -98,6 +138,13 @@ pub fn signEd25519(message: []const u8, private_key: [ED25519_PRIVATE_KEY_SIZE]u
     return signature.toBytes();
 }
 
+/// Generate Ed25519 public key from a 64-byte private key.
+pub fn ed25519PublicKey(private_key: [ED25519_PRIVATE_KEY_SIZE]u8) ![ED25519_PUBLIC_KEY_SIZE]u8 {
+    const secret_key = std.crypto.sign.Ed25519.SecretKey.fromBytes(private_key) catch return error.InvalidPrivateKey;
+    const key_pair = std.crypto.sign.Ed25519.KeyPair.fromSecretKey(secret_key) catch return error.InvalidPrivateKey;
+    return key_pair.public_key.bytes;
+}
+
 /// Verify an Ed25519 signature
 pub fn verifyEd25519(message: []const u8, signature: [ED25519_SIGNATURE_SIZE]u8, public_key: [ED25519_PUBLIC_KEY_SIZE]u8) bool {
     const pub_key = std.crypto.sign.Ed25519.PublicKey.fromBytes(public_key) catch return false;
@@ -114,6 +161,11 @@ pub fn dhX25519(private_key: [CURVE25519_PRIVATE_KEY_SIZE]u8, public_key: [CURVE
 /// Generate X25519 public key from private key
 pub fn x25519PublicKey(private_key: [CURVE25519_PRIVATE_KEY_SIZE]u8) [CURVE25519_PUBLIC_KEY_SIZE]u8 {
     return std.crypto.dh.X25519.recoverPublicKey(private_key) catch std.mem.zeroes([32]u8);
+}
+
+/// Generate X25519 public key from private key, returning errors instead of a zero fallback.
+pub fn x25519PublicKeyChecked(private_key: [CURVE25519_PRIVATE_KEY_SIZE]u8) ![CURVE25519_PUBLIC_KEY_SIZE]u8 {
+    return std.crypto.dh.X25519.recoverPublicKey(private_key) catch return error.InvalidPrivateKey;
 }
 
 /// Ed25519 module with clean API matching your docs
@@ -139,6 +191,16 @@ pub const ed25519 = struct {
             .public_key = kp.public_key.bytes,
             .private_key = kp.secret_key.bytes,
         };
+    }
+
+    /// Import a keypair from raw bytes and verify the public key matches.
+    pub fn fromBytes(public_key: [ED25519_PUBLIC_KEY_SIZE]u8, private_key: [ED25519_PRIVATE_KEY_SIZE]u8) !KeyPair {
+        return KeyPair.fromBytes(public_key, private_key);
+    }
+
+    /// Derive public key bytes from private key bytes.
+    pub fn publicKey(private_key: [ED25519_PRIVATE_KEY_SIZE]u8) ![ED25519_PUBLIC_KEY_SIZE]u8 {
+        return ed25519PublicKey(private_key);
     }
 
     /// Sign a message
@@ -169,6 +231,16 @@ pub const x25519 = struct {
     /// Generate public key from private key
     pub fn publicKey(private_key: [CURVE25519_PRIVATE_KEY_SIZE]u8) [CURVE25519_PUBLIC_KEY_SIZE]u8 {
         return x25519PublicKey(private_key);
+    }
+
+    /// Generate public key from private key, returning errors instead of a zero fallback.
+    pub fn publicKeyChecked(private_key: [CURVE25519_PRIVATE_KEY_SIZE]u8) ![CURVE25519_PUBLIC_KEY_SIZE]u8 {
+        return x25519PublicKeyChecked(private_key);
+    }
+
+    /// Import a keypair from raw bytes and verify the public key matches.
+    pub fn fromBytes(public_key: [CURVE25519_PUBLIC_KEY_SIZE]u8, private_key: [CURVE25519_PRIVATE_KEY_SIZE]u8) !KeyPair {
+        return KeyPair.fromBytes(public_key, private_key);
     }
 };
 
@@ -226,6 +298,23 @@ pub const Secp256r1KeyPair = struct {
     public_key: [SECP256R1_PUBLIC_KEY_SIZE]u8,
     private_key: [SECP256R1_PRIVATE_KEY_SIZE]u8,
 
+    /// Import a compressed SEC1 public key and private key, verifying they match.
+    pub fn fromBytes(public_key: [SECP256R1_PUBLIC_KEY_SIZE]u8, private_key: [SECP256R1_PRIVATE_KEY_SIZE]u8) !Secp256r1KeyPair {
+        const derived_public = try secp256r1PublicKey(private_key);
+        if (!std.mem.eql(u8, &derived_public, &public_key)) return error.InvalidPublicKey;
+        return .{ .public_key = public_key, .private_key = private_key };
+    }
+
+    /// Export compressed SEC1 public key bytes.
+    pub fn publicKeyBytes(self: Secp256r1KeyPair) [SECP256R1_PUBLIC_KEY_SIZE]u8 {
+        return self.public_key;
+    }
+
+    /// Export private key bytes. Callers own zeroization of returned copies.
+    pub fn privateKeyBytes(self: Secp256r1KeyPair) [SECP256R1_PRIVATE_KEY_SIZE]u8 {
+        return self.private_key;
+    }
+
     /// Sign a message with secp256r1
     pub fn sign(self: Secp256r1KeyPair, message: [32]u8) ![SECP256R1_SIGNATURE_SIZE]u8 {
         return signSecp256r1(message, self.private_key);
@@ -246,6 +335,23 @@ pub const Secp256r1KeyPair = struct {
 pub const Secp384r1KeyPair = struct {
     public_key: [SECP384R1_PUBLIC_KEY_SIZE]u8,
     private_key: [SECP384R1_PRIVATE_KEY_SIZE]u8,
+
+    /// Import a compressed SEC1 public key and private key, verifying they match.
+    pub fn fromBytes(public_key: [SECP384R1_PUBLIC_KEY_SIZE]u8, private_key: [SECP384R1_PRIVATE_KEY_SIZE]u8) !Secp384r1KeyPair {
+        const derived_public = try secp384r1PublicKey(private_key);
+        if (!std.mem.eql(u8, &derived_public, &public_key)) return error.InvalidPublicKey;
+        return .{ .public_key = public_key, .private_key = private_key };
+    }
+
+    /// Export compressed SEC1 public key bytes.
+    pub fn publicKeyBytes(self: Secp384r1KeyPair) [SECP384R1_PUBLIC_KEY_SIZE]u8 {
+        return self.public_key;
+    }
+
+    /// Export private key bytes. Callers own zeroization of returned copies.
+    pub fn privateKeyBytes(self: Secp384r1KeyPair) [SECP384R1_PRIVATE_KEY_SIZE]u8 {
+        return self.private_key;
+    }
 
     /// Sign a 48-byte message with secp384r1 (fixed-width r||s output)
     pub fn sign(self: Secp384r1KeyPair, message: [48]u8) ![SECP384R1_SIGNATURE_SIZE]u8 {
@@ -305,6 +411,14 @@ pub fn generateSecp256r1() Secp256r1KeyPair {
     };
 }
 
+/// Generate compressed SEC1 P-256 public key from private key.
+pub fn secp256r1PublicKey(private_key: [SECP256R1_PRIVATE_KEY_SIZE]u8) ![SECP256R1_PUBLIC_KEY_SIZE]u8 {
+    const Scheme = std.crypto.sign.ecdsa.EcdsaP256Sha256;
+    const secret_key = Scheme.SecretKey.fromBytes(private_key) catch return error.InvalidPrivateKey;
+    const kp = Scheme.KeyPair.fromSecretKey(secret_key) catch return error.InvalidPrivateKey;
+    return kp.public_key.toCompressedSec1();
+}
+
 /// Sign with secp256k1 (Bitcoin/Ethereum style)
 pub fn signSecp256k1(message: [32]u8, private_key: [SECP256K1_PRIVATE_KEY_SIZE]u8) ![SECP256K1_SIGNATURE_SIZE]u8 {
     const secret_key = std.crypto.sign.ecdsa.EcdsaSecp256k1Sha256.SecretKey.fromBytes(private_key) catch return error.InvalidPrivateKey;
@@ -349,6 +463,14 @@ pub fn generateSecp384r1() Secp384r1KeyPair {
         .public_key = kp.public_key.toCompressedSec1(),
         .private_key = kp.secret_key.bytes,
     };
+}
+
+/// Generate compressed SEC1 P-384 public key from private key.
+pub fn secp384r1PublicKey(private_key: [SECP384R1_PRIVATE_KEY_SIZE]u8) ![SECP384R1_PUBLIC_KEY_SIZE]u8 {
+    const Scheme = std.crypto.sign.ecdsa.EcdsaP384Sha384;
+    const secret_key = Scheme.SecretKey.fromBytes(private_key) catch return error.InvalidPrivateKey;
+    const kp = Scheme.KeyPair.fromSecretKey(secret_key) catch return error.InvalidPrivateKey;
+    return kp.public_key.toCompressedSec1();
 }
 
 /// Sign with secp384r1 (NIST P-384), fixed-width r||s output
@@ -406,6 +528,16 @@ pub const secp256r1 = struct {
         return verifySecp256r1(message, signature, public_key);
     }
 
+    /// Import a keypair from raw bytes and verify the public key matches.
+    pub fn fromBytes(public_key: [SECP256R1_PUBLIC_KEY_SIZE]u8, private_key: [SECP256R1_PRIVATE_KEY_SIZE]u8) !KeyPair {
+        return KeyPair.fromBytes(public_key, private_key);
+    }
+
+    /// Derive compressed SEC1 public key bytes from private key bytes.
+    pub fn publicKey(private_key: [SECP256R1_PRIVATE_KEY_SIZE]u8) ![SECP256R1_PUBLIC_KEY_SIZE]u8 {
+        return secp256r1PublicKey(private_key);
+    }
+
     /// Maximum DER-encoded signature length (use for `signMessageDer` buffer).
     pub const DER_SIGNATURE_MAX = SECP256R1_DER_SIGNATURE_MAX;
 
@@ -457,6 +589,16 @@ pub const secp384r1 = struct {
     /// Verify a fixed-width signature
     pub fn verify(message: [48]u8, signature: [SECP384R1_SIGNATURE_SIZE]u8, public_key: [SECP384R1_PUBLIC_KEY_SIZE]u8) bool {
         return verifySecp384r1(message, signature, public_key);
+    }
+
+    /// Import a keypair from raw bytes and verify the public key matches.
+    pub fn fromBytes(public_key: [SECP384R1_PUBLIC_KEY_SIZE]u8, private_key: [SECP384R1_PRIVATE_KEY_SIZE]u8) !KeyPair {
+        return KeyPair.fromBytes(public_key, private_key);
+    }
+
+    /// Derive compressed SEC1 public key bytes from private key bytes.
+    pub fn publicKey(private_key: [SECP384R1_PRIVATE_KEY_SIZE]u8) ![SECP384R1_PUBLIC_KEY_SIZE]u8 {
+        return secp384r1PublicKey(private_key);
     }
 
     /// Maximum DER-encoded signature length (use for `signMessageDer` buffer).
@@ -608,6 +750,40 @@ test "ed25519 deterministic generation from seed" {
     try std.testing.expect(valid);
 }
 
+test "ed25519 RFC 8032 test vector 1" {
+    const seed = decodeHex(32, "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60");
+    const expected_public = decodeHex(32, "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a");
+    const expected_signature = decodeHex(64, "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b");
+
+    const keypair = ed25519.generateFromSeed(seed);
+    try std.testing.expectEqualSlices(u8, &expected_public, &keypair.public_key);
+
+    const signature = try ed25519.sign("", keypair.private_key);
+    try std.testing.expectEqualSlices(u8, &expected_signature, &signature);
+    try std.testing.expect(ed25519.verify("", signature, keypair.public_key));
+
+    var tampered = signature;
+    tampered[0] ^= 0x01;
+    try std.testing.expect(!ed25519.verify("", tampered, keypair.public_key));
+}
+
+test "ed25519 key import export validates matching public key" {
+    const keypair = ed25519.generate();
+
+    const public_key = keypair.publicKeyBytes();
+    var private_key = keypair.privateKeyBytes();
+    defer std.crypto.secureZero(u8, &private_key);
+
+    const imported = try ed25519.fromBytes(public_key, private_key);
+    try std.testing.expectEqualSlices(u8, &public_key, &imported.public_key);
+    try std.testing.expectEqualSlices(u8, &private_key, &imported.private_key);
+    try std.testing.expectEqualSlices(u8, &public_key, &try ed25519.publicKey(private_key));
+
+    var wrong_public = public_key;
+    wrong_public[0] ^= 0x01;
+    try std.testing.expectError(error.InvalidPublicKey, ed25519.fromBytes(wrong_public, private_key));
+}
+
 test "x25519 key exchange" {
     const alice = x25519.generate();
     const bob = x25519.generate();
@@ -625,6 +801,41 @@ test "x25519 public key derivation" {
     const derived_public = x25519.publicKey(keypair.private_key);
 
     try std.testing.expectEqualSlices(u8, &keypair.public_key, &derived_public);
+}
+
+test "x25519 RFC 7748 test vector" {
+    const alice_private = decodeHex(32, "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a");
+    const alice_public_expected = decodeHex(32, "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a");
+    const bob_private = decodeHex(32, "5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb");
+    const bob_public_expected = decodeHex(32, "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f");
+    const shared_expected = decodeHex(32, "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742");
+
+    const alice_public = try x25519.publicKeyChecked(alice_private);
+    const bob_public = try x25519.publicKeyChecked(bob_private);
+    try std.testing.expectEqualSlices(u8, &alice_public_expected, &alice_public);
+    try std.testing.expectEqualSlices(u8, &bob_public_expected, &bob_public);
+
+    const alice_shared = try x25519.dh(alice_private, bob_public);
+    const bob_shared = try x25519.dh(bob_private, alice_public);
+    try std.testing.expectEqualSlices(u8, &shared_expected, &alice_shared);
+    try std.testing.expectEqualSlices(u8, &shared_expected, &bob_shared);
+}
+
+test "x25519 key import export validates matching public key" {
+    const keypair = x25519.generate();
+
+    const public_key = keypair.publicKeyBytes();
+    var private_key = keypair.privateKeyBytes();
+    defer std.crypto.secureZero(u8, &private_key);
+
+    const imported = try x25519.fromBytes(public_key, private_key);
+    try std.testing.expectEqualSlices(u8, &public_key, &imported.public_key);
+    try std.testing.expectEqualSlices(u8, &private_key, &imported.private_key);
+    try std.testing.expectEqualSlices(u8, &public_key, &try x25519.publicKeyChecked(private_key));
+
+    var wrong_public = public_key;
+    wrong_public[0] ^= 0x01;
+    try std.testing.expectError(error.InvalidPublicKey, x25519.fromBytes(wrong_public, private_key));
 }
 
 test "secp256k1 keypair generation and signing" {
@@ -731,6 +942,23 @@ test "secp256r1 standalone functions" {
     try std.testing.expect(valid);
 }
 
+test "secp256r1 key import export validates matching public key" {
+    const keypair = secp256r1.generate();
+
+    const public_key = keypair.publicKeyBytes();
+    var private_key = keypair.privateKeyBytes();
+    defer std.crypto.secureZero(u8, &private_key);
+
+    const imported = try secp256r1.fromBytes(public_key, private_key);
+    try std.testing.expectEqualSlices(u8, &public_key, &imported.public_key);
+    try std.testing.expectEqualSlices(u8, &private_key, &imported.private_key);
+    try std.testing.expectEqualSlices(u8, &public_key, &try secp256r1.publicKey(private_key));
+
+    var wrong_public = public_key;
+    wrong_public[0] ^= 0x01;
+    try std.testing.expectError(error.InvalidPublicKey, secp256r1.fromBytes(wrong_public, private_key));
+}
+
 test "secp384r1 keypair generation and signing" {
     const keypair = secp384r1.generate();
     var message: [48]u8 = undefined;
@@ -742,6 +970,23 @@ test "secp384r1 keypair generation and signing" {
     var tampered = message;
     tampered[0] ^= 0xFF;
     try std.testing.expect(!secp384r1.verify(tampered, signature, keypair.public_key));
+}
+
+test "secp384r1 key import export validates matching public key" {
+    const keypair = secp384r1.generate();
+
+    const public_key = keypair.publicKeyBytes();
+    var private_key = keypair.privateKeyBytes();
+    defer std.crypto.secureZero(u8, &private_key);
+
+    const imported = try secp384r1.fromBytes(public_key, private_key);
+    try std.testing.expectEqualSlices(u8, &public_key, &imported.public_key);
+    try std.testing.expectEqualSlices(u8, &private_key, &imported.private_key);
+    try std.testing.expectEqualSlices(u8, &public_key, &try secp384r1.publicKey(private_key));
+
+    var wrong_public = public_key;
+    wrong_public[0] ^= 0x01;
+    try std.testing.expectError(error.InvalidPublicKey, secp384r1.fromBytes(wrong_public, private_key));
 }
 
 test "secp256r1 sign->DER->verify round trip" {

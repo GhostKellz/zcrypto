@@ -2,6 +2,90 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.5] - 2026-06-21
+
+### Added
+
+- Added validated raw key import/export helpers for Ed25519, X25519, P-256, and
+  P-384 on the stable `asym` surface, plus matching Ed25519/X25519 helpers on
+  `kex`.
+- Added length-checked ML-KEM-768 and ML-DSA-65 FFI entrypoints:
+  `zcrypto_ml_kem_768_keygen_checked`, `zcrypto_ml_kem_768_encaps_checked`,
+  `zcrypto_ml_kem_768_decaps_checked`, `zcrypto_ml_dsa_65_keygen_checked`,
+  `zcrypto_ml_dsa_65_sign_checked`, and `zcrypto_ml_dsa_65_verify_checked`.
+- Added known-answer coverage for SHA-256, SHA-384, SHA-512, Blake2b-512,
+  RFC 4231 HMAC, RFC 5869 HKDF-SHA256, PBKDF2-HMAC-SHA256, NIST AES-GCM,
+  RFC 8032 Ed25519, and RFC 7748 X25519.
+- Extended benchmarks to cover Blake3 small/1MB hashing, X25519 DH, QUIC packet
+  encrypt/decrypt, ML-KEM-768 keygen/encaps/decaps, and ML-DSA-65 sign/verify.
+
+### Changed
+
+- Raised `minimum_zig_version` to `0.17.0-dev.931+84f84267c`, matching the
+  `/opt/zig-dev/zig` toolchain used for this release pass.
+- Updated package paths to include `CHANGELOG.md`, `CONTRIBUTING.md`,
+  `SECURITY.md`, and `test_vectors/` in addition to source, docs, examples, dev
+  scripts, README, and license.
+- Tightened async documentation around the std.Io-backed `zsync v0.8.3` runtime
+  contract and caller-owned buffers.
+- Clarified experimental module posture: PQ, blockchain, enterprise/formal, and
+  ZKP surfaces require explicit opt-in and remain outside the stable-core
+  contract.
+- Updated dev scripts to default to `/opt/zig-dev/zig` and writable cache
+  directories while still allowing `ZIG=/path/to/zig` overrides.
+
+### Fixed
+
+- Fixed QUIC header protection handling so protect/unprotect read packet-number
+  length from the correct header state and reject truncated packet-number bytes.
+- Fixed ChaCha20 header-protection mask argument ordering.
+- Fixed TLS CertificateVerify parsing to require exact signature lengths and
+  reject ambiguous Ed25519 private-key sizes.
+- Fixed post-quantum convenience hybrid signatures to use real Ed25519 plus
+  ML-DSA verification rather than placeholder classical signatures.
+- Fixed async batch encryption cleanup so partial failure frees already allocated
+  ciphertexts and the results array.
+- Tightened FFI pointer handling for feature, version, cipher-suite, and secure
+  memory helpers.
+- Removed stale API documentation for nonexistent deterministic random bytes and
+  corrected PBKDF2 allocator ownership docs.
+
+### Verified
+
+- `zig fmt --check src/ examples/ build.zig` (pass)
+- `zig build -Doptimize=ReleaseSafe --summary all` (pass)
+- `zig build -Doptimize=ReleaseFast --summary all` (pass)
+- `zig build test -Dtls=false -Dpost-quantum=false -Dhardware-accel=false -Dasync=false --summary all`
+  (373/373 tests pass)
+- `zig build test -Dtls=true -Dpost-quantum=false -Dhardware-accel=false -Dasync=false --summary all`
+  (457/457 tests pass)
+- `zig build test -Dtls=false -Dpost-quantum=false -Dhardware-accel=false -Dasync=true --summary all`
+  (389/389 tests pass)
+- `zig build test -Dtls=false -Dpost-quantum=true -Dexperimental-crypto=true -Dhardware-accel=false -Dasync=false --summary all`
+  (383/383 tests pass)
+- `zig build test --summary all` (475/475 tests pass)
+- `zig build test -Dpost-quantum=true -Dexperimental-crypto=true -Dblockchain=true -Dvpn=true -Dwasm=true -Denterprise=true -Dzkp=true -Dasync=true --summary all`
+  (551/551 tests pass)
+- `bash dev/release_check.sh` (pass)
+- `bash dev/smoke_run.sh` (pass)
+- `bash dev/experimental_pq_check.sh` (pass)
+- `zig build bench` (pass)
+- `zig build bench -Dpost-quantum=true -Dexperimental-crypto=true` (pass)
+
+### Notes
+
+- Representative PQ-enabled benchmark baseline from this pass:
+  SHA-256 1MB 2180 ops/sec, Blake3 1MB 5239 ops/sec, Ed25519 sign 35082
+  ops/sec, X25519 DH 40541 ops/sec, AES-128-GCM 1KB 272117 ops/sec,
+  ChaCha20-Poly1305 1KB 208730 ops/sec, QUIC packet encrypt 10673498 ops/sec,
+  ML-KEM-768 keygen 33296 ops/sec, ML-KEM-768 encaps 32278 ops/sec,
+  ML-KEM-768 decaps 29582 ops/sec, ML-DSA-65 sign 3907 ops/sec, and
+  ML-DSA-65 verify 11284 ops/sec.
+- The stable v1.0.5 contract remains the core primitives, QUIC helpers,
+  allocator ownership rules, and feature-gated integrations verified above.
+  Experimental modules are usable for research but not promoted to frozen API
+  status.
+
 ## [1.0.4] - 2026-06-03
 
 ### Added

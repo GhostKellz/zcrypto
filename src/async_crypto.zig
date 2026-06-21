@@ -55,8 +55,18 @@ pub const AsyncCrypto = struct {
         @memcpy(&key_array, key[0..32]);
 
         var results = try self.allocator.alloc([]u8, data_list.len);
+        errdefer self.allocator.free(results);
+
+        var initialized: usize = 0;
+        errdefer {
+            for (results[0..initialized]) |item| {
+                self.allocator.free(item);
+            }
+        }
+
         for (data_list, 0..) |data, i| {
             results[i] = try sym.encryptAesGcm(self.allocator, data, &key_array);
+            initialized += 1;
         }
         return results;
     }
@@ -152,7 +162,66 @@ test "batch async encryption" {
 
     for (encrypted_batch, test_data) |encrypted, original| {
         try std.testing.expect(encrypted.len > original.len);
+
+        const decrypted = try async_crypto.decryptAsync(encrypted, &test_key);
+        defer std.testing.allocator.free(decrypted);
+        try std.testing.expectEqualStrings(original, decrypted);
     }
+}
+
+test "async rejects invalid key sizes" {
+    var rt = zsync.Runtime.init(std.testing.allocator, .{});
+    defer rt.deinit();
+    const async_crypto = AsyncCrypto.init(rt.io(), std.testing.allocator);
+    const test_data = [_][]const u8{ "data1", "data2" };
+    const short_key = blk: {
+        var bytes = std.mem.zeroes([31]u8);
+        @memset(bytes[0..], 0x11);
+        break :blk bytes;
+    };
+
+    try std.testing.expectError(error.InvalidKeySize, async_crypto.encryptAsync("data", &short_key));
+    try std.testing.expectError(error.InvalidKeySize, async_crypto.decryptAsync("ciphertext", &short_key));
+    try std.testing.expectError(error.InvalidKeySize, async_crypto.batchEncryptAsync(&test_data, &short_key));
+    try std.testing.expectError(error.InvalidKeySize, async_crypto.encryptAsyncWithTimeout("data", &short_key, 50));
+}
+
+test "async decrypt rejects tampered ciphertext and wrong key" {
+    var rt = zsync.Runtime.init(std.testing.allocator, .{});
+    defer rt.deinit();
+    const async_crypto = AsyncCrypto.init(rt.io(), std.testing.allocator);
+    const test_key = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x33);
+        break :blk bytes;
+    };
+    const wrong_key = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x44);
+        break :blk bytes;
+    };
+
+    const encrypted = try async_crypto.encryptAsync("authenticated data", &test_key);
+    defer std.testing.allocator.free(encrypted);
+
+    var tampered = try std.testing.allocator.dupe(u8, encrypted);
+    defer std.testing.allocator.free(tampered);
+    tampered[tampered.len - 1] ^= 0x80;
+
+    try std.testing.expectError(error.AuthenticationFailed, async_crypto.decryptAsync(tampered, &test_key));
+    try std.testing.expectError(error.AuthenticationFailed, async_crypto.decryptAsync(encrypted, &wrong_key));
+}
+
+test "async hash matches synchronous sha256" {
+    var rt = zsync.Runtime.init(std.testing.allocator, .{});
+    defer rt.deinit();
+    const async_crypto = AsyncCrypto.init(rt.io(), std.testing.allocator);
+    const test_data = "hash me through async wrapper";
+
+    const async_hash = try async_crypto.hashAsync(test_data);
+    const sync_hash = hash.sha256(test_data);
+
+    try std.testing.expectEqualSlices(u8, &sync_hash, &async_hash);
 }
 
 test "async hash batch" {
@@ -166,8 +235,9 @@ test "async hash batch" {
 
     try std.testing.expect(hashes.len == test_data.len);
 
-    for (hashes) |_| {
-        // Just check that each hash has the correct length
+    for (hashes, test_data) |actual, data| {
+        const expected = hash.sha256(data);
+        try std.testing.expectEqualSlices(u8, &expected, &actual);
     }
 }
 

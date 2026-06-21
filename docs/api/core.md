@@ -2,6 +2,25 @@
 
 Core cryptographic primitives available in all stable zcrypto builds.
 
+## Memory Ownership
+
+Any API that accepts a `std.mem.Allocator` and returns a slice returns
+caller-owned memory unless the return type documents a `deinit` method. Free
+returned slices with the same allocator that was passed to the function.
+
+Examples:
+
+- `sym.encryptAesGcm`, `sym.decryptAesGcm`, `sym.encryptChaCha20`, and
+  `sym.decryptChaCha20` return caller-owned `[]u8`.
+- `kdf.hkdfSha256`, `kdf.hkdfSha512`, `kdf.pbkdf2Sha256`,
+  `rand.randomBytes`, and `util.*Alloc`/encoding helpers return caller-owned
+  buffers.
+- `async_crypto.AsyncCrypto` allocated results are owned by the caller and
+  freed with the allocator passed to `AsyncCrypto.init`.
+- Structured types such as `sym.Ciphertext`, `sym.ChaCha20Result`,
+  `merkle.MerkleTree`, and TLS config/certificate objects expose `deinit`
+  methods and should be cleaned up through those methods.
+
 ## Hash Functions
 
 ### SHA-256
@@ -87,28 +106,28 @@ Authenticated encryption with ChaCha20-Poly1305.
 ### HMAC-SHA256
 
 ```zig
-pub fn hmacSha256(key: []const u8, data: []const u8) [32]u8
+pub fn hmacSha256(message: []const u8, key: []const u8) [32]u8
 ```
 
 Computes HMAC-SHA256 of data with key.
 
 **Parameters:**
+- `message`: Data to authenticate
 - `key`: HMAC key (any length)
-- `data`: Data to authenticate
 
 **Returns:** 32-byte HMAC digest
 
 ### HMAC-SHA512
 
 ```zig
-pub fn hmacSha512(key: []const u8, data: []const u8) [64]u8
+pub fn hmacSha512(message: []const u8, key: []const u8) [64]u8
 ```
 
 Computes HMAC-SHA512 of data with key.
 
 **Parameters:**
+- `message`: Data to authenticate
 - `key`: HMAC key (any length)
-- `data`: Data to authenticate
 
 **Returns:** 64-byte HMAC digest
 
@@ -134,7 +153,7 @@ HKDF key derivation using SHA-256.
 ### PBKDF2-SHA256
 
 ```zig
-pub fn pbkdf2Sha256(password: []const u8, salt: []const u8, iterations: u32, out_len: usize) ![]u8
+pub fn pbkdf2Sha256(allocator: std.mem.Allocator, password: []const u8, salt: []const u8, iterations: u32, out_len: usize) ![]u8
 ```
 
 PBKDF2 key derivation using SHA-256.
@@ -146,6 +165,8 @@ PBKDF2 key derivation using SHA-256.
 - `out_len`: Desired output length
 
 **Returns:** Derived key of specified length
+
+Caller owns the returned buffer and must free it with `allocator`.
 
 ## Random Generation
 
@@ -163,20 +184,16 @@ Generates cryptographically secure random bytes.
 
 **Returns:** Random bytes
 
-### Seeded Random (Deterministic)
+Caller owns the returned buffer and must free it with `allocator`.
+
+### Fixed-Size Random Arrays
 
 ```zig
-pub fn seededRandomBytes(allocator: std.mem.Allocator, seed: []const u8, len: usize) ![]u8
+pub fn randomArray(comptime size: usize) [size]u8
 ```
 
-Generates deterministic random bytes from seed.
-
-**Parameters:**
-- `allocator`: Memory allocator
-- `seed`: Seed bytes
-- `len`: Number of random bytes to generate
-
-**Returns:** Deterministic random bytes
+Generates a cryptographically secure fixed-size random byte array without heap
+allocation.
 
 ## Asymmetric Cryptography
 
@@ -193,6 +210,8 @@ pub fn verifyEd25519(message: []const u8, signature: [64]u8, public_key: [32]u8)
 
 pub const zcrypto.asym.ed25519 = struct {
     pub fn generate() KeyPair
+    pub fn fromBytes(public_key: [32]u8, private_key: [64]u8) !KeyPair
+    pub fn publicKey(private_key: [64]u8) ![32]u8
 }
 ```
 
@@ -200,6 +219,8 @@ Ed25519 digital signatures.
 
 **Key Generation:**
 - `zcrypto.asym.ed25519.generate()`: Generate new keypair
+- `zcrypto.asym.ed25519.fromBytes()`: Import a raw keypair and verify that the public key matches the private key
+- `zcrypto.asym.ed25519.publicKey()`: Derive public key bytes from private key bytes
 
 **Signing:**
 - `private_key`: 64-byte private key
@@ -225,6 +246,8 @@ pub fn dhX25519(private_key: [32]u8, public_key: [32]u8) ![32]u8
 pub const zcrypto.asym.x25519 = struct {
     pub fn generate() KeyPair
     pub fn dh(private_key: [32]u8, public_key: [32]u8) ![32]u8
+    pub fn fromBytes(public_key: [32]u8, private_key: [32]u8) !KeyPair
+    pub fn publicKeyChecked(private_key: [32]u8) ![32]u8
 }
 ```
 
@@ -232,11 +255,32 @@ X25519 key exchange.
 
 **Key Generation:**
 - `zcrypto.asym.x25519.generate()`: Generate new keypair
+- `zcrypto.asym.x25519.fromBytes()`: Import a raw keypair and verify that the public key matches the private key
+- `zcrypto.asym.x25519.publicKeyChecked()`: Derive public key bytes from private key bytes with explicit errors
 
 **Key Exchange:**
 - `private_key`: Your private key
 - `public_key`: Peer's public key
 - Returns: Shared secret
+
+### ECDSA Key Import/Export
+
+```zig
+pub const zcrypto.asym.secp256r1 = struct {
+    pub fn fromBytes(public_key: [33]u8, private_key: [32]u8) !KeyPair
+    pub fn publicKey(private_key: [32]u8) ![33]u8
+}
+
+pub const zcrypto.asym.secp384r1 = struct {
+    pub fn fromBytes(public_key: [49]u8, private_key: [48]u8) !KeyPair
+    pub fn publicKey(private_key: [48]u8) ![49]u8
+}
+```
+
+P-256 and P-384 public keys use compressed SEC1 encoding. `fromBytes()` derives
+the public key from the private key and fails if the supplied public key does not
+match. Returned private-key byte copies should be zeroed by the caller when no
+longer needed.
 
 ## Key Exchange
 
@@ -267,47 +311,32 @@ ECDH key exchange using secp256r1 curve.
 ### Batch Verification
 
 ```zig
-pub fn batchVerifyEd25519(allocator: std.mem.Allocator, items: []const BatchItem) !bool
+pub fn verifyBatchEd25519(messages: []const []const u8, signatures: []const [64]u8, public_keys: []const [32]u8, allocator: std.mem.Allocator) ![]bool
+pub fn verifyBatchSecp256k1(message_hashes: []const [32]u8, signatures: []const [64]u8, public_keys: []const [33]u8, allocator: std.mem.Allocator) ![]bool
+pub fn verifyBatch(messages: []const []const u8, signatures: []const [64]u8, public_keys: []const []const u8, algorithm: batch.Algorithm, allocator: std.mem.Allocator) ![]bool
 ```
 
-Batch verification of multiple Ed25519 signatures.
+Batch verification returns a caller-owned `[]bool` with one result per input.
+All input arrays must have matching lengths.
 
-**Parameters:**
-- `allocator`: Memory allocator
-- `items`: Array of batch verification items
-
-**BatchItem:**
-```zig
-pub const BatchItem = struct {
-    public_key: [32]u8,
-    message: []const u8,
-    signature: [64]u8,
-};
-```
-
-**Returns:** `true` if all signatures are valid
-
-### Batch Key Generation
+### Batch Signing And Hashing
 
 ```zig
-pub fn batchGenerateEd25519Keypairs(allocator: std.mem.Allocator, count: usize) ![]Ed25519Keypair
+pub fn signBatchEd25519(messages: []const []const u8, private_key: [64]u8, allocator: std.mem.Allocator) ![][64]u8
+pub fn hashBatch(messages: []const []const u8, allocator: std.mem.Allocator) ![][32]u8
+pub fn signInPlace(message: []const u8, private_key: [64]u8, signature: *[64]u8) !void
+pub fn hashInPlace(message: []const u8, result: *[32]u8) void
 ```
 
-Generate multiple Ed25519 keypairs efficiently.
-
-**Parameters:**
-- `allocator`: Memory allocator
-- `count`: Number of keypairs to generate
-
-**Returns:** Array of keypairs
+Allocated batch results are caller-owned and must be freed with `allocator`.
 
 ## BIP32/BIP39
 
 ### BIP39 Mnemonic
 
 ```zig
-pub fn generateBip39Mnemonic(allocator: std.mem.Allocator, entropy_bits: u11) ![]const u8
-pub fn mnemonicToSeed(mnemonic: []const u8, passphrase: ?[]const u8) ![64]u8
+pub fn bip39.generate(allocator: std.mem.Allocator, length: MnemonicLength) !Mnemonic
+pub fn bip39.mnemonicToSeed(allocator: std.mem.Allocator, mnemonic: []const u8, passphrase: []const u8) ![]u8
 ```
 
 BIP39 mnemonic generation and seed derivation.
@@ -317,7 +346,9 @@ BIP39 mnemonic generation and seed derivation.
 - `mnemonic`: BIP39 mnemonic phrase
 - `passphrase`: Optional passphrase
 
-**Returns:** Mnemonic string / 64-byte seed
+**Returns:** `Mnemonic` owns its word slices and must be released with
+`mnemonic.deinit()`. `mnemonicToSeed` returns a caller-owned 64-byte seed buffer
+that must be freed with `allocator`.
 
 ### BIP32 HD Keys
 
@@ -349,22 +380,23 @@ BIP32 hierarchical deterministic key derivation.
 ## Error Types
 
 ```zig
-pub const Error = error{
-    InvalidKeyLength,
-    InvalidNonceLength,
-    InvalidSignature,
-    InvalidPublicKey,
+pub const CryptoError = error{
+    InvalidSeed,
     InvalidPrivateKey,
-    InvalidCiphertext,
-    InvalidPlaintext,
-    InvalidOutputLength,
-    InvalidInputLength,
+    InvalidPublicKey,
+    InvalidSignature,
+    InvalidHmacKey,
+    InvalidKeyFormat,
+    InvalidKeySize,
+    InvalidNonceSize,
+    InvalidTagSize,
     DecryptionFailed,
-    VerificationFailed,
-    KeyGenerationFailed,
-    OutOfMemory,
-    UnsupportedAlgorithm,
+    EncryptionFailed,
+    InvalidInput,
 };
 ```
 
-All functions return these error types as appropriate for their operations.
+`zcrypto.CryptoError` and `zcrypto.core.CryptoError` expose the shared stable
+core error vocabulary. Individual modules may still expose narrower local error
+sets for operation-specific failures; v1.0.5 tracks unifying those public return
+contracts where doing so does not hide useful failure detail.

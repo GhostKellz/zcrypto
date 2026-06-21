@@ -23,6 +23,7 @@
 The core API in this release is intended to be stable. Several optional modules remain experimental and require explicit build-time opt-in via `-Dexperimental-crypto=true`.
 
 * **Memory-safe by design:** Leveraging Zig's explicit control and compile-time safety features.
+* **Explicit ownership:** APIs that accept an allocator and return slices return caller-owned memory. Free returned buffers with the same allocator unless the return type has its own `deinit`.
 * **Modular architecture:** Enable only the features you need with build-time flags.
 * **Audit-friendly:** Easy to read, easy to verify. Minimal dependencies.
 * **Cross-platform:** Works seamlessly on Linux, macOS, Windows, and embedded targets.
@@ -77,6 +78,12 @@ Zcrypto supports selective compilation with feature flags:
 * **Zero-Knowledge Proofs** - Experimental proof-system APIs
 * **Async Operations** - Concurrent crypto with zsync runtime
 
+Experimental feature families (`post_quantum`, `blockchain_crypto`, `formal`,
+`zkp`, and research-oriented protocol helpers) are not part of the frozen stable
+core contract in v1.0.5. Use them with explicit feature flags, expect API churn,
+and keep production integrations on the stable core unless you are intentionally
+testing those surfaces.
+
 ---
 
 ## 🚀 Quick Start
@@ -88,7 +95,7 @@ Current toolchain baseline: Zig `0.17.0-dev` — see `minimum_zig_version` in
 
 ```bash
 # Replace the tag with the latest release.
-zig fetch --save https://github.com/ghostkellz/zcrypto/archive/refs/tags/v1.0.4.tar.gz
+zig fetch --save https://github.com/ghostkellz/zcrypto/archive/refs/tags/v1.0.5.tar.gz
 ```
 
 ### Basic Usage (Core Only)
