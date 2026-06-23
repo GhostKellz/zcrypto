@@ -43,7 +43,8 @@ const zcrypto = @import("zcrypto");
 pub fn main() !void {
     const data = "Hello, zcrypto!";
     const hash = zcrypto.hash.sha256(data);
-    std.debug.print("SHA-256: {x}\n", .{std.fmt.fmtSliceHexLower(&hash)});
+    var hash_hex: [64]u8 = undefined;
+    std.debug.print("SHA-256: {s}\n", .{zcrypto.hash.toHex([32]u8, hash, &hash_hex)});
 }
 ```
 
@@ -55,7 +56,7 @@ const zcrypto = @import("zcrypto");
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
     const plaintext = "Secret message";
-    const key = [_]u8{0x01} ** 32; // 256-bit key
+    const key = [_]u8{ 0x01 } ** 32; // 256-bit key
 
     // Encrypt
     const ciphertext = try zcrypto.sym.encryptAesGcm(allocator, plaintext, &key);
@@ -123,8 +124,9 @@ pub fn main() !void {
     const secrets = zcrypto.tls.deriveInitialSecrets(&connection_id, true);
 
     // Use in QUIC connection
-    std.debug.print("Client initial secret: {x}\n", .{
-        std.fmt.fmtSliceHexLower(&secrets.client_initial_secret)
+    var secret_hex: [64]u8 = undefined;
+    std.debug.print("Client initial secret: {s}\n", .{
+        zcrypto.hash.toHex([32]u8, secrets.client_initial_secret, &secret_hex),
     });
 }
 ```
@@ -139,7 +141,10 @@ pub fn main() !void {
     const encapsulation = try zcrypto.kyber.encapsulate(keypair.public_key);
     const shared_secret = try zcrypto.kyber.decapsulate(keypair.private_key, encapsulation.ciphertext);
 
-    std.debug.print("Shared secret established: {x}\n", .{std.fmt.fmtSliceHexLower(&shared_secret)});
+    var shared_hex: [64]u8 = undefined;
+    std.debug.print("Shared secret established: {s}\n", .{
+        zcrypto.hash.toHex([32]u8, shared_secret, &shared_hex),
+    });
 }
 ```
 
@@ -172,7 +177,7 @@ pub fn main() !void {
     );
 
     const data = "Async encryption test";
-    const key = [_]u8{0xAB} ** 32;
+    const key = [_]u8{ 0xAB } ** 32;
 
     // Async encryption
     const encrypted = try async_crypto.encryptAsync(data, &key);

@@ -36,8 +36,11 @@ Experimental feature families currently include:
 
 - `post-quantum`
 - `blockchain`
+- `vpn`
+- `wasm`
 - `enterprise`
 - `zkp`
+- research-oriented protocol helpers
 
 These require `-Dexperimental-crypto=true` and should not be treated as a frozen production contract.
 

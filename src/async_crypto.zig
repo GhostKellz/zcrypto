@@ -208,8 +208,8 @@ test "async decrypt rejects tampered ciphertext and wrong key" {
     defer std.testing.allocator.free(tampered);
     tampered[tampered.len - 1] ^= 0x80;
 
-    try std.testing.expectError(error.AuthenticationFailed, async_crypto.decryptAsync(tampered, &test_key));
-    try std.testing.expectError(error.AuthenticationFailed, async_crypto.decryptAsync(encrypted, &wrong_key));
+    try std.testing.expectError(error.DecryptionFailed, async_crypto.decryptAsync(tampered, &test_key));
+    try std.testing.expectError(error.DecryptionFailed, async_crypto.decryptAsync(encrypted, &wrong_key));
 }
 
 test "async hash matches synchronous sha256" {

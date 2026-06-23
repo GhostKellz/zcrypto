@@ -1,6 +1,6 @@
 # Build Configuration
 
-zcrypto v1.0.5 uses a **modular build system** that lets you include only the features you need. Experimental crypto families also require explicit opt-in.
+zcrypto v1.0.6 uses a **modular build system** that lets you include only the features you need. Experimental crypto families also require explicit opt-in.
 
 ## 🎯 Feature Flags
 
@@ -29,7 +29,22 @@ zig build -Dpost-quantum=true -Dexperimental-crypto=true
 | `wasm` | `true` | WebAssembly support | ~2KB |
 | `enterprise` | `false` | Experimental HSM / analysis helpers | ~6KB |
 | `zkp` | `false` | Experimental zero-knowledge proofs | ~7KB |
-| `async` | `true` | zsync async operations | ~4KB |
+| `async` | `false` | Opt-in zsync async operations | ~4KB |
+
+```mermaid
+flowchart TD
+    flags["Build flags"] --> always["Core module<br/>always included"]
+    flags --> optional["Optional stable features"]
+    flags --> experimental["Experimental features"]
+
+    optional --> tls["tls"]
+    optional --> hardware["hardware-accel"]
+    optional --> async["async -> zsync"]
+
+    experimental --> gate{"-Dexperimental-crypto=true?"}
+    gate -->|yes| enabled["post-quantum / blockchain / enterprise / zkp"]
+    gate -->|no| fail["build fails explicitly"]
+```
 
 ## 📊 Build Size Comparison
 
@@ -122,12 +137,29 @@ const hardware = zcrypto.hardware; // SIMD operations
 // ... etc
 ```
 
+## Consumer Decision Flow
+
+```mermaid
+flowchart TD
+    start["New consumer"] --> need_tls{"Need TLS/QUIC helpers?"}
+    need_tls -->|yes| tls["Enable .tls = true"]
+    need_tls -->|no| notls["Set .tls = false for minimal builds"]
+
+    start --> need_async{"Need zsync async wrappers?"}
+    need_async -->|yes| async["Enable .@\"async\" = true"]
+    need_async -->|no| noasync["Set .@\"async\" = false"]
+
+    start --> need_pq{"Testing PQ/research APIs?"}
+    need_pq -->|yes| pq["Enable feature + .@\"experimental-crypto\" = true"]
+    need_pq -->|no| stable["Stay on stable core"]
+```
+
 ## ⚠️ Important Notes
 
 - **Core crypto is always included** - hash, symmetric crypto, basic primitives
 - **Features are additive** - enabling a feature doesn't disable others
 - **Experimental modules require opt-in** - `post-quantum`, `blockchain`, `enterprise`, and `zkp` also require `-Dexperimental-crypto=true`
-- **Experimental is not stable-core** - those modules are for research and iteration in v1.0.5; keep production code on the stable core unless you intentionally opt into churn.
+- **Experimental is not stable-core** - those modules are for research and iteration in v1.0.6; keep production code on the stable core unless you intentionally opt into churn.
 - **Dependencies are automatic** - zsync is only required when `async=true`
 - **Cross-platform** - Feature detection works on all supported platforms
 - **Feature-aware entrypoints** - disabled features no longer break the shipped demo/example targets

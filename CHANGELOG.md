@@ -2,6 +2,88 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.6] - 2026-06-23
+
+### Changed
+
+- Bumped package metadata to `1.0.6`.
+- Updated the `zsync` dependency from `v0.8.3` to `v0.8.4`.
+- Kept the async integration on the std.Io-backed zsync contract:
+  `zsync.Io`, `zsync.Future`, `zsync.Runtime.init(allocator, .{})`, and
+  `rt.io()`.
+- Refreshed release-facing documentation for the v1.0.6 stable core contract,
+  experimental feature posture, and zsync v0.8.4 async dependency baseline.
+- Reworked the docs tree around a single `docs/README.md` landing page,
+  lowercase descriptive pages in subfolders, and Mermaid diagrams for the docs
+  map, feature gates, build graph, integration flow, QUIC flow, async boundary,
+  and downstream zquic contract.
+- Normalized stable AEAD decrypt helpers to return `SymError![]u8` and
+  `SymError.DecryptionFailed` instead of nullable plaintext on authentication
+  failure.
+- Exported `zcrypto.core` from the root module and made `zcrypto.CryptoError`
+  alias the core stable error vocabulary.
+- Added a runnable stable core example covering hash, Blake3, AEAD, Ed25519,
+  X25519, HKDF, QUIC AEAD, random fill, and secure zeroization.
+- Added a stable API guard test target to force-reference v1.0.x root exports
+  and high-value stable calls.
+- Changed the default async feature to `false`; zsync-backed helpers are now
+  pulled only when consumers pass `-Dasync=true`.
+- Expanded FFI feature reporting so the exported capability bitmask tracks
+  async, blockchain, VPN, WASM, enterprise, and other enabled feature flags.
+- Reclassified root exports by stability class and gated `ghostchain` behind
+  the experimental blockchain feature instead of exporting it by default.
+- Added stable key wrappers for AES-256-GCM, ChaCha20-Poly1305, and HMAC key
+  material with explicit import/export and zeroization/deinit behavior.
+
+### Verified
+
+- `zig build test -j1 --summary all`
+  (471/471 tests pass; default async and blockchain disabled)
+- `zig build test -Dtls=false -Dpost-quantum=false -Dhardware-accel=false -Dvpn=false -Dwasm=false -Dasync=false -j1 --summary all`
+  (343/343 tests pass)
+- `zig build test -Dtls=true -Dpost-quantum=false -Dhardware-accel=false -Dvpn=false -Dwasm=false -Dasync=false -j1 --summary all`
+  (421/421 tests pass)
+- `zig build test -Dtls=false -Dpost-quantum=false -Dhardware-accel=false -Dvpn=false -Dwasm=false -Dasync=true -j1 --summary all`
+  (359/359 tests pass)
+- `zig build test -Dtls=false -Dpost-quantum=true -Dexperimental-crypto=true -Dhardware-accel=false -Dvpn=false -Dwasm=false -Dasync=false -j1 --summary all`
+  (345/345 tests pass)
+- `zig build test -Dpost-quantum=true -Dexperimental-crypto=true -Dblockchain=true -Dvpn=true -Dwasm=true -Denterprise=true -Dzkp=true -Dasync=true -j1 --summary all`
+  (575/575 tests pass)
+- `zig build run-core -j1 --summary all`
+  (12/12 steps pass; stable core example runs)
+- `zig build run-zsync -Dasync=true -j1 --summary all`
+  (15/15 steps pass; zsync integration example runs)
+- `zig build -Doptimize=ReleaseSafe -j1 --summary all`
+  (10/10 steps pass; max compile RSS 591M)
+- `zig build -Doptimize=ReleaseFast -j1 --summary all`
+  (10/10 steps pass; max compile RSS 576M)
+- `zig fmt --check src/ examples/*.zig build.zig build.zig.zon tests/`
+  (pass)
+- `cc -fsyntax-only examples/ffi_smoke.c`
+  (pass)
+- `git diff --check`
+  (pass)
+- `env ZIG_GLOBAL_CACHE_DIR=.zig-cache-global-v106-final ZIG_LOCAL_CACHE_DIR=.zig-cache-v106-final-release-check bash dev/release_check.sh`
+  (pass)
+- `env ZIG_GLOBAL_CACHE_DIR=.zig-cache-global-v106-final ZIG_LOCAL_CACHE_DIR=.zig-cache-v106-final-smoke bash dev/smoke_run.sh`
+  (pass)
+- `env ZIG_GLOBAL_CACHE_DIR=.zig-cache-global-v106-final ZIG_LOCAL_CACHE_DIR=.zig-cache-v106-final-pq-script bash dev/experimental_pq_check.sh`
+  (pass)
+- `zig build bench -j1 --summary all`
+  (pass; max compile RSS 578M)
+- `zig build bench -Dpost-quantum=true -Dexperimental-crypto=true -j1 --summary all`
+  (pass; max compile RSS 678M)
+
+### Benchmark Notes
+
+- Representative PQ-enabled baseline from this pass:
+  SHA-256 1MB 2284 ops/sec, Blake3 1MB 9264 ops/sec, Ed25519 sign 37156
+  ops/sec, X25519 DH 42164 ops/sec, AES-128-GCM 1KB 334436 ops/sec,
+  ChaCha20-Poly1305 1KB 238951 ops/sec, QUIC packet encrypt 12050356 ops/sec,
+  ML-KEM-768 keygen 35071 ops/sec, ML-KEM-768 encaps 35580 ops/sec,
+  ML-KEM-768 decaps 29530 ops/sec, ML-DSA-65 sign 4112 ops/sec, and
+  ML-DSA-65 verify 11196 ops/sec.
+
 ## [1.0.5] - 2026-06-21
 
 ### Added

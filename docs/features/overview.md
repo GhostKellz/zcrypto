@@ -29,6 +29,26 @@ Some features have additional stability considerations:
 - **enterprise** → requires `-Dexperimental-crypto=true`
 - **zkp** → requires `-Dexperimental-crypto=true`
 
+```mermaid
+flowchart TD
+    core["Core<br/>always available"] --> tls["tls"]
+    core --> hw["hardware-accel"]
+    core --> vpn["vpn"]
+    core --> wasm["wasm"]
+    core --> async["async"]
+    core --> exp["experimental-crypto gate"]
+
+    async --> zsync["zsync v0.8.4"]
+    tls --> hw
+
+    exp --> pq["post-quantum"]
+    exp --> blockchain["blockchain"]
+    exp --> enterprise["enterprise"]
+    exp --> zkp["zkp"]
+
+    blockchain --> zkp
+```
+
 ## Use Case Examples
 
 ### Embedded/IoT Device
@@ -126,3 +146,13 @@ See **[Build Configuration](../getting-started/build-config.md)** for detailed s
   be treated as frozen production APIs.
 - See [FIPS posture](../security/fips.md) for the full approved/experimental/
   unsupported breakdown.
+
+```mermaid
+flowchart LR
+    stable["Stable core<br/>hash, auth, sym, asym, kdf, rand, kex"] --> production["Production integrations"]
+    quic["QUIC helpers"] --> production
+    feature["Feature-gated stable helpers<br/>tls, hardware, async"] --> optin["Opt-in per consumer"]
+    experimental["PQ / blockchain / enterprise / zkp"] --> research["Research / explicit churn"]
+
+    research --> guard["requires -Dexperimental-crypto=true"]
+```

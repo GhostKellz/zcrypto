@@ -1198,6 +1198,11 @@ pub export fn zcrypto_get_features(features: [*]allowzero u32) callconv(.c) Cryp
     const FEATURE_PROTOCOLS = 0x08;
     const FEATURE_ASM_OPTIMIZED = 0x10;
     const FEATURE_HYBRID_CRYPTO = 0x20;
+    const FEATURE_ASYNC = 0x40;
+    const FEATURE_BLOCKCHAIN = 0x80;
+    const FEATURE_VPN = 0x100;
+    const FEATURE_WASM = 0x200;
+    const FEATURE_ENTERPRISE = 0x400;
 
     var enabled: u32 = FEATURE_QUIC_CRYPTO;
 
@@ -1212,6 +1217,21 @@ pub export fn zcrypto_get_features(features: [*]allowzero u32) callconv(.c) Cryp
     }
     if (build_options.enable_tls) {
         enabled |= FEATURE_PROTOCOLS;
+    }
+    if (build_options.enable_async) {
+        enabled |= FEATURE_ASYNC;
+    }
+    if (build_options.enable_blockchain) {
+        enabled |= FEATURE_BLOCKCHAIN;
+    }
+    if (build_options.enable_vpn) {
+        enabled |= FEATURE_VPN;
+    }
+    if (build_options.enable_wasm) {
+        enabled |= FEATURE_WASM;
+    }
+    if (build_options.enable_enterprise) {
+        enabled |= FEATURE_ENTERPRISE;
     }
 
     features[0] = enabled;
@@ -1714,6 +1734,11 @@ test "FFI library features" {
     const FEATURE_PROTOCOLS = 0x08;
     const FEATURE_ASM_OPTIMIZED = 0x10;
     const FEATURE_HYBRID_CRYPTO = 0x20;
+    const FEATURE_ASYNC = 0x40;
+    const FEATURE_BLOCKCHAIN = 0x80;
+    const FEATURE_VPN = 0x100;
+    const FEATURE_WASM = 0x200;
+    const FEATURE_ENTERPRISE = 0x400;
 
     try std.testing.expect((features & FEATURE_QUIC_CRYPTO) != 0);
     try std.testing.expectEqual(build_options.enable_post_quantum, (features & FEATURE_POST_QUANTUM) != 0);
@@ -1721,6 +1746,11 @@ test "FFI library features" {
     try std.testing.expectEqual(build_options.enable_tls, (features & FEATURE_PROTOCOLS) != 0);
     try std.testing.expectEqual(build_options.enable_hardware_accel, (features & FEATURE_ASM_OPTIMIZED) != 0);
     try std.testing.expectEqual(build_options.enable_post_quantum, (features & FEATURE_HYBRID_CRYPTO) != 0);
+    try std.testing.expectEqual(build_options.enable_async, (features & FEATURE_ASYNC) != 0);
+    try std.testing.expectEqual(build_options.enable_blockchain, (features & FEATURE_BLOCKCHAIN) != 0);
+    try std.testing.expectEqual(build_options.enable_vpn, (features & FEATURE_VPN) != 0);
+    try std.testing.expectEqual(build_options.enable_wasm, (features & FEATURE_WASM) != 0);
+    try std.testing.expectEqual(build_options.enable_enterprise, (features & FEATURE_ENTERPRISE) != 0);
 }
 
 test "FFI capability reporting and pointer validation" {

@@ -17,7 +17,7 @@ pub fn build(b: *std.Build) !void {
     const enable_wasm = b.option(bool, "wasm", "Enable WebAssembly support") orelse true;
     const enable_enterprise = b.option(bool, "enterprise", "Enable experimental enterprise features (requires -Dexperimental-crypto=true)") orelse false;
     const enable_zkp = b.option(bool, "zkp", "Enable experimental zero-knowledge proofs (requires -Dexperimental-crypto=true)") orelse false;
-    const enable_async = b.option(bool, "async", "Enable async crypto operations (requires zsync)") orelse true;
+    const enable_async = b.option(bool, "async", "Enable async crypto operations (requires zsync)") orelse false;
 
     // ============================================================================
     // SECURITY FLAGS - Control access to experimental/insecure code paths
@@ -220,6 +220,19 @@ pub fn build(b: *std.Build) !void {
     });
     b.installArtifact(exe);
 
+    const core_example = b.addExecutable(.{
+        .name = "core-stable-example",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/core_stable.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zcrypto", .module = zcrypto_mod },
+            },
+        }),
+    });
+    b.installArtifact(core_example);
+
     // zsync crypto example executable
     if (zsync_dep) |zsync| {
         const zsync_example = b.addExecutable(.{
@@ -279,6 +292,12 @@ pub fn build(b: *std.Build) !void {
     run_cmd.addPassthruArgs();
     run_step.dependOn(&run_cmd.step);
 
+    const run_core_step = b.step("run-core", "Run the stable core example");
+    const run_core_cmd = b.addRunArtifact(core_example);
+    run_core_cmd.step.dependOn(b.getInstallStep());
+    run_core_cmd.addPassthruArgs();
+    run_core_step.dependOn(&run_core_cmd.step);
+
     // Advanced features example run step
     const run_advanced_step = b.step("run-advanced", "Run the advanced features example");
     const run_advanced_cmd = b.addRunArtifact(advanced_example);
@@ -322,8 +341,21 @@ pub fn build(b: *std.Build) !void {
     });
     const run_ffi_tests = b.addRunArtifact(ffi_tests);
 
+    const stable_api_guard_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/stable_api_guard.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zcrypto", .module = zcrypto_mod },
+            },
+        }),
+    });
+    const run_stable_api_guard_tests = b.addRunArtifact(stable_api_guard_tests);
+
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_ffi_tests.step);
+    test_step.dependOn(&run_stable_api_guard_tests.step);
 }

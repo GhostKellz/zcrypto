@@ -5,26 +5,14 @@
 const std = @import("std");
 const build_options = @import("build_options");
 
-/// Standardized crypto errors for consistent error handling
-pub const CryptoError = error{
-    InvalidSeed,
-    InvalidPrivateKey,
-    InvalidPublicKey,
-    InvalidSignature,
-    InvalidHmacKey,
-    InvalidKeyFormat,
-    InvalidKeySize,
-    InvalidNonceSize,
-    InvalidTagSize,
-    DecryptionFailed,
-    EncryptionFailed,
-    InvalidInput,
-};
+/// Core module and standardized crypto errors for stable v1.0.x callers.
+pub const core = @import("core.zig");
+pub const CryptoError = core.CryptoError;
 
 // Security guards (always available - controls access to experimental/insecure code)
 pub const security = @import("security.zig");
 
-// Core cryptographic modules (always available)
+// Stable core modules for v1.0.x consumers.
 pub const hash = @import("hash.zig");
 pub const auth = @import("auth.zig");
 pub const sym = @import("sym.zig");
@@ -39,31 +27,32 @@ pub const blake3 = @import("blake3.zig");
 pub const merkle = @import("merkle.zig");
 pub const timing = @import("timing.zig");
 pub const arena = @import("arena.zig");
-pub const ghostchain = @import("ghostchain.zig");
 
-// Always available modules
+// Stable QUIC-oriented helpers.
 pub const quic_crypto = @import("quic_crypto.zig");
 pub const quic = @import("quic.zig");
 pub const key_rotation = @import("key_rotation.zig");
 pub const QuicCrypto = quic.QuicCrypto;
 
-// Feature modules (may be available based on build configuration)
-// Note: These will be available if the corresponding features were enabled during build
+// Feature-gated modules. Disabled features intentionally expose empty namespaces
+// so compatibility checks using @hasDecl on the root do not fail.
 pub const tls = if (build_options.enable_tls) @import("feature_tls.zig") else struct {}{};
 pub const post_quantum = if (build_options.enable_post_quantum) @import("feature_pq.zig") else struct {}{};
 pub const hardware = if (build_options.enable_hardware_accel) @import("feature_hw.zig") else struct {}{};
 pub const blockchain_crypto = if (build_options.enable_blockchain) @import("feature_blockchain.zig") else struct {}{};
+pub const ghostchain = if (build_options.enable_blockchain) @import("ghostchain.zig") else struct {}{};
 pub const vpn_crypto = if (build_options.enable_vpn) @import("feature_vpn.zig") else struct {}{};
 pub const wasm_crypto = if (build_options.enable_wasm) @import("feature_wasm.zig") else struct {}{};
 pub const formal = if (build_options.enable_enterprise) @import("feature_enterprise.zig") else struct {}{};
 pub const zkp = if (build_options.enable_zkp) @import("feature_zkp.zig") else struct {}{};
 pub const async_crypto = if (build_options.enable_async) @import("feature_async.zig") else struct {};
 
-// Legacy compatibility aliases
+// Compatibility aliases retained for v1.0.x migration. New code should prefer
+// post_quantum.*, hardware.*, kex.X25519, and kex.Ed25519 directly.
 pub const pq = if (build_options.enable_post_quantum) post_quantum else struct {}{};
 pub const HardwareCrypto = if (build_options.enable_hardware_accel) @import("hardware.zig").HardwareCrypto else struct {}{};
 
-// Convenience exports for common algorithms
+// Convenience aliases for common stable algorithms.
 pub const kyber = if (build_options.enable_post_quantum) post_quantum.kyber else struct {}{};
 pub const dilithium = if (build_options.enable_post_quantum) post_quantum.dilithium else struct {}{};
 pub const x25519 = kex.X25519;
@@ -86,6 +75,8 @@ pub const build_config = struct {
 };
 
 test {
+    _ = core;
+
     // Import all core module tests
     _ = hash;
     _ = auth;
@@ -103,14 +94,16 @@ test {
     _ = merkle;
     _ = timing;
     _ = arena;
-    _ = ghostchain;
 
     // Feature modules (conditionally available)
     // Note: These tests will only run if the features were enabled during build
     if (build_options.enable_tls) _ = tls;
     if (build_options.enable_post_quantum) _ = post_quantum;
     if (build_options.enable_hardware_accel) _ = hardware;
-    if (build_options.enable_blockchain) _ = blockchain_crypto;
+    if (build_options.enable_blockchain) {
+        _ = blockchain_crypto;
+        _ = ghostchain;
+    }
     if (build_options.enable_vpn) _ = vpn_crypto;
     if (build_options.enable_wasm) _ = wasm_crypto;
     if (build_options.enable_enterprise) _ = formal;

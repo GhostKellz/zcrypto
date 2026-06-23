@@ -29,6 +29,13 @@ pub const POLY1305_TAG_SIZE = 16;
 
 /// Error types for symmetric encryption
 pub const SymError = error{
+    DecryptionFailed,
+    EncryptionFailed,
+    InvalidKeySize,
+    InvalidNonceSize,
+    InvalidTagSize,
+    InvalidInput,
+    // Compatibility aliases retained for v1.0.x callers.
     AuthenticationFailed,
     InvalidKey,
     InvalidNonce,
@@ -114,7 +121,7 @@ pub fn decryptAes128Gcm(
     ciphertext: []const u8,
     tag: [GCM_TAG_SIZE]u8,
     aad: []const u8,
-) !?[]u8 {
+) SymError![]u8 {
     const plaintext_buf = try allocator.alloc(u8, ciphertext.len);
     errdefer allocator.free(plaintext_buf);
 
@@ -126,8 +133,7 @@ pub fn decryptAes128Gcm(
         nonce,
         key,
     ) catch {
-        allocator.free(plaintext_buf);
-        return null; // Authentication failed
+        return SymError.DecryptionFailed;
     };
 
     return plaintext_buf;
@@ -141,7 +147,7 @@ pub fn decryptAes256Gcm(
     ciphertext: []const u8,
     tag: [GCM_TAG_SIZE]u8,
     aad: []const u8,
-) !?[]u8 {
+) SymError![]u8 {
     const plaintext_buf = try allocator.alloc(u8, ciphertext.len);
     errdefer allocator.free(plaintext_buf);
 
@@ -153,8 +159,7 @@ pub fn decryptAes256Gcm(
         nonce,
         key,
     ) catch {
-        allocator.free(plaintext_buf);
-        return null; // Authentication failed
+        return SymError.DecryptionFailed;
     };
 
     return plaintext_buf;
@@ -168,6 +173,60 @@ pub const ChaCha20Result = struct {
 
     pub fn deinit(self: ChaCha20Result) void {
         self.allocator.free(self.data);
+    }
+};
+
+/// Owned AES-256-GCM key bytes with explicit zeroization.
+pub const Aes256GcmKey = struct {
+    bytes: [AES_256_KEY_SIZE]u8,
+
+    pub fn random() Aes256GcmKey {
+        var bytes: [AES_256_KEY_SIZE]u8 = undefined;
+        rand.fill(&bytes);
+        return .{ .bytes = bytes };
+    }
+
+    pub fn fromBytes(bytes: [AES_256_KEY_SIZE]u8) Aes256GcmKey {
+        return .{ .bytes = bytes };
+    }
+
+    pub fn bytesCopy(self: Aes256GcmKey) [AES_256_KEY_SIZE]u8 {
+        return self.bytes;
+    }
+
+    pub fn asBytes(self: *const Aes256GcmKey) *const [AES_256_KEY_SIZE]u8 {
+        return &self.bytes;
+    }
+
+    pub fn zeroize(self: *Aes256GcmKey) void {
+        std.crypto.secureZero(u8, &self.bytes);
+    }
+};
+
+/// Owned ChaCha20-Poly1305 key bytes with explicit zeroization.
+pub const ChaCha20Poly1305Key = struct {
+    bytes: [CHACHA20_KEY_SIZE]u8,
+
+    pub fn random() ChaCha20Poly1305Key {
+        var bytes: [CHACHA20_KEY_SIZE]u8 = undefined;
+        rand.fill(&bytes);
+        return .{ .bytes = bytes };
+    }
+
+    pub fn fromBytes(bytes: [CHACHA20_KEY_SIZE]u8) ChaCha20Poly1305Key {
+        return .{ .bytes = bytes };
+    }
+
+    pub fn bytesCopy(self: ChaCha20Poly1305Key) [CHACHA20_KEY_SIZE]u8 {
+        return self.bytes;
+    }
+
+    pub fn asBytes(self: *const ChaCha20Poly1305Key) *const [CHACHA20_KEY_SIZE]u8 {
+        return &self.bytes;
+    }
+
+    pub fn zeroize(self: *ChaCha20Poly1305Key) void {
+        std.crypto.secureZero(u8, &self.bytes);
     }
 };
 
@@ -206,7 +265,7 @@ pub fn decryptChaCha20Poly1305(
     ciphertext: []const u8,
     tag: [POLY1305_TAG_SIZE]u8,
     aad: []const u8,
-) !?[]u8 {
+) SymError![]u8 {
     const plaintext_buf = try allocator.alloc(u8, ciphertext.len);
     errdefer allocator.free(plaintext_buf);
 
@@ -218,8 +277,7 @@ pub fn decryptChaCha20Poly1305(
         nonce,
         key,
     ) catch {
-        allocator.free(plaintext_buf);
-        return null; // Authentication failed
+        return SymError.DecryptionFailed;
     };
 
     return plaintext_buf;
@@ -248,7 +306,7 @@ pub fn encryptAesGcm(
     allocator: std.mem.Allocator,
     plaintext: []const u8,
     key: *const [AES_256_KEY_SIZE]u8,
-) ![]u8 {
+) SymError![]u8 {
     // Generate random nonce
     var nonce: [GCM_NONCE_SIZE]u8 = undefined;
     rand.fill(&nonce);
@@ -273,7 +331,7 @@ pub fn decryptAesGcm(
     key: *const [AES_256_KEY_SIZE]u8,
 ) SymError![]u8 {
     if (ciphertext_with_nonce.len < GCM_NONCE_SIZE + GCM_TAG_SIZE) {
-        return SymError.AuthenticationFailed;
+        return SymError.InvalidInput;
     }
 
     // Extract components
@@ -287,11 +345,7 @@ pub fn decryptAesGcm(
     @memcpy(&tag_array, tag);
 
     // Decrypt
-    const plaintext = decryptAes256Gcm(allocator, key.*, nonce_array, ciphertext, tag_array, "") catch |err| switch (err) {
-        error.OutOfMemory => return SymError.OutOfMemory,
-    };
-
-    return plaintext orelse SymError.AuthenticationFailed;
+    return decryptAes256Gcm(allocator, key.*, nonce_array, ciphertext, tag_array, "");
 }
 
 /// Simplified ChaCha20-Poly1305 encryption API (auto-generates nonce)
@@ -299,7 +353,7 @@ pub fn encryptChaCha20(
     allocator: std.mem.Allocator,
     plaintext: []const u8,
     key: *const [CHACHA20_KEY_SIZE]u8,
-) ![]u8 {
+) SymError![]u8 {
     // Generate random nonce
     var nonce: [CHACHA20_NONCE_SIZE]u8 = undefined;
     rand.fill(&nonce);
@@ -324,7 +378,7 @@ pub fn decryptChaCha20(
     key: *const [CHACHA20_KEY_SIZE]u8,
 ) SymError![]u8 {
     if (ciphertext_with_nonce.len < CHACHA20_NONCE_SIZE + POLY1305_TAG_SIZE) {
-        return SymError.AuthenticationFailed;
+        return SymError.InvalidInput;
     }
 
     // Extract components
@@ -338,11 +392,7 @@ pub fn decryptChaCha20(
     @memcpy(&tag_array, tag);
 
     // Decrypt using the original function
-    const plaintext = decryptChaCha20Poly1305(allocator, key.*, nonce_array, ciphertext, tag_array, "") catch |err| switch (err) {
-        error.OutOfMemory => return SymError.OutOfMemory,
-    };
-
-    return plaintext orelse SymError.AuthenticationFailed;
+    return decryptChaCha20Poly1305(allocator, key.*, nonce_array, ciphertext, tag_array, "");
 }
 
 test "aes-128-gcm round trip" {
@@ -363,10 +413,9 @@ test "aes-128-gcm round trip" {
 
     // Decrypt
     const decrypted = try decryptAes128Gcm(allocator, key, nonce, ciphertext.data, ciphertext.tag, aad);
-    defer if (decrypted) |d| allocator.free(d);
+    defer allocator.free(decrypted);
 
-    try std.testing.expect(decrypted != null);
-    try std.testing.expectEqualSlices(u8, plaintext, decrypted.?);
+    try std.testing.expectEqualSlices(u8, plaintext, decrypted);
 }
 
 test "aes-gcm NIST known-answer vectors" {
@@ -416,20 +465,18 @@ test "aead decrypt rejects tampered tag aad and truncated simplified inputs" {
 
     var bad_tag = encrypted.tag;
     bad_tag[0] ^= 0x01;
-    const bad_tag_plaintext = try decryptAes256Gcm(allocator, aes_key, nonce, encrypted.data, bad_tag, aad);
-    try std.testing.expect(bad_tag_plaintext == null);
+    try std.testing.expectError(SymError.DecryptionFailed, decryptAes256Gcm(allocator, aes_key, nonce, encrypted.data, bad_tag, aad));
 
-    const bad_aad_plaintext = try decryptAes256Gcm(allocator, aes_key, nonce, encrypted.data, encrypted.tag, "bad aad");
-    try std.testing.expect(bad_aad_plaintext == null);
+    try std.testing.expectError(SymError.DecryptionFailed, decryptAes256Gcm(allocator, aes_key, nonce, encrypted.data, encrypted.tag, "bad aad"));
 
-    try std.testing.expectError(SymError.AuthenticationFailed, decryptAesGcm(allocator, "too short", &aes_key));
+    try std.testing.expectError(SymError.InvalidInput, decryptAesGcm(allocator, "too short", &aes_key));
 
     const chacha_key = blk: {
         var bytes = std.mem.zeroes([CHACHA20_KEY_SIZE]u8);
         @memset(bytes[0..], 0x55);
         break :blk bytes;
     };
-    try std.testing.expectError(SymError.AuthenticationFailed, decryptChaCha20(allocator, "too short", &chacha_key));
+    try std.testing.expectError(SymError.InvalidInput, decryptChaCha20(allocator, "too short", &chacha_key));
 }
 
 test "chacha20-poly1305 round trip" {
@@ -454,10 +501,9 @@ test "chacha20-poly1305 round trip" {
 
     // Decrypt
     const decrypted = try decryptChaCha20Poly1305(allocator, key, nonce, ciphertext.data, ciphertext.tag, aad);
-    defer if (decrypted) |d| allocator.free(d);
+    defer allocator.free(decrypted);
 
-    try std.testing.expect(decrypted != null);
-    try std.testing.expectEqualSlices(u8, plaintext, decrypted.?);
+    try std.testing.expectEqualSlices(u8, plaintext, decrypted);
 }
 
 test "simplified aes gcm api" {
@@ -506,6 +552,22 @@ test "simplified chacha20 api" {
     defer allocator.free(decrypted);
 
     try std.testing.expectEqualSlices(u8, plaintext, decrypted);
+}
+
+test "symmetric key wrappers import export and zeroize" {
+    var aes_key = Aes256GcmKey.random();
+    const aes_copy = aes_key.bytesCopy();
+    const aes_imported = Aes256GcmKey.fromBytes(aes_copy);
+    try std.testing.expectEqualSlices(u8, aes_key.asBytes(), aes_imported.asBytes());
+    aes_key.zeroize();
+    try std.testing.expectEqualSlices(u8, &std.mem.zeroes([AES_256_KEY_SIZE]u8), aes_key.asBytes());
+
+    var chacha_key = ChaCha20Poly1305Key.random();
+    const chacha_copy = chacha_key.bytesCopy();
+    const chacha_imported = ChaCha20Poly1305Key.fromBytes(chacha_copy);
+    try std.testing.expectEqualSlices(u8, chacha_key.asBytes(), chacha_imported.asBytes());
+    chacha_key.zeroize();
+    try std.testing.expectEqualSlices(u8, &std.mem.zeroes([CHACHA20_KEY_SIZE]u8), chacha_key.asBytes());
 }
 
 test "aes-128 ecb helper matches stdlib block encryption" {

@@ -170,7 +170,7 @@ pub fn decryptAesGcm(
     ciphertext: []const u8,
     tag: []const u8,
     aad: []const u8,
-) !?[]u8 {
+) ![]u8 {
     if (key.len != 16) return error.InvalidKeySize;
     if (nonce.len != 12) return error.InvalidNonceSize;
     if (tag.len != 16) return error.InvalidTagSize;
@@ -179,7 +179,8 @@ pub fn decryptAesGcm(
     const nonce_array: [12]u8 = nonce[0..12].*;
     const tag_array: [16]u8 = tag[0..16].*;
 
-    return sym.decryptAes128Gcm(allocator, key_array, nonce_array, ciphertext, tag_array, aad);
+    const plaintext = try sym.decryptAes128Gcm(allocator, key_array, nonce_array, ciphertext, tag_array, aad);
+    return plaintext;
 }
 
 /// Compute packet number from truncated packet number (RFC 9000 Section A.3)
@@ -451,19 +452,22 @@ pub const AeadCipher = struct {
                 const key_array: [16]u8 = self.key[0..16].*;
                 const nonce_array: [12]u8 = nonce[0..12].*;
                 const tag_array: [16]u8 = tag[0..16].*;
-                return sym.decryptAes128Gcm(allocator, key_array, nonce_array, ciphertext, tag_array, aad);
+                const plaintext = try sym.decryptAes128Gcm(allocator, key_array, nonce_array, ciphertext, tag_array, aad);
+                return plaintext;
             },
             .TLS_AES_256_GCM_SHA384 => {
                 const key_array: [32]u8 = self.key[0..32].*;
                 const nonce_array: [12]u8 = nonce[0..12].*;
                 const tag_array: [16]u8 = tag[0..16].*;
-                return sym.decryptAes256Gcm(allocator, key_array, nonce_array, ciphertext, tag_array, aad);
+                const plaintext = try sym.decryptAes256Gcm(allocator, key_array, nonce_array, ciphertext, tag_array, aad);
+                return plaintext;
             },
             .TLS_CHACHA20_POLY1305_SHA256 => {
                 const key_array: [32]u8 = self.key[0..32].*;
                 const nonce_array: [12]u8 = nonce[0..12].*;
                 const tag_array: [16]u8 = tag[0..16].*;
-                return sym.decryptChaCha20Poly1305(allocator, key_array, nonce_array, ciphertext, tag_array, aad);
+                const plaintext = try sym.decryptChaCha20Poly1305(allocator, key_array, nonce_array, ciphertext, tag_array, aad);
+                return plaintext;
             },
         }
     }
@@ -545,10 +549,9 @@ test "aes-gcm encryption integration" {
 
     // Decrypt
     const decrypted = try decryptAesGcm(allocator, &key, &nonce, ciphertext.data, &ciphertext.tag, aad);
-    defer if (decrypted) |d| allocator.free(d);
+    defer allocator.free(decrypted);
 
-    try std.testing.expect(decrypted != null);
-    try std.testing.expectEqualSlices(u8, plaintext, decrypted.?);
+    try std.testing.expectEqualSlices(u8, plaintext, decrypted);
 }
 
 test "hkdf expand label integration" {

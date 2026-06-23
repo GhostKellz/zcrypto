@@ -27,7 +27,7 @@ The core API in this release is intended to be stable. Several optional modules 
 * **Modular architecture:** Enable only the features you need with build-time flags.
 * **Audit-friendly:** Easy to read, easy to verify. Minimal dependencies.
 * **Cross-platform:** Works seamlessly on Linux, macOS, Windows, and embedded targets.
-* **Complements Zig std.crypto:** Zig now offers crypto functionality in its standard library; this library provides additional blockchain-specific and experimental features.
+* **Complements Zig std.crypto:** Zig now offers crypto functionality in its standard library; this library provides curated wrappers, QUIC/TLS helpers, feature-gated integrations, and experimental opt-in modules.
 
 ---
 
@@ -45,7 +45,7 @@ Zcrypto supports selective compilation with feature flags:
 | **+ VPN** | +4MB | WireGuard, IPsec, IKEv2 protocols |
 | **+ Enterprise** | +3MB | Experimental HSM / formal-analysis helpers |
 | **+ ZKP** | +6MB | Experimental zero-knowledge proof APIs |
-| **+ Async** | +2MB | Async crypto with zsync integration |
+| **+ Async** | +2MB | Opt-in async crypto with zsync integration |
 
 **Build Size Examples:**
 - Embedded/IoT: ~3MB (core only)
@@ -76,13 +76,26 @@ Zcrypto supports selective compilation with feature flags:
 * **WebAssembly** - Browser-compatible crypto operations
 * **Enterprise** - Experimental HSM and analysis helpers
 * **Zero-Knowledge Proofs** - Experimental proof-system APIs
-* **Async Operations** - Concurrent crypto with zsync runtime
+* **Async Operations** - Opt-in concurrent crypto with zsync runtime
 
 Experimental feature families (`post_quantum`, `blockchain_crypto`, `formal`,
 `zkp`, and research-oriented protocol helpers) are not part of the frozen stable
-core contract in v1.0.5. Use them with explicit feature flags, expect API churn,
+core contract in v1.0.6. Use them with explicit feature flags, expect API churn,
 and keep production integrations on the stable core unless you are intentionally
 testing those surfaces.
+
+---
+
+## zcrypto and std.crypto
+
+Use Zig `std.crypto` directly when you only need a single audited primitive and
+do not need zcrypto's API shape. Use zcrypto when the wrapper adds integration
+value: allocator-owned AEAD helpers, stable hash/KDF/key-exchange namespaces,
+QUIC/TLS utility code, zsync-compatible async wrappers, package-level feature
+gates, and downstream compatibility coverage with zquic. Experimental modules
+remain opt-in and should not be treated as replacements for stdlib primitives.
+Async support is also opt-in: pass `-Dasync=true` when you want zsync-backed
+helpers.
 
 ---
 
@@ -95,20 +108,22 @@ Current toolchain baseline: Zig `0.17.0-dev` — see `minimum_zig_version` in
 
 ```bash
 # Replace the tag with the latest release.
-zig fetch --save https://github.com/ghostkellz/zcrypto/archive/refs/tags/v1.0.5.tar.gz
+zig fetch --save https://github.com/ghostkellz/zcrypto/archive/refs/tags/v1.0.6.tar.gz
 ```
 
 ### Basic Usage (Core Only)
 
 ```zig
+const std = @import("std");
 const zcrypto = @import("zcrypto");
 
 // Hashing
 const hash = zcrypto.hash.sha256("Hello, zcrypto!");
-std.debug.print("SHA-256: {x}\n", .{std.fmt.fmtSliceHexLower(&hash)});
+var hash_hex: [64]u8 = undefined;
+std.debug.print("SHA-256: {s}\n", .{zcrypto.hash.toHex([32]u8, hash, &hash_hex)});
 
 // Encryption
-const key = [_]u8{0x01} ** 32;
+const key = [_]u8{ 0x01 } ** 32;
 const encrypted = try zcrypto.sym.encryptAesGcm(allocator, "secret", &key);
 defer allocator.free(encrypted);
 const decrypted = try zcrypto.sym.decryptAesGcm(allocator, encrypted, &key);
@@ -141,11 +156,13 @@ exe.root_module.addImport("zcrypto", zcrypto.module("zcrypto"));
 
 ## 📚 Documentation
 
+- **[Documentation Home](docs/README.md)** - Full docs map, stability model, and production checklist
 - **[Quick Start](docs/getting-started/quick-start.md)** - Get started in minutes
 - **[Build Configuration](docs/getting-started/build-config.md)** - Feature flags and optimization
 - **[API Reference](docs/api/core.md)** - Stable core API documentation
-- **[Features](docs/features/README.md)** - Optional feature guides
-- **[Examples](docs/examples/README.md)** - Working code examples
+- **[Features](docs/features/overview.md)** - Optional feature guides
+- **[Examples](docs/examples/overview.md)** - Working code examples
+- **[Architecture](docs/internals/architecture.md)** - Module graph, feature gates, and downstream boundaries
 - **[FIPS Posture](docs/security/fips.md)** - Approved vs experimental algorithms
 - **[Contributing](CONTRIBUTING.md)** - Development guidelines
 

@@ -68,6 +68,14 @@ Computes a 64-byte Blake2b hash of the input data.
 ### AES-GCM
 
 ```zig
+pub const Aes256GcmKey = struct {
+    pub fn random() Aes256GcmKey
+    pub fn fromBytes(bytes: [32]u8) Aes256GcmKey
+    pub fn bytesCopy(self: Aes256GcmKey) [32]u8
+    pub fn asBytes(self: *const Aes256GcmKey) *const [32]u8
+    pub fn zeroize(self: *Aes256GcmKey) void
+}
+
 pub fn encryptAesGcm(allocator: std.mem.Allocator, plaintext: []const u8, key: *const [32]u8) ![]u8
 pub fn decryptAesGcm(allocator: std.mem.Allocator, ciphertext_with_nonce: []const u8, key: *const [32]u8) ![]u8
 ```
@@ -86,6 +94,14 @@ Authenticated encryption with AES-GCM.
 ### ChaCha20-Poly1305
 
 ```zig
+pub const ChaCha20Poly1305Key = struct {
+    pub fn random() ChaCha20Poly1305Key
+    pub fn fromBytes(bytes: [32]u8) ChaCha20Poly1305Key
+    pub fn bytesCopy(self: ChaCha20Poly1305Key) [32]u8
+    pub fn asBytes(self: *const ChaCha20Poly1305Key) *const [32]u8
+    pub fn zeroize(self: *ChaCha20Poly1305Key) void
+}
+
 pub fn encryptChaCha20(allocator: std.mem.Allocator, plaintext: []const u8, key: *const [32]u8) ![]u8
 pub fn decryptChaCha20(allocator: std.mem.Allocator, ciphertext_with_nonce: []const u8, key: *const [32]u8) ![]u8
 ```
@@ -106,10 +122,18 @@ Authenticated encryption with ChaCha20-Poly1305.
 ### HMAC-SHA256
 
 ```zig
+pub const HmacKey = struct {
+    pub fn fromBytes(allocator: std.mem.Allocator, bytes: []const u8) !HmacKey
+    pub fn random(allocator: std.mem.Allocator, len: usize) !HmacKey
+    pub fn asBytes(self: HmacKey) []const u8
+    pub fn deinit(self: *HmacKey) void
+}
+
 pub fn hmacSha256(message: []const u8, key: []const u8) [32]u8
 ```
 
 Computes HMAC-SHA256 of data with key.
+`auth.HmacKey` owns copied key material and zeroizes it before freeing.
 
 **Parameters:**
 - `message`: Data to authenticate
@@ -398,5 +422,5 @@ pub const CryptoError = error{
 
 `zcrypto.CryptoError` and `zcrypto.core.CryptoError` expose the shared stable
 core error vocabulary. Individual modules may still expose narrower local error
-sets for operation-specific failures; v1.0.5 tracks unifying those public return
+sets for operation-specific failures; v1.0.6 tracks unifying those public return
 contracts where doing so does not hide useful failure detail.

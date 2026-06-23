@@ -25,9 +25,9 @@ These modules are the intended stable surface for `v1.0.x`:
 - `zcrypto.quic`
 - `zcrypto.key_rotation`
 
-Additional always-available root exports such as `zcrypto.ghostchain` are
-currently documented as compatibility or domain-specific helpers rather than the
-minimal stable core contract. Prefer the modules above for new integrations.
+Domain-specific helpers such as `zcrypto.ghostchain` are gated behind their
+feature families and are not part of the minimal stable core contract. Prefer
+the modules above for new integrations.
 
 ## Feature-Gated Modules
 
@@ -47,12 +47,13 @@ they are not the stable core contract for `v1.0.x`.
 - `zcrypto.post_quantum`
 - `zcrypto.pq`
 - `zcrypto.blockchain_crypto`
+- `zcrypto.ghostchain`
 - `zcrypto.formal`
 - `zcrypto.zkp`
 
 These require explicit build-time opt-in with `-Dexperimental-crypto=true` in addition to their feature flags.
 
-In v1.0.5, experimental means:
+In v1.0.6, experimental means:
 
 - API names and return shapes may change in a patch release.
 - Build flags are intentionally explicit so downstream consumers do not
@@ -100,4 +101,4 @@ bash dev/experimental_pq_check.sh
 
 - Prefer the examples in `src/main.zig`, `examples/advanced_features.zig`, and `examples/zsync_crypto_example.zig` over older ad hoc snippets.
 - If a module is experimental, treat its API as subject to change until a later release explicitly promotes it.
-- `zcrypto.CryptoError` and `zcrypto.core.CryptoError` are the shared stable core error vocabulary; some modules still expose narrower local errors while v1.0.5 tightens consistency.
+- `zcrypto.CryptoError` and `zcrypto.core.CryptoError` are the shared stable core error vocabulary; some modules still expose narrower local errors while v1.0.6 tightens consistency.

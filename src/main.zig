@@ -36,8 +36,8 @@ pub fn main() !void {
     std.debug.print("  Encrypted {} bytes with AES-128-GCM\n", .{plaintext.len});
 
     const decrypted = try zcrypto.sym.decryptAes128Gcm(allocator, key, nonce, encrypted.data, encrypted.tag, aad);
-    defer if (decrypted) |d| allocator.free(d);
-    std.debug.print("  Decryption successful: {}\n", .{decrypted != null});
+    defer allocator.free(decrypted);
+    std.debug.print("  Decryption successful: {}\n", .{std.mem.eql(u8, plaintext, decrypted)});
 
     if (zcrypto.build_config.tls_enabled) {
         std.debug.print("\n🌐 QUIC/TLS Integration:\n", .{});

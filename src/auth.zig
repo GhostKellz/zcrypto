@@ -5,6 +5,34 @@
 
 const std = @import("std");
 const hash = @import("hash.zig");
+const rand = @import("rand.zig");
+
+/// Allocator-owned HMAC key material with explicit zeroization on deinit.
+pub const HmacKey = struct {
+    allocator: std.mem.Allocator,
+    bytes: []u8,
+
+    pub fn fromBytes(allocator: std.mem.Allocator, bytes: []const u8) !HmacKey {
+        const owned = try allocator.dupe(u8, bytes);
+        return .{ .allocator = allocator, .bytes = owned };
+    }
+
+    pub fn random(allocator: std.mem.Allocator, len: usize) !HmacKey {
+        const owned = try allocator.alloc(u8, len);
+        rand.fill(owned);
+        return .{ .allocator = allocator, .bytes = owned };
+    }
+
+    pub fn asBytes(self: HmacKey) []const u8 {
+        return self.bytes;
+    }
+
+    pub fn deinit(self: *HmacKey) void {
+        std.crypto.secureZero(u8, self.bytes);
+        self.allocator.free(self.bytes);
+        self.bytes = &.{};
+    }
+};
 
 /// HMAC-SHA256 computation with clean API
 pub const hmac = struct {
@@ -141,4 +169,13 @@ test "streaming hmac sha512" {
 
     const expected = hmac.sha512("Streaming SHA-512 HMAC test", key);
     try std.testing.expectEqualSlices(u8, &expected, &result);
+}
+
+test "owned hmac key imports exports and zeroizes" {
+    const allocator = std.testing.allocator;
+    var key = try HmacKey.fromBytes(allocator, "owned-hmac-key");
+    defer key.deinit();
+
+    const tag = hmac.sha256("message", key.asBytes());
+    try std.testing.expect(verifyHmacSha256("message", key.asBytes(), tag));
 }

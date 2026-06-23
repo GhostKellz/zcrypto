@@ -13,6 +13,6 @@ export ZIG_GLOBAL_CACHE_DIR ZIG_LOCAL_CACHE_DIR
 
 "$zig_bin" build run
 "$zig_bin" build run-advanced -Dhardware-accel=true
-"$zig_bin" build run-zsync
+"$zig_bin" build run-zsync -Dasync=true
 
 echo "smoke runs passed"
