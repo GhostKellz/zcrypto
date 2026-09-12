@@ -290,7 +290,23 @@ pub const KeySchedule = struct {
         }
     }
 
-    /// Derive a secret using TLS 1.3 Derive-Secret
+    /// TLS 1.3 Derive-Secret over raw handshake messages, hashed here.
+    ///
+    ///     Derive-Secret(Secret, Label, Messages) =
+    ///         HKDF-Expand-Label(Secret, Label, Transcript-Hash(Messages), Hash.length)
+    ///
+    /// `messages` is the message list, not its digest. RFC 8446 Section 7.1
+    /// writes the third argument as `""` for the two "derived" steps, and this
+    /// overload is what makes that literal correct: `Transcript-Hash("")` is
+    /// `Hash("")`, which is what those steps consume.
+    ///
+    /// A handshake does not have a message list to hand -- it hashes the
+    /// transcript incrementally and holds the running digest. Those callers want
+    /// `deriveSecretFromTranscriptHash`. Passing an already-computed digest here
+    /// hashes it a second time and yields a secret no peer will ever derive; it
+    /// is self-consistent between two endpoints running this same code, so a
+    /// round-trip test cannot see it, which is how it survived until the
+    /// RFC 8448 vectors were added.
     pub fn deriveSecret(self: *KeySchedule, secret: []const u8, label: []const u8, messages: []const u8) ![]u8 {
         const hash_len = self.hash_alg.digestSize();
         const transcript_hash = try self.allocator.alloc(u8, hash_len);
@@ -319,9 +335,169 @@ pub const KeySchedule = struct {
             },
         }
 
+        return self.deriveSecretFromTranscriptHash(secret, label, transcript_hash);
+    }
+
+    /// TLS 1.3 Derive-Secret where `Transcript-Hash(Messages)` is already known.
+    ///
+    /// This is the form every handshake actually needs. The transcript is hashed
+    /// incrementally as messages go by, so what a connection holds at a
+    /// derivation point is the digest, never the message list.
+    ///
+    /// The length check is the whole point of the separation being a distinct
+    /// function rather than a convention: a caller that reaches for this one with
+    /// a raw message list gets `InvalidTranscriptHash` instead of a plausible
+    /// secret. Without it the two overloads would differ only in a comment, and
+    /// the confusion they exist to prevent would be free to recur.
+    pub fn deriveSecretFromTranscriptHash(
+        self: *KeySchedule,
+        secret: []const u8,
+        label: []const u8,
+        transcript_hash: []const u8,
+    ) ![]u8 {
+        const hash_len = self.hash_alg.digestSize();
+        if (transcript_hash.len != hash_len) return error.InvalidTranscriptHash;
         return kdf.hkdfExpandLabel(self.allocator, secret, label, transcript_hash, hash_len);
     }
+
+    /// The PSK binder key, RFC 8446 Section 7.1:
+    ///
+    ///     Derive-Secret(Early Secret, "res binder", "")
+    ///
+    /// The `""` is the RFC's literal and is correct here for the same reason it
+    /// is in the two "derived" steps: the binder key itself is bound to no
+    /// transcript. What the binder is bound to arrives separately, as the digest
+    /// handed to `verifyData`.
+    ///
+    /// Only meaningful once `deriveEarlySecret` has been given the resumption
+    /// PSK. Called after `deriveEarlySecret(null)` it returns a key derived from
+    /// zeros, which is a perfectly well-formed value that no peer will ever
+    /// agree with; the ordering is the caller's to get right.
+    pub fn resumptionBinderKey(self: *KeySchedule) ![]u8 {
+        return self.deriveSecret(self.early_secret, "res binder", "");
+    }
 };
+
+/// Feed one complete handshake message into a transcript hash.
+///
+/// RFC 8446 Section 4.4.1 hashes the concatenation of the handshake messages,
+/// and a handshake message is its four-byte `HandshakeType || uint24 length`
+/// header followed by the body. The header is part of the hash input, not
+/// framing to be stripped before hashing. RFC 8448's traces show this directly:
+/// the binder transcript in Section 4 is a digest of a ClientHello prefix that
+/// begins `01 00 01 fc`, and `known_answer_vectors.zig` checks it.
+///
+/// This exists because the send path holds a body it is about to write a header
+/// for, and the receive path holds a body whose header has already been
+/// stripped. Both must hash the same bytes a conforming peer does, so both
+/// reconstruct the header here rather than each open-coding it.
+///
+/// `msg_type` is the raw byte rather than the `HandshakeType` enum so that this
+/// stays free of a dependency on the client module's wire enums.
+///
+/// Deliberately not folded into the send and receive helpers: callers must keep
+/// control of *when* a message enters the transcript, because Finished is
+/// verified against the transcript that excludes it and CertificateVerify signs
+/// the transcript that excludes itself.
+pub fn transcriptUpdate(transcript: *hash.Sha256, msg_type: u8, body: []const u8) void {
+    var header: [4]u8 = undefined;
+    header[0] = msg_type;
+    std.mem.writeInt(u24, header[1..4], @intCast(body.len), .big);
+    transcript.update(&header);
+    transcript.update(body);
+}
+
+/// The prefix of a ClientHello that a PSK binder is computed over.
+///
+/// RFC 8446 Section 4.2.11.2: a binder is a MAC over the ClientHello up to and
+/// including the `identities` list of the `pre_shared_key` extension, stopping
+/// immediately before the `binders` list -- that list's own two-byte length
+/// prefix included. The extension is required to be the last one in the message
+/// exactly so that this region is a prefix, which is what lets the offering
+/// client and the verifying server compute the same bytes.
+///
+/// `binders_len` is the value of the two-byte prefix, so the removed tail is
+/// `2 + binders_len`. Since that tail is a suffix, this works equally on the
+/// whole handshake message and on its body alone; `clientHelloBinderTranscript`
+/// takes the body, because that is the form an endpoint has in hand.
+///
+/// A server calls this with a length it read out of an attacker-controlled
+/// message, hence the bound check rather than an unchecked subtraction: a
+/// `binders_len` larger than the message would otherwise underflow into a
+/// slice covering most of the address space.
+pub fn clientHelloBinderPrefix(client_hello: []const u8, binders_len: usize) ![]const u8 {
+    const tail = 2 + binders_len;
+    if (tail > client_hello.len) return error.MalformedClientHello;
+    return client_hello[0 .. client_hello.len - tail];
+}
+
+/// `Transcript-Hash(Truncate(ClientHello))` -- the digest a PSK binder is a MAC
+/// over, which is what both endpoints actually need.
+///
+/// `body` is the ClientHello body without its handshake header and *without* any
+/// truncation applied: the whole message as it goes on the wire, binders and all.
+///
+/// The subtlety this exists to contain: the transcript covers the handshake
+/// header (see `transcriptUpdate`), and the header still declares the length of
+/// the *untruncated* ClientHello. Truncation removes bytes from the hash input
+/// without renumbering the header, so the digest is over a byte string that is
+/// not a well-formed handshake message. Writing this out at each call site
+/// invites hashing the truncated length instead, which fails only against a real
+/// peer -- both endpoints here would make the identical mistake and agree.
+///
+/// `known_answer_vectors.zig` pins this against RFC 8448 Section 4.
+pub fn clientHelloBinderTranscript(body: []const u8, binders_len: usize) !hash.Sha256Hash {
+    const truncated = try clientHelloBinderPrefix(body, binders_len);
+
+    var header: [4]u8 = undefined;
+    header[0] = 1; // client_hello
+    std.mem.writeInt(u24, header[1..4], @intCast(body.len), .big);
+
+    var transcript = hash.Sha256.init();
+    transcript.update(&header);
+    transcript.update(truncated);
+    return transcript.final();
+}
+
+/// The Finished MAC, RFC 8446 Section 4.4.4:
+///
+///     finished_key = HKDF-Expand-Label(base_secret, "finished", "", Hash.length)
+///     verify_data  = HMAC(finished_key, transcript_hash)
+///
+/// Also the PSK binder. RFC 8446 Section 4.2.11.2 defines a binder as exactly
+/// this computation, taking the binder key as `base_secret` and the digest of
+/// the truncated ClientHello as `transcript_hash` -- which is why there is one
+/// function here rather than a third copy alongside the client's and the
+/// server's. The binder path is then produced by code the existing handshake
+/// tests already drive, and a correction to any of the three is a correction to
+/// all of them.
+///
+/// Caller owns the returned buffer; it is `hash_alg.digestSize()` bytes.
+pub fn verifyData(
+    allocator: std.mem.Allocator,
+    hash_alg: config.HashAlgorithm,
+    base_secret: []const u8,
+    transcript_hash: []const u8,
+) ![]u8 {
+    const hash_len = hash_alg.digestSize();
+    if (transcript_hash.len != hash_len) return error.InvalidTranscriptHash;
+
+    const finished_key = try kdf.hkdfExpandLabel(allocator, base_secret, "finished", "", hash_len);
+    defer {
+        util.secureZero(finished_key);
+        allocator.free(finished_key);
+    }
+
+    const out = try allocator.alloc(u8, hash_len);
+    errdefer allocator.free(out);
+
+    switch (hash_alg) {
+        .sha256 => std.crypto.auth.hmac.sha2.HmacSha256.create(out[0..32], transcript_hash, finished_key),
+        .sha384 => std.crypto.auth.hmac.sha2.HmacSha384.create(out[0..48], transcript_hash, finished_key),
+        .sha512 => std.crypto.auth.hmac.sha2.HmacSha512.create(out[0..64], transcript_hash, finished_key),
+    }
+    return out;
+}
 
 /// Transcript hash for TLS 1.3
 pub const TranscriptHash = struct {
@@ -438,7 +614,15 @@ pub const AeadCipher = struct {
             .TLS_CHACHA20_POLY1305_SHA256 => {
                 const key_array: [32]u8 = self.key[0..32].*;
                 const nonce_array: [12]u8 = nonce[0..12].*;
-                return sym.encryptChaCha20Poly1305(allocator, key_array, nonce_array, plaintext, aad);
+                // `ChaCha20Result` and `Ciphertext` have the same shape but are
+                // distinct types. Move the buffer across rather than calling
+                // `deinit`: ownership transfers to the returned `Ciphertext`.
+                const result = try sym.encryptChaCha20Poly1305(allocator, key_array, nonce_array, plaintext, aad);
+                return sym.Ciphertext{
+                    .data = result.data,
+                    .tag = result.tag,
+                    .allocator = result.allocator,
+                };
             },
         }
     }
@@ -472,6 +656,77 @@ pub const AeadCipher = struct {
         }
     }
 };
+
+// The transcript covers the handshake header, not just the body.
+//
+// The expected digests below were produced outside this codebase, by hashing
+// `HandshakeType || uint24 length || body` directly, precisely because a
+// transcript this implementation computes for itself proves nothing: for a
+// long time both endpoints here hashed bodies alone, agreed with each other,
+// and passed every handshake test in the repository while disagreeing with
+// every conforming peer. `known_answer_vectors.zig` anchors the same rule to
+// RFC 8448, where the binder transcript is a digest over a ClientHello prefix
+// that starts with its own `01 00 01 fc` header.
+test "the transcript hashes the handshake header along with the body" {
+    // A plausible Finished body: 32 bytes, distinct from each other so that a
+    // length or ordering slip shows up rather than cancelling out.
+    const counting: [32]u8 = blk: {
+        var b: [32]u8 = undefined;
+        for (&b, 0..) |*x, i| x.* = @intCast(i);
+        break :blk b;
+    };
+
+    const cases = .{
+        .{
+            .msg_type = @as(u8, 1), // client_hello
+            .body = @as([]const u8, "hello world"),
+            .framed = "dd0043d37eb13f2d9830f6b7abf1dae2b6f132e24311c20e77d537c6ea561661",
+            .body_only = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+        },
+        .{
+            .msg_type = @as(u8, 20), // finished
+            .body = @as([]const u8, &counting),
+            .framed = "2d8a5e23181b4135734b78755bf84e16e36ee15444ad0b6dea571108842231f7",
+            .body_only = "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd",
+        },
+    };
+
+    inline for (cases) |case| {
+        var expected_framed: [32]u8 = undefined;
+        _ = try std.fmt.hexToBytes(&expected_framed, case.framed);
+        var expected_body_only: [32]u8 = undefined;
+        _ = try std.fmt.hexToBytes(&expected_body_only, case.body_only);
+
+        var transcript = hash.Sha256.init();
+        transcriptUpdate(&transcript, case.msg_type, case.body);
+        const digest = transcript.final();
+
+        try std.testing.expectEqualSlices(u8, &expected_framed, &digest);
+
+        // The regression this replaces, stated so it cannot creep back: hashing
+        // the body alone is a different transcript, not a harmless framing
+        // choice.
+        try std.testing.expect(!std.mem.eql(u8, &expected_body_only, &digest));
+    }
+}
+
+// Message boundaries are part of the transcript, not just the byte stream.
+//
+// Two messages whose bodies concatenate to the same bytes must still produce
+// different transcripts, because each contributes its own length header. A
+// transcript that hashed bodies alone would collapse these two, which is the
+// property that lets a peer re-cut a handshake into different messages without
+// disturbing the Finished MACs.
+test "the transcript distinguishes different message framings of the same bytes" {
+    var one = hash.Sha256.init();
+    transcriptUpdate(&one, 1, "abcdef");
+
+    var two = hash.Sha256.init();
+    transcriptUpdate(&two, 1, "abc");
+    transcriptUpdate(&two, 1, "def");
+
+    try std.testing.expect(!std.mem.eql(u8, &one.final(), &two.final()));
+}
 
 test "derive initial secrets" {
     const cid = [_]u8{ 0x12, 0x34, 0x56, 0x78 };
@@ -586,62 +841,6 @@ test "packet number computation" {
     try std.testing.expectEqual(@as(u64, 0x100), result3);
 }
 
-// =============================================================================
-// ASYNC CONVENIENCE FUNCTIONS
-// =============================================================================
-
-/// Async convenience functions that use the async_crypto module
-/// Import async_crypto to use these functions in async contexts
-pub const Async = struct {
-    /// Get async KDF crypto handler for TLS operations
-    /// Usage: const async_tls = zcrypto.tls.Async.init(allocator, runtime);
-    pub fn init(allocator: std.mem.Allocator, runtime: anytype) !@import("async_crypto.zig").AsyncKdf {
-        return @import("async_crypto.zig").AsyncKdf.init(allocator, runtime);
-    }
-
-    /// Async key derivation from TLS 1.3/QUIC secrets
-    /// Returns Task that can be awaited for TrafficKeys
-    /// Performs multiple HKDF-Expand-Label operations in parallel
-    pub fn deriveKeysAsync(allocator: std.mem.Allocator, runtime: anytype, secrets: Secrets, is_client: bool) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
-        const task_data = allocator.create(TlsKeyDerivationData) catch unreachable;
-        task_data.* = .{
-            .secrets = secrets,
-            .is_client = is_client,
-            .allocator = allocator,
-        };
-        return runtime.spawn(tlsKeyDerivationWorker, task_data);
-    }
-
-    /// Async HKDF-Expand-Label operation for TLS 1.3
-    /// Returns Task that can be awaited for derived key material
-    pub fn hkdfExpandLabelAsync(allocator: std.mem.Allocator, runtime: anytype, secret: []const u8, label: []const u8, context: []const u8, length: u16) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
-        const async_kdf = init(allocator, runtime) catch unreachable;
-        return async_kdf.hkdfExpandLabelAsync(secret, label, context, length);
-    }
-
-    /// Async TLS 1.3 key schedule computation
-    /// Derives all handshake secrets asynchronously for improved TLS performance
-    pub fn deriveHandshakeSecretsAsync(allocator: std.mem.Allocator, runtime: anytype, handshake_secret: [32]u8) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
-        const task_data = allocator.create(HandshakeSecretsData) catch unreachable;
-        task_data.* = .{
-            .handshake_secret = handshake_secret,
-            .allocator = allocator,
-        };
-        return runtime.spawn(handshakeSecretsWorker, task_data);
-    }
-
-    /// Async application traffic key derivation
-    /// Derives application data keys for TLS 1.3 connections
-    pub fn deriveApplicationSecretsAsync(allocator: std.mem.Allocator, runtime: anytype, master_secret: [32]u8) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
-        const task_data = allocator.create(ApplicationSecretsData) catch unreachable;
-        task_data.* = .{
-            .master_secret = master_secret,
-            .allocator = allocator,
-        };
-        return runtime.spawn(applicationSecretsWorker, task_data);
-    }
-};
-
 const TlsKeyDerivationData = struct {
     secrets: Secrets,
     is_client: bool,
@@ -670,22 +869,55 @@ const ApplicationSecretsData = struct {
     }
 };
 
+/// Elapsed nanoseconds since `start`, or null if the duration is unknown.
+///
+/// Null covers all three ways the measurement can be unavailable -- the start
+/// read failed, the end read failed, or the clock went backwards -- because a
+/// caller can act on none of them differently: each means there is no duration
+/// to report. The workers below call this rather than subtracting timestamps,
+/// which is what let a failed clock read turn into a plausible-looking number.
+fn elapsedNsSince(start: ?util.Instant) ?u64 {
+    const begin = start orelse return null;
+    const end = util.getMonotonic() orelse return null;
+    return end.since(begin) catch null;
+}
+
+test "an unreadable start clock yields no duration rather than a number" {
+    // The failure this guards is not a wrong duration, it is a duration that
+    // looks right. The previous code read the wall clock with a 0 fallback, so a
+    // failed start read published `end - 0` -- the whole Unix epoch, about 56
+    // years -- through the same field a real measurement uses, and no caller
+    // could tell the two apart. Passing null is how a caller sees that failure.
+    try std.testing.expectEqual(@as(?u64, null), elapsedNsSince(null));
+}
+
+test "a readable clock still produces a duration" {
+    // Pairs with the test above so that neither passes alone: a helper hardwired
+    // to return null would satisfy the null case while measuring nothing.
+    const start = util.getMonotonic() orelse return error.SkipZigTest;
+    const elapsed = elapsedNsSince(start) orelse return error.TestUnexpectedResult;
+    // Only an upper bound is asserted. Two adjacent reads may legitimately land
+    // on the same tick, so `> 0` would be a timing race; a full minute between
+    // them would not be.
+    try std.testing.expect(elapsed < std.time.ns_per_min);
+}
+
 fn tlsKeyDerivationWorker(task_data: *TlsKeyDerivationData) @import("async_crypto.zig").AsyncCryptoResult {
-    const start_time = util.getTimestampNanosOrZero();
+    const start_time = util.getMonotonic();
     defer task_data.deinit();
 
     const traffic_keys = task_data.secrets.deriveKeys(task_data.allocator, task_data.is_client) catch |err| {
-        const end_time = util.getTimestampNanosOrZero();
+        const elapsed = elapsedNsSince(start_time);
         const error_msg = std.fmt.allocPrint(task_data.allocator, "TLS key derivation failed: {}", .{err}) catch "TLS key derivation failed";
-        return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, @intCast(end_time - start_time));
+        return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, elapsed);
     };
 
     // Serialize traffic keys to bytes for result
     const key_data = task_data.allocator.alloc(u8, 16 + 12 + 16) catch {
         traffic_keys.deinit();
-        const end_time = util.getTimestampNanosOrZero();
+        const elapsed = elapsedNsSince(start_time);
         const error_msg = task_data.allocator.dupe(u8, "Memory allocation failed") catch "Memory allocation failed";
-        return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, @intCast(end_time - start_time));
+        return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, elapsed);
     };
 
     @memcpy(key_data[0..16], &traffic_keys.key);
@@ -693,72 +925,72 @@ fn tlsKeyDerivationWorker(task_data: *TlsKeyDerivationData) @import("async_crypt
     @memcpy(key_data[28..44], &traffic_keys.hp);
     traffic_keys.deinit();
 
-    const end_time = util.getTimestampNanosOrZero();
-    return @import("async_crypto.zig").AsyncCryptoResult.success_result(key_data, @intCast(end_time - start_time));
+    const elapsed = elapsedNsSince(start_time);
+    return @import("async_crypto.zig").AsyncCryptoResult.success_result(key_data, elapsed);
 }
 
 fn handshakeSecretsWorker(task_data: *HandshakeSecretsData) @import("async_crypto.zig").AsyncCryptoResult {
-    const start_time = util.getTimestampNanosOrZero();
+    const start_time = util.getMonotonic();
     defer task_data.deinit();
 
     // Derive client and server handshake secrets
     const client_secret = kdf.hkdfExpandLabel(task_data.allocator, &task_data.handshake_secret, "c hs traffic", "", 32) catch |err| {
-        const end_time = util.getTimestampNanosOrZero();
+        const elapsed = elapsedNsSince(start_time);
         const error_msg = std.fmt.allocPrint(task_data.allocator, "Client handshake secret derivation failed: {}", .{err}) catch "Client handshake secret derivation failed";
-        return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, @intCast(end_time - start_time));
+        return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, elapsed);
     };
     defer task_data.allocator.free(client_secret);
 
     const server_secret = kdf.hkdfExpandLabel(task_data.allocator, &task_data.handshake_secret, "s hs traffic", "", 32) catch |err| {
-        const end_time = util.getTimestampNanosOrZero();
+        const elapsed = elapsedNsSince(start_time);
         const error_msg = std.fmt.allocPrint(task_data.allocator, "Server handshake secret derivation failed: {}", .{err}) catch "Server handshake secret derivation failed";
-        return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, @intCast(end_time - start_time));
+        return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, elapsed);
     };
     defer task_data.allocator.free(server_secret);
 
     // Combine secrets for result
     const combined_secrets = task_data.allocator.alloc(u8, 64) catch {
-        const end_time = util.getTimestampNanosOrZero();
+        const elapsed = elapsedNsSince(start_time);
         const error_msg = task_data.allocator.dupe(u8, "Memory allocation failed") catch "Memory allocation failed";
-        return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, @intCast(end_time - start_time));
+        return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, elapsed);
     };
 
     @memcpy(combined_secrets[0..32], client_secret);
     @memcpy(combined_secrets[32..64], server_secret);
 
-    const end_time = util.getTimestampNanosOrZero();
-    return @import("async_crypto.zig").AsyncCryptoResult.success_result(combined_secrets, @intCast(end_time - start_time));
+    const elapsed = elapsedNsSince(start_time);
+    return @import("async_crypto.zig").AsyncCryptoResult.success_result(combined_secrets, elapsed);
 }
 
 fn applicationSecretsWorker(task_data: *ApplicationSecretsData) @import("async_crypto.zig").AsyncCryptoResult {
-    const start_time = util.getTimestampNanosOrZero();
+    const start_time = util.getMonotonic();
     defer task_data.deinit();
 
     // Derive client and server application secrets
     const client_secret = kdf.hkdfExpandLabel(task_data.allocator, &task_data.master_secret, "c ap traffic", "", 32) catch |err| {
-        const end_time = util.getTimestampNanosOrZero();
+        const elapsed = elapsedNsSince(start_time);
         const error_msg = std.fmt.allocPrint(task_data.allocator, "Client application secret derivation failed: {}", .{err}) catch "Client application secret derivation failed";
-        return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, @intCast(end_time - start_time));
+        return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, elapsed);
     };
     defer task_data.allocator.free(client_secret);
 
     const server_secret = kdf.hkdfExpandLabel(task_data.allocator, &task_data.master_secret, "s ap traffic", "", 32) catch |err| {
-        const end_time = util.getTimestampNanosOrZero();
+        const elapsed = elapsedNsSince(start_time);
         const error_msg = std.fmt.allocPrint(task_data.allocator, "Server application secret derivation failed: {}", .{err}) catch "Server application secret derivation failed";
-        return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, @intCast(end_time - start_time));
+        return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, elapsed);
     };
     defer task_data.allocator.free(server_secret);
 
     // Combine secrets for result
     const combined_secrets = task_data.allocator.alloc(u8, 64) catch {
-        const end_time = util.getTimestampNanosOrZero();
+        const elapsed = elapsedNsSince(start_time);
         const error_msg = task_data.allocator.dupe(u8, "Memory allocation failed") catch "Memory allocation failed";
-        return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, @intCast(end_time - start_time));
+        return @import("async_crypto.zig").AsyncCryptoResult.error_result(error_msg, elapsed);
     };
 
     @memcpy(combined_secrets[0..32], client_secret);
     @memcpy(combined_secrets[32..64], server_secret);
 
-    const end_time = util.getTimestampNanosOrZero();
-    return @import("async_crypto.zig").AsyncCryptoResult.success_result(combined_secrets, @intCast(end_time - start_time));
+    const elapsed = elapsedNsSince(start_time);
+    return @import("async_crypto.zig").AsyncCryptoResult.success_result(combined_secrets, elapsed);
 }

@@ -85,7 +85,14 @@ const zcrypto = b.lazyDependency("zcrypto", .{
 
 ## Examples
 
-See `src/main.zig`, `src/tls_test.zig`, and the main build targets for current usage examples.
+See `src/main.zig` and the `test` blocks in `src/tls_client.zig`, `src/tls_server.zig`
+and `src/tls.zig` for current usage.
+
+These are pointed at in preference to a standalone example file because they are
+compiled and run by `zig build test`. This section previously named
+`src/tls_test.zig`, which had stopped compiling against the current API — it
+referred to a `TranscriptHash` and an `AeadCipher` that no longer exist — and
+nothing noticed, because nothing imported it. It now lives in `attic/`.
 
 ## Dependencies
 

@@ -50,7 +50,7 @@ pub const MessageHeader = struct {
     pub fn serialize(self: MessageHeader) [56]u8 {
         var buffer: [56]u8 = undefined;
         buffer[0] = self.version;
-        buffer[1] = @intFromEnum(self.message_type);
+        buffer[1] = @backingInt(self.message_type);
         std.mem.writeInt(u64, buffer[2..10], self.sequence_number, .little);
         std.mem.writeInt(u64, buffer[10..18], self.timestamp, .little);
         buffer[18] = self.ttl;
@@ -63,7 +63,7 @@ pub const MessageHeader = struct {
     pub fn deserialize(buffer: [56]u8) MessageHeader {
         return MessageHeader{
             .version = buffer[0],
-            .message_type = @enumFromInt(buffer[1]),
+            .message_type = @fromBackingInt(@intCast(buffer[1])),
             .sequence_number = std.mem.readInt(u64, buffer[2..10], .little),
             .timestamp = std.mem.readInt(u64, buffer[10..18], .little),
             .ttl = buffer[18],

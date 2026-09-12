@@ -260,7 +260,7 @@ pub const Key = union(KeyType) {
         };
 
         // Use HKDF to derive new key
-        const derived_key = try kdf.hkdf(allocator, key_material, salt, info, 32);
+        const derived_key = try kdf.hkdfSha256(allocator, key_material, salt, info, 32);
         defer allocator.free(derived_key);
 
         return switch (self) {

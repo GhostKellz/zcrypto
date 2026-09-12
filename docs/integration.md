@@ -105,6 +105,14 @@ bash dev/experimental_pq_check.sh
 ## Downstream Compatibility Notes For v1.0.6
 
 - `zquic` and other QUIC consumers should prefer `zcrypto.quic_crypto`, `zcrypto.quic`, `zcrypto.kdf`, `zcrypto.sym`, `zcrypto.hash`, `zcrypto.rand`, and `zcrypto.util` for stable integrations.
+- `zcrypto.tls.bbr` offers crypto performance metrics for a QUIC consumer's BBR
+  congestion control. It is advisory, not part of the stable core surface.
+  **A consumer must call `setCpuUtilization` for the CPU-driven advice to
+  engage.** zcrypto cannot measure host or process CPU load, so until a reading
+  is supplied `cpu_utilization_percent` reports null and `getPacingAdjustment`
+  returns 1.0 rather than guessing an idle core. `predictCryptoCapacity` and
+  `crypto_overhead_factor` likewise return null until throughput has been
+  sampled; treat those nulls as "no measurement", never as zero.
 - Async consumers should use `zcrypto.async_crypto` only with `-Dasync=true`; the integration targets the std.Io-backed `zsync v0.8.4` runtime shape.
 - Post-quantum consumers must opt in with both `-Dpost-quantum=true` and `-Dexperimental-crypto=true`; ML-KEM and ML-DSA wrappers remain experimental even when backed by Zig stdlib primitives.
 - FFI consumers should query runtime capabilities instead of assuming optional feature symbols are present.

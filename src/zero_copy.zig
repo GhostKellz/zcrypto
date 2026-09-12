@@ -245,18 +245,18 @@ pub const BatchCrypto = struct {
 /// Ring buffer for continuous packet stream processing
 pub const CryptoRingBuffer = struct {
     buffer: []u8,
-    read_pos: std.atomic.Atomic(usize),
-    write_pos: std.atomic.Atomic(usize),
+    read_pos: std.atomic.Value(usize),
+    write_pos: std.atomic.Value(usize),
     capacity: usize,
     crypto_context: CryptoPacketBuffer.CryptoContext,
 
     pub fn init(allocator: std.mem.Allocator, capacity: usize, cipher_suite: quic_crypto.QuicCrypto.CipherSuite) !CryptoRingBuffer {
-        const buffer = try allocator.alignedAlloc(u8, 64, capacity);
+        const buffer = try allocator.alignedAlloc(u8, .fromByteUnits(64), capacity);
 
         return CryptoRingBuffer{
             .buffer = buffer,
-            .read_pos = std.atomic.Atomic(usize).init(0),
-            .write_pos = std.atomic.Atomic(usize).init(0),
+            .read_pos = std.atomic.Value(usize).init(0),
+            .write_pos = std.atomic.Value(usize).init(0),
             .capacity = capacity,
             .crypto_context = CryptoPacketBuffer.CryptoContext{
                 .cipher_suite = cipher_suite,

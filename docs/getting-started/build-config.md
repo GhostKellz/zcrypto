@@ -25,7 +25,7 @@ zig build -Dpost-quantum=true -Dexperimental-crypto=true
 | `post-quantum` | `false` | Experimental ML-KEM/ML-DSA algorithms | ~5KB |
 | `hardware-accel` | `true` | SIMD/AES-NI optimizations | ~3KB |
 | `blockchain` | `false` | Experimental blockchain helpers | ~4KB |
-| `vpn` | `true` | VPN-specific crypto | ~3KB |
+| `vpn` | `true` | VPN data-channel AEAD primitives (not a VPN protocol) | ~3KB |
 | `wasm` | `true` | WebAssembly support | ~2KB |
 | `enterprise` | `false` | Experimental HSM / analysis helpers | ~6KB |
 | `zkp` | `false` | Experimental zero-knowledge proofs | ~7KB |
@@ -164,18 +164,76 @@ flowchart TD
 - **Cross-platform** - Feature detection works on all supported platforms
 - **Feature-aware entrypoints** - disabled features no longer break the shipped demo/example targets
 
-## 🔍 Runtime Feature Detection
+## 🔍 Build-Target Feature Detection
 
-Some features support runtime detection:
+`HardwareAcceleration.detect()` reports the CPU features of the **build target**,
+not of the machine running the code. It reads `builtin.cpu.features`, which is
+fixed at compile time; it does not issue CPUID. A binary built with
+`-Dcpu=baseline` reports no acceleration on a machine that has it, and a binary
+built with `-Dcpu=native` reports the build host's features wherever it is later
+copied — including machines that lack those instructions, where the result is a
+SIGILL that no flag read can prevent.
 
 ```zig
-// Hardware acceleration detection
+// Build metadata, useful for logs and benchmark records.
 const hw = zcrypto.hardware;
 const features = hw.HardwareAcceleration.detect();
-if (features.aes_ni) {
-    // Use AES-NI optimized functions
-}
+std.debug.print("built for aes={}, avx2={}\n", .{ features.aes_ni, features.avx2 });
 ```
+
+There are no separate AES-NI entry points to branch to. Instruction selection is
+done inside `std.crypto` at comptime from the same build target — for AES it
+publishes the outcome as `std.crypto.core.aes.has_hardware_support`, which is
+the value to record if you want to know what actually ran. Calling the ordinary
+`zcrypto` API is what gets the accelerated code; branching on `detect()` cannot
+add acceleration, only disagree about it.
+
+## 🖥️ Deployment CPU Requirements
+
+Because instruction selection happens at compile time, **the `-Dcpu` you build
+with is the minimum CPU your binary requires**. This is a deployment decision,
+not a tuning knob:
+
+| Build | Minimum CPU to run it | AES backend |
+| --- | --- | --- |
+| `zig build` on the target host | that host's feature set | whatever that host supports |
+| `zig build -Dcpu=x86_64` | any x86-64 | software (`aes/soft.zig`) |
+| `zig build -Dcpu=native` | a CPU with every feature the build host has | the build host's |
+| cross-compiled with `-Dtarget=...` and no `-Dcpu` | Zig's `baseline` for that target | software |
+
+Two consequences that are easy to get wrong:
+
+- **A native build is not portable.** Building on a modern host and copying the
+  binary to an older machine produces `SIGILL` on the first instruction that
+  machine lacks. Nothing in this library can catch that: the fault happens
+  inside `std.crypto`, or in unrelated code the optimizer vectorized, before any
+  `zcrypto` error path is reachable.
+- **Reading feature flags does not protect you.** `detect()` reports what the
+  binary was *built for*, so on a machine that cannot run that binary it either
+  reports the build's features and is wrong about the host, or is never reached
+  because the process has already died. There is no arrangement of runtime flag
+  checks that makes an unsupported-instruction build safe; choose the right
+  `-Dcpu` instead.
+
+If you ship one binary to a mixed fleet, build for the oldest CPU in it. The
+software AES path is substantially slower than the AES-NI one — measure the gap
+on your own hardware with `HardwareCrypto.benchmarkAesGcm` rather than assuming
+it, since it varies widely by microarchitecture and message size.
+
+Both paths are covered by published known-answer vectors (GCM spec Appendix B,
+RFC 8439, FIPS 180-4, RFC 5869). To check a specific target yourself:
+
+```bash
+# Generic x86-64: must select the software backend and still match the vectors.
+zig build kat -Dcpu=x86_64 -Dexpect-aes-hardware=false
+
+# Build host's features: must select the hardware backend.
+zig build kat -Dcpu=native -Dexpect-aes-hardware=true
+```
+
+`-Dexpect-aes-hardware` asserts which backend the target actually selected, so a
+run that silently built for the wrong CPU fails instead of reporting a pass for
+a backend it never compiled.
 
 ## 🚀 Migration Guide
 

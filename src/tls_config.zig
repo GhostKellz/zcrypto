@@ -109,7 +109,7 @@ pub const Certificate = struct {
 
     /// Create certificate with chain from DER data
     pub fn fromDerWithChain(allocator: std.mem.Allocator, der: []const u8, chain: [][]const u8) !Certificate {
-        const owned_chain = try allocator.alloc([]u8, chain.len);
+        const owned_chain = try allocator.alloc([]const u8, chain.len);
         for (chain, 0..) |cert, i| {
             owned_chain[i] = try allocator.dupe(u8, cert);
         }
@@ -152,7 +152,15 @@ pub const SessionCache = struct {
     removeFn: *const fn (session_id: []const u8) void,
 };
 
-/// Default cipher suites for TLS 1.3
+/// Default cipher suites for TLS 1.3.
+///
+/// `TLS_AES_256_GCM_SHA384` is listed but is *not* currently negotiable over the
+/// TLS handshake: `TlsClient` and `TlsServer` keep a single SHA-256 handshake
+/// transcript, so the client declines to offer it and the server declines to
+/// select it. It stays in the list because the same enum names wire constants
+/// used elsewhere, and because dropping it would silently change what a caller
+/// who copied this list gets back. Configuring it alone leaves nothing to
+/// negotiate and the handshake fails rather than degrading.
 pub const default_cipher_suites = [_]CipherSuite{
     .TLS_AES_128_GCM_SHA256,
     .TLS_AES_256_GCM_SHA384,
@@ -313,7 +321,7 @@ pub const TlsConfig = struct {
 
     /// Validate configuration
     pub fn validate(self: TlsConfig) !void {
-        if (@intFromEnum(self.min_version) > @intFromEnum(self.max_version)) {
+        if (@backingInt(self.min_version) > @backingInt(self.max_version)) {
             return errors.ConfigError.InvalidVersionRange;
         }
 
@@ -422,7 +430,7 @@ pub const TlsConfig = struct {
         }
 
         if (self.alpn_protocols) |protocols| {
-            const new_protocols = try allocator.alloc([]u8, protocols.len);
+            const new_protocols = try allocator.alloc([]const u8, protocols.len);
             for (protocols, 0..) |proto, i| {
                 new_protocols[i] = try allocator.dupe(u8, proto);
             }

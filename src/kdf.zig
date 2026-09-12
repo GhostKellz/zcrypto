@@ -13,6 +13,15 @@ fn decodeHex(comptime N: usize, hex: []const u8) [N]u8 {
     return out;
 }
 
+/// HKDF PRKs are exactly one hash output wide, so the secret length selects
+/// the hash. Returns the hash output size in bytes.
+fn hashLenForSecret(secret: []const u8) !usize {
+    return switch (secret.len) {
+        32, 48, 64 => secret.len,
+        else => error.InvalidSecretLength,
+    };
+}
+
 fn hkdfExpandFromSecret(secret: []const u8, info: []const u8, output: []u8) !void {
     switch (secret.len) {
         32 => std.crypto.kdf.hkdf.HkdfSha256.expand(output, info, secret[0..32].*),
@@ -75,6 +84,26 @@ pub fn pbkdf2Sha256(
     return output;
 }
 
+/// PBKDF2 using SHA-512.
+///
+/// Required by BIP-39 seed derivation, which fixes the PRF at HMAC-SHA512. The
+/// SHA-256 variant above is not interchangeable there: it derives a different
+/// seed from the same mnemonic, so a wallet built on it would be silently
+/// incompatible with every other BIP-39 implementation.
+pub fn pbkdf2Sha512(
+    allocator: std.mem.Allocator,
+    password: []const u8,
+    salt: []const u8,
+    iterations: u32,
+    length: usize,
+) ![]u8 {
+    const output = try allocator.alloc(u8, length);
+    errdefer allocator.free(output);
+
+    try std.crypto.pwhash.pbkdf2(output, password, salt, iterations, std.crypto.auth.hmac.sha2.HmacSha512);
+    return output;
+}
+
 /// TLS 1.3 HKDF-Expand-Label implementation
 pub fn hkdfExpandLabel(
     allocator: std.mem.Allocator,
@@ -92,6 +121,16 @@ pub fn hkdfExpandLabel(
 
     const tls_prefix = "tls13 ";
     const full_label_len = tls_prefix.len + label.len;
+
+    // The label and context lengths are each written into a single byte and
+    // the output length into a uint16, so oversized values have to be
+    // rejected here. Narrowing them with @intCast is illegal behaviour: it
+    // aborted the process instead of failing the call. RFC 5869 Section 2.3
+    // also caps HKDF-Expand at 255*HashLen, which for these hashes stays well
+    // inside the uint16 length field.
+    if (full_label_len > 255) return error.LabelTooLong;
+    if (context.len > 255) return error.ContextTooLong;
+    if (length > 255 * try hashLenForSecret(secret)) return error.OutputTooLong;
 
     // Calculate total HkdfLabel size
     const hkdf_label_size = 2 + 1 + full_label_len + 1 + context.len;
@@ -181,63 +220,6 @@ pub fn legacyStretchPassword(
     const iterations = 600_000;
     return pbkdf2Sha256(allocator, password, salt, iterations, key_length);
 }
-
-// =============================================================================
-// ASYNC CONVENIENCE FUNCTIONS
-// =============================================================================
-
-/// Async convenience functions that use the async_crypto module
-/// Import async_crypto to use these functions in async contexts
-pub const Async = struct {
-    /// Get async KDF crypto handler
-    /// Usage: const async_kdf = zcrypto.kdf.Async.init(allocator, runtime);
-    pub fn init(allocator: std.mem.Allocator, runtime: anytype) !@import("async_crypto.zig").AsyncKdf {
-        return @import("async_crypto.zig").AsyncKdf.init(allocator, runtime);
-    }
-
-    /// Async Argon2id password hashing
-    /// Returns Task that can be awaited for hashed password
-    /// This is the most expensive KDF operation and benefits greatly from async execution
-    pub fn argon2idAsync(allocator: std.mem.Allocator, runtime: anytype, password: []const u8, salt: []const u8) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
-        const async_kdf = init(allocator, runtime) catch unreachable;
-        return async_kdf.argon2idAsync(password, salt);
-    }
-
-    /// Async PBKDF2 password hashing
-    /// Returns Task that can be awaited for derived key
-    /// For legacy compatibility - prefer argon2idAsync for new applications
-    pub fn pbkdf2Sha256Async(allocator: std.mem.Allocator, runtime: anytype, password: []const u8, salt: []const u8, iterations: u32, output_len: usize) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
-        const async_kdf = init(allocator, runtime) catch unreachable;
-        return async_kdf.pbkdf2Sha256Async(password, salt, iterations, output_len);
-    }
-
-    /// Async HKDF-Expand-Label for TLS 1.3 key derivation
-    /// Returns Task that can be awaited for derived key
-    /// Useful for parallel key derivation in TLS handshakes
-    pub fn hkdfExpandLabelAsync(allocator: std.mem.Allocator, runtime: anytype, prk: []const u8, label: []const u8, context: []const u8, length: u16) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
-        const async_kdf = init(allocator, runtime) catch unreachable;
-        return async_kdf.hkdfExpandLabelAsync(prk, label, context, length);
-    }
-
-    /// Async password stretching using Argon2id
-    /// Convenience wrapper for argon2idAsync with sensible defaults
-    pub fn stretchPasswordAsync(allocator: std.mem.Allocator, runtime: anytype, password: []const u8, salt: []const u8) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
-        return argon2idAsync(allocator, runtime, password, salt);
-    }
-
-    /// Async legacy password stretching using PBKDF2
-    /// For compatibility with older systems - prefer stretchPasswordAsync for new code
-    pub fn legacyStretchPasswordAsync(allocator: std.mem.Allocator, runtime: anytype, password: []const u8, salt: []const u8, key_length: usize) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
-        const iterations = 600_000; // Reasonable iteration count for 2025
-        return pbkdf2Sha256Async(allocator, runtime, password, salt, iterations, key_length);
-    }
-
-    /// Async key derivation for applications
-    /// Convenience wrapper for hkdfExpandLabelAsync
-    pub fn deriveKeyAsync(allocator: std.mem.Allocator, runtime: anytype, master_secret: []const u8, label: []const u8, length: u16) @import("async_crypto.zig").Task(@import("async_crypto.zig").AsyncCryptoResult) {
-        return hkdfExpandLabelAsync(allocator, runtime, master_secret, label, "", length);
-    }
-};
 
 test "hkdf sha256 basic" {
     const allocator = std.testing.allocator;
@@ -387,4 +369,48 @@ test "argon2id password hashing" {
     defer allocator.free(key3);
 
     try std.testing.expect(!std.mem.eql(u8, key, key3));
+}
+
+test "hkdf expand label enforces TLS 1.3 field bounds" {
+    const allocator = std.testing.allocator;
+    const secret: [32]u8 = @splat(0x01);
+
+    // TLS 1.3 encodes the label as opaque label<7..255>, including the
+    // "tls13 " prefix, and the context as opaque context<0..255>. Both
+    // lengths are written into a single byte, so an oversized value has to be
+    // rejected rather than narrowed.
+    const long_label: [250]u8 = @splat('a');
+    try std.testing.expectError(error.LabelTooLong, hkdfExpandLabel(allocator, &secret, &long_label, "", 32));
+
+    const long_context: [256]u8 = @splat(0xab);
+    try std.testing.expectError(error.ContextTooLong, hkdfExpandLabel(allocator, &secret, "key", &long_context, 32));
+
+    // The HkdfLabel length field is a uint16, and HKDF-Expand itself is
+    // capped at 255*HashLen octets (RFC 5869 Section 2.3).
+    try std.testing.expectError(error.OutputTooLong, hkdfExpandLabel(allocator, &secret, "key", "", 65536));
+    try std.testing.expectError(error.OutputTooLong, hkdfExpandLabel(allocator, &secret, "key", "", 255 * 32 + 1));
+
+    // The largest in-range values must still work.
+    const max_label: [249]u8 = @splat('a');
+    const ok_label = try hkdfExpandLabel(allocator, &secret, &max_label, "", 32);
+    defer allocator.free(ok_label);
+
+    const max_context: [255]u8 = @splat(0xab);
+    const ok_context = try hkdfExpandLabel(allocator, &secret, "key", &max_context, 32);
+    defer allocator.free(ok_context);
+}
+
+test "hkdf expand label rejects unsupported secret lengths without leaking" {
+    const allocator = std.testing.allocator;
+
+    // Only SHA-256/384/512 sized secrets map to a supported hash. The failure
+    // path runs after both the label and output buffers are allocated, so the
+    // testing allocator also proves neither is leaked.
+    for ([_]usize{ 0, 1, 31, 33, 47, 63, 65 }) |len| {
+        const secret = try allocator.alloc(u8, len);
+        defer allocator.free(secret);
+        @memset(secret, 0x01);
+
+        try std.testing.expectError(error.InvalidSecretLength, hkdfExpandLabel(allocator, secret, "key", "", 32));
+    }
 }

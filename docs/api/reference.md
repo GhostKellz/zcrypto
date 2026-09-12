@@ -39,6 +39,18 @@ the modules above for new integrations.
 
 These modules are available only when their corresponding build flags are enabled.
 
+`zcrypto.wasm_crypto` is a host-side interface for embedding crypto in a WASM VM
+— guest memory addressed by offset, bounds-checked against the guest's declared
+size, gas-metered. It is not related to building zcrypto *for* wasm32, which is a
+target and needs no feature flag. See
+[the feature overview](../features/overview.md#the-wasm-feature-is-not-the-wasm32-target).
+
+`zcrypto.vpn_crypto` is an AEAD record layer for a VPN data channel, not a VPN
+protocol and not a peer-authentication mechanism. Its X25519 exchange is
+unauthenticated, so an active attacker can man-in-the-middle it unless the caller
+authenticates the peer's static public key out of band. Read the module
+documentation in `src/vpn_crypto.zig` before integrating it.
+
 ## Experimental Modules
 
 The following feature families are available for research and iteration, but
@@ -62,6 +74,31 @@ In v1.0.6, experimental means:
   higher-level protocol surfaces are not production-interoperability claims.
 
 ## FFI Notes
+
+### Linkage
+
+The C ABI ships as a static library only. `zig build --prefix <dir>` installs
+exactly two files a C caller needs:
+
+- `<dir>/lib/libzcrypto.a`
+- `<dir>/include/zcrypto.h`
+
+No shared object is built or installed, on any platform. This is a deliberate
+position rather than a gap: a `.so` would add a runtime symbol-resolution and
+versioning surface that nothing in the project currently tests, and shipping one
+only to satisfy a "dynamic loading supported" checkbox would be an untested
+claim. Link the archive directly.
+
+The archive is built position-independent, so it links into a PIE, which is the
+default for executables on most current distributions.
+
+Static linking means feature flags are resolved when the library is built, not
+when it is loaded. A caller cannot assume an optional algorithm is present
+because the header declares it — the header declares the whole surface. Query
+`zcrypto_get_features` or `zcrypto_supported_algorithms` at runtime, and expect
+entry points for a disabled feature to refuse rather than to be absent.
+
+### Checked variants
 
 The C ABI keeps older no-length PQ symbols for compatibility and adds checked
 variants for safer callers:

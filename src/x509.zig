@@ -107,11 +107,9 @@ pub const Validity = struct {
     }
 
     pub fn isCurrentlyValid(self: Validity) bool {
-        var ts: std.posix.timespec = undefined;
-        const rc = std.posix.system.clock_gettime(.REALTIME, &ts);
-        if (std.posix.errno(rc) != .SUCCESS) {
-            return false;
-        }
+        // An unreadable clock must not be treated as "within the validity
+        // window"; failing closed here keeps an expired certificate expired.
+        const ts = util.getTimestamp() orelse return false;
         return self.isValid(ts.sec);
     }
 };
@@ -155,7 +153,7 @@ pub const Certificate = struct {
 
         // Parse version [0] EXPLICIT Version DEFAULT v1
         var version: u8 = 1;
-        if (tbs_parser.peekTag() == @intFromEnum(DerTag.context_specific_0)) {
+        if (tbs_parser.peekTag() == @backingInt(DerTag.context_specific_0)) {
             const version_explicit = try tbs_parser.parseContextSpecific(0);
             var version_parser = DerParser.init(version_explicit);
             const version_int = try version_parser.parseInteger();
@@ -188,7 +186,7 @@ pub const Certificate = struct {
 
         // extensions [3] EXPLICIT Extensions OPTIONAL
         var extensions = std.ArrayList(Extension).empty;
-        if (tbs_parser.peekTag() == @intFromEnum(DerTag.context_specific_3)) {
+        if (tbs_parser.peekTag() == @backingInt(DerTag.context_specific_3)) {
             const ext_explicit = try tbs_parser.parseContextSpecific(3);
             var ext_parser = DerParser.init(ext_explicit);
             const ext_seq = try ext_parser.parseSequence();
@@ -344,7 +342,7 @@ const DerParser = struct {
     fn parseTag(self: *DerParser, expected: DerTag) !void {
         if (self.pos >= self.data.len) return DerError.UnexpectedEOF;
         const tag = self.data[self.pos];
-        if (tag != @intFromEnum(expected)) return errors.X509Error.InvalidTag;
+        if (tag != @backingInt(expected)) return errors.X509Error.InvalidTag;
         self.pos += 1;
     }
 
@@ -512,8 +510,8 @@ const DerParser = struct {
     fn parseTime(self: *DerParser) !i64 {
         const tag = self.peekTag();
         return switch (tag) {
-            @intFromEnum(DerTag.utc_time) => self.parseUtcTime(),
-            @intFromEnum(DerTag.generalized_time) => self.parseGeneralizedTime(),
+            @backingInt(DerTag.utc_time) => self.parseUtcTime(),
+            @backingInt(DerTag.generalized_time) => self.parseGeneralizedTime(),
             else => DerError.InvalidDerEncoding,
         };
     }
@@ -542,12 +540,12 @@ fn parseName(allocator: std.mem.Allocator, der: []const u8) !Name {
                 var value: []const u8 = undefined;
 
                 switch (tag) {
-                    @intFromEnum(DerTag.utf8_string) => {
+                    @backingInt(DerTag.utf8_string) => {
                         try attr_parser.parseTag(.utf8_string);
                         const length = try attr_parser.parseLength();
                         value = attr_parser.data[attr_parser.pos .. attr_parser.pos + length];
                     },
-                    @intFromEnum(DerTag.printable_string) => {
+                    @backingInt(DerTag.printable_string) => {
                         try attr_parser.parseTag(.printable_string);
                         const length = try attr_parser.parseLength();
                         value = attr_parser.data[attr_parser.pos .. attr_parser.pos + length];
@@ -611,7 +609,7 @@ fn parseExtensions(allocator: std.mem.Allocator, extensions: *std.ArrayList(Exte
 
         // critical BOOLEAN DEFAULT FALSE
         var critical = false;
-        if (ext_parser.peekTag() == @intFromEnum(DerTag.boolean)) {
+        if (ext_parser.peekTag() == @backingInt(DerTag.boolean)) {
             try ext_parser.parseTag(.boolean);
             const length = try ext_parser.parseLength();
             if (length != 1) return DerError.InvalidDerEncoding;

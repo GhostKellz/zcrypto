@@ -74,35 +74,40 @@ pub fn timingSafeEqual(a: []const u8, b: []const u8) bool {
     return result == 0;
 }
 
-/// Securely zero memory
-///
-/// Overwrites memory with zeros in a way that cannot be optimized away
-/// by the compiler. Critical for clearing sensitive data like private keys.
+/// Zero a buffer with a store the optimizer is not permitted to delete.
 ///
 /// ## Parameters
 /// - `buffer`: Buffer to zero
 ///
-/// ## Security
-/// Normal `@memset(buffer, 0)` can be optimized away by the compiler if
-/// the buffer is not used afterwards. This function uses a memory barrier
-/// to ensure the zeroing always happens.
+/// ## What this guarantees
+/// Exactly one thing: the write to `buffer` happens. A plain
+/// `@memset(buffer, 0)` on a buffer nothing reads afterwards is a dead store,
+/// and the optimizer may delete it -- which is the usual case for a key being
+/// cleared on the way out of scope. `buffer` is `[]volatile u8` -- an ordinary
+/// `[]u8` coerces to it, so callers are unaffected -- and the language forbids
+/// eliding a volatile store, so the guarantee is carried by the type rather
+/// than by an optimization barrier the reader has to take on trust.
+///
+/// ## What this does not guarantee
+/// It does not erase the secret from the machine. By the time this runs the
+/// value may already exist in a register, a spill slot, a `memcpy` bounce
+/// buffer, a swap page, or a snapshot of the VM, and a store to this address
+/// cannot reach any of them. Treat it as closing one specific hole -- the
+/// buffer you hold -- not as making the secret unrecoverable.
 ///
 /// ## Example
 /// ```zig
 /// var private_key: [64]u8 = // ... sensitive data ...
-/// defer secureZero(&private_key);  // Always zeros, even if optimized build
+/// defer secureZero(&private_key);
 ///
 /// // Use private_key...
 /// ```
-///
-/// ## Note
-/// In Zig, `@memset` followed by a memory barrier is sufficient. Some C
-/// libraries use `volatile` or asm tricks, but Zig's memory model is safer.
-pub fn secureZero(buffer: []u8) void {
-    @memset(buffer, 0);
-    // Use inline assembly to prevent compiler optimization
-    // This ensures the memset is not removed even if buffer is unused after
-    asm volatile ("" ::: .{ .memory = true });
+pub fn secureZero(buffer: []volatile u8) void {
+    // Deliberately not a second implementation. Every other clear in this
+    // library goes through `std.crypto.secureZero`, and a public API that
+    // hand-rolled its own barrier would hand a consumer a different primitive
+    // from the one the library itself relies on.
+    std.crypto.secureZero(u8, buffer);
 }
 
 /// Constant-time conditional selection
@@ -338,19 +343,43 @@ test "timingSafeEqual secrets" {
     try testing.expect(!timingSafeEqual(&mac1, &mac3));
 }
 
-test "secureZero clears memory" {
-    var buffer = blk: {
-        var bytes = std.mem.zeroes([64]u8);
-        @memset(bytes[0..], 0xFF);
-        break :blk bytes;
-    };
+test "secureZero clears the buffer it was given" {
+    // Scope note, because the name of the function invites a stronger reading:
+    // this asserts the bytes at `buffer` read back as zero, and nothing more.
+    // It is not evidence that the secret is gone from the machine, and it
+    // cannot be. Reading the buffer back is what makes the store live, so the
+    // one property that separates `secureZero` from `@memset` -- surviving
+    // dead-store elimination -- is by construction unobservable from here.
+    // That property is held by the `[]volatile u8` in `std.crypto.secureZero`,
+    // which the compiler enforces; see `secureZero is the stdlib primitive`.
+    var buffer: [64]u8 = @splat(0xFF);
 
     secureZero(&buffer);
 
-    // Verify all bytes are zero
     for (buffer) |byte| {
         try testing.expectEqual(@as(u8, 0), byte);
     }
+
+    // A zero-length slice must be accepted rather than faulting on the
+    // pointer: callers clear optional key material without checking first.
+    secureZero(buffer[0..0]);
+}
+
+test "secureZero writes through a volatile slice" {
+    // The test above cannot fail for the reason this function exists: it passes
+    // unchanged with the body replaced by a plain `@memset`, in Debug and in
+    // ReleaseFast alike. So the property is carried by the parameter type
+    // instead of by an assertion. `buffer` is `[]volatile u8`, which makes any
+    // store through it -- including one a maintainer writes by hand -- a
+    // volatile store the compiler may not elide. Widening it back to `[]u8`
+    // fails this check rather than silently losing the guarantee.
+    const param = @typeInfo(@TypeOf(secureZero)).@"fn".param_types[0].?;
+    try testing.expect(@typeInfo(param).pointer.attrs.@"volatile");
+
+    // Callers pass ordinary `[]u8`; the coercion adds the qualifier.
+    var key: [32]u8 = @splat(0xAA);
+    secureZero(&key);
+    try testing.expect(std.mem.allEqual(u8, &key, 0));
 }
 
 test "constantTimeSelect integer" {

@@ -51,11 +51,11 @@ Feature flags are declared in `build.zig`. Experimental families require
 | `-Dpost-quantum` | `false` | Post-quantum crypto (requires `-Dexperimental-crypto`) |
 | `-Dhardware-accel` | `true` | SIMD / AES-NI acceleration |
 | `-Dblockchain` | `false` | Experimental blockchain helpers (requires `-Dexperimental-crypto`) |
-| `-Dvpn` | `true` | VPN-specific crypto features |
+| `-Dvpn` | `true` | VPN data-channel AEAD primitives (not a VPN protocol) |
 | `-Dwasm` | `true` | WebAssembly support |
 | `-Denterprise` | `false` | Experimental enterprise helpers (requires `-Dexperimental-crypto`) |
 | `-Dzkp` | `false` | Experimental zero-knowledge proofs (requires `-Dexperimental-crypto`) |
-| `-Dasync` | `true` | Async crypto via zsync |
+| `-Dasync` | `false` | Async crypto via zsync |
 | `-Dexperimental-crypto` | `false` | Allow incomplete/placeholder crypto (DANGEROUS: not for production) |
 | `-Dallow-insecure` | `false` | Allow insecure options in release builds (DANGEROUS: not for production) |
 

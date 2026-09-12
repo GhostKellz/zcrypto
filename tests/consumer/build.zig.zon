@@ -1,0 +1,14 @@
+.{
+    .name = .zcrypto_consumer_guard,
+    .version = "0.0.0",
+    .fingerprint = 0x6900d92a495ab22f,
+    .minimum_zig_version = "0.17.0-dev.2033+af24fd11a",
+    .dependencies = .{
+        .zcrypto = .{ .path = "../.." },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

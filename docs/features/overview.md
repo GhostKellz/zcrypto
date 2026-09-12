@@ -10,8 +10,8 @@ zcrypto supports optional feature flags for modular compilation. Stable builds c
 | **Post-Quantum** | `post-quantum` | Experimental ML-DSA / ML-KEM APIs | ~5MB |
 | **Hardware Acceleration** | `hardware-accel` | AES-NI, AVX2, SIMD optimizations | ~2MB |
 | **Blockchain** | `blockchain` | Experimental blockchain helpers | ~3MB |
-| **VPN** | `vpn` | WireGuard, IPsec, IKEv2 protocols | ~4MB |
-| **WebAssembly** | `wasm` | WASM crypto operations | ~1MB |
+| **VPN** | `vpn` | AEAD tunnel primitives; not a VPN protocol | ~4MB |
+| **WebAssembly** | `wasm` | Host-side crypto interface for a WASM VM | ~1MB |
 | **Enterprise** | `enterprise` | Experimental HSM / analysis helpers | ~3MB |
 | **Zero-Knowledge Proofs** | `zkp` | Experimental proof-system APIs | ~6MB |
 | **Async Operations** | `async` | zsync-backed async integration helpers | ~2MB |
@@ -28,6 +28,37 @@ Some features have additional stability considerations:
 - **blockchain** → requires `-Dexperimental-crypto=true`
 - **enterprise** → requires `-Dexperimental-crypto=true`
 - **zkp** → requires `-Dexperimental-crypto=true`
+- **wasm** → is not a target. See below.
+
+### The `wasm` feature is not the wasm32 target
+
+Two separate things share the word, and the flag only controls one of them.
+
+`-Dwasm` turns on `zcrypto.wasm_crypto`, a **host-side** interface for a program
+that embeds a WASM VM: it addresses a guest's linear memory by offset instead of
+by pointer, bounds every access against the guest's declared memory size, and
+bills each operation against a gas limit. This code runs on the host, natively.
+
+Building zcrypto **for** wasm32 is a target, selected with `-Dtarget=`, and is
+independent of the flag. `dev/wasm/check.sh` builds and runs the library's whole
+test suite on `wasm32-wasi` under Node's WASI preview1, and that run is a
+required stage of `dev/release_check.sh`.
+
+What that does and does not establish:
+
+| | Status |
+|---|---|
+| `wasm32-wasi` under a WASI host | Test suite runs; entropy contract checked |
+| Browser / `wasm32-freestanding` | Not supported. No WASI, and no entropy source |
+
+`rand` on `wasm32-freestanding` is a compile error rather than a fallback PRNG,
+because a freestanding module has no host interface to get entropy from and a
+substitute would produce predictable keys that look like CSPRNG output.
+
+Note that Zig's wasm32-wasi preamble imports the entire `wasi_snapshot_preview1`
+syscall set regardless of what a program uses, `random_get` included. A WASI host
+that withholds it will refuse to instantiate any zcrypto build, even one that
+only hashes.
 
 ```mermaid
 flowchart TD
@@ -38,7 +69,7 @@ flowchart TD
     core --> async["async"]
     core --> exp["experimental-crypto gate"]
 
-    async --> zsync["zsync v0.8.4"]
+    async --> zsync["zsync<br/>version pinned in build.zig.zon"]
     tls --> hw
 
     exp --> pq["post-quantum"]
@@ -99,9 +130,9 @@ const zcrypto = b.lazyDependency("zcrypto", .{
 // Result: ~18MB binary
 ```
 
-### VPN Server
+### VPN Data Channel
 ```zig
-// VPN protocols with hardware acceleration
+// Tunnel primitives to build a protocol on, with hardware acceleration
 const zcrypto = b.lazyDependency("zcrypto", .{
     .target = target,
     .optimize = optimize,
@@ -112,6 +143,11 @@ const zcrypto = b.lazyDependency("zcrypto", .{
 });
 // Result: ~17MB binary
 ```
+
+`vpn` ships an AEAD record layer with sequence numbers, a replay window, and
+wire-signalled key updates. It does **not** implement WireGuard, IPsec, or IKEv2,
+and it does **not** authenticate the peer — see the module documentation in
+`src/vpn_crypto.zig` for the unauthenticated-X25519/MITM limitation.
 
 ## Feature-Specific Documentation
 

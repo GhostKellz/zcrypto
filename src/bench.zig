@@ -34,25 +34,24 @@ var pq_ml_kem_encapsulation: ?MlKemEncapsulation = null;
 var pq_ml_dsa_keypair: ?MlDsaKeyPair = null;
 var pq_ml_dsa_signature: [if (zcrypto.build_config.post_quantum_enabled) zcrypto.post_quantum.pq.ml_dsa.ML_DSA_65.SIGNATURE_SIZE else 1]u8 = undefined;
 
-/// Cross-platform timestamp helper for current Zig dev builds
-fn getTimestampNs() !i128 {
-    var ts: std.posix.timespec = undefined;
-    const rc = std.posix.system.clock_gettime(.REALTIME, &ts);
-    if (std.posix.errno(rc) != .SUCCESS) {
-        return error.ClockGetTimeFailed;
-    }
-    return @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
-}
-
 fn benchmark(comptime name: []const u8, iterations: u32, func: anytype) !void {
-    const start_time = try getTimestampNs();
+    // Monotonic, not the wall clock. This delta is divided into an ops/sec
+    // figure that this binary prints as a measurement, so a clock that can be
+    // stepped backwards mid-run by NTP or an operator would have it report a
+    // negative rate, and one that lands both readings on the same tick would
+    // have it report an infinite one. Defers to `util`, which carries the
+    // per-platform branches -- as the local POSIX call this replaced did not,
+    // and so did not build on Windows.
+    const start = try zcrypto.util.getMonotonicOrError();
 
     for (0..iterations) |_| {
         try func();
     }
 
-    const end_time = try getTimestampNs();
-    const duration_ns = @as(f64, @floatFromInt(end_time - start_time));
+    const elapsed_ns = try (try zcrypto.util.getMonotonicOrError()).since(start);
+    if (elapsed_ns == 0) return error.ClockUnusable;
+
+    const duration_ns = @as(f64, @floatFromInt(elapsed_ns));
     const duration_ms = duration_ns / 1_000_000.0;
     const ops_per_sec = @as(f64, @floatFromInt(iterations)) / (duration_ns / 1_000_000_000.0);
 

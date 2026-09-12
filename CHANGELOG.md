@@ -2,6 +2,259 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.7] - 2026-09-11
+
+Consumer-facing upgrade notes are in
+[`docs/migration/v1.0.7.md`](docs/migration/v1.0.7.md). Short version: the C ABI
+is unchanged, and the only break on the stable Zig core is two removed
+wall-clock helpers.
+
+The theme of this release is removing code that reported success without doing
+the work. Several modules that returned plausible values now return errors
+instead. Each is listed below with what it actually did, because "improved" is
+not an accurate description of deleting a signature verifier that answered
+`true`.
+
+### Added
+
+- **Real hardware-backed key providers.** `zcrypto.hsm` is now a root export and
+  carries three implemented backends, each opt-in and each with a separate shim
+  that reports `BackendNotBuilt` when the flag is off:
+  - `-Dtpm=true` — TPM 2.0 over TPM2-TSS/ESAPI (`src/hsm/tpm2.zig`): random,
+    PCR read, key create/load/export/sign/flush, quote against a real
+    attestation key, and seal/unseal.
+  - `-Dpkcs11=true` — Cryptoki tokens (`src/hsm/pkcs11.zig`): caller-configured
+    module load, function table, slot and mechanism enumeration, session
+    login, EC key-pair generation, ECDSA signing, token AES-GCM, object
+    destroy. No default module path, because a default silently selects a
+    different token per host.
+  - `-Dsecure-enclave=true` — Apple Secure Enclave via Security.framework
+    (`src/hsm/secure_enclave.zig`): P-256 only, signing or ECDH per key, public
+    key export only. The private scalar has no representation in the module.
+    macOS targets only; the flag is refused at configure time elsewhere.
+- **TPM sealing with caller auth and PCR policy.** `TPMProvider.sealWithPolicy`
+  and `unsealWithPolicy` take an optional auth value and an optional
+  `PcrPolicy`. Both run a session salted to the storage parent with AES-128-CFB
+  and `DECRYPT|ENCRYPT`, so `TPM2_Create`'s `inSensitive` and `TPM2_Unseal`'s
+  `outData` are parameter-encrypted on the bus. `unsealWithPolicy` selects the
+  session kind from the blob's own `authPolicy` rather than from the caller's
+  options, so a caller who misremembers how a blob was made gets a TPM refusal
+  instead of a wrong answer. Plain `seal`/`unseal` are unchanged wrappers.
+  `HSMError.DeviceLockedOut` is new, for the dictionary-attack lockout that
+  repeated bad auth values produce.
+- **Public API surface is now compiled.** `src/api_surface.zig` references every
+  public declaration recursively and is built by the release gate. Zig
+  type-checks a function where it is referenced, not where it is defined, so a
+  `pub fn` no test calls was never compiled and shipped broken with the suite
+  green. This found 18 such entry points, including `WasmCrypto.hkdf` (wrong
+  arity, salt and IKM transposed) and `security.isReleaseBuild` — the guard
+  behind `insecure_skip_verify` — which still compared against the pre-rename
+  `.Debug` tag. `std.testing.refAllDecls` reaches none of the 18: it is shallow
+  and does not descend into nested types.
+- `util.Instant`, `util.getMonotonic` and `util.getMonotonicOrError`: a
+  monotonic clock, distinct in type from `Timestamp` so the two cannot be mixed
+  silently. `Instant.since` returns `error.ClockWentBackwards` rather than
+  saturating.
+- `zcrypto.build_info` (resolved inside the zcrypto module, so a consumer can
+  prove its optimize mode and target actually reached the dependency) and
+  `zcrypto.api_surface_control`.
+- `include/zcrypto.h` is now part of `.paths`, so the C header ships with the
+  package. `tests/ffi/consumer.c` is a C harness run in Debug, ReleaseSafe and
+  ReleaseFast, and the `ffi-header-agreement` gate stage keeps the header and
+  `src/ffi.zig` in agreement by construction rather than by inspection.
+- Published known-answer vectors (`tests/known_answer_vectors.zig`) run against
+  both a generic CPU target and the host feature set, so a generic-CPU
+  deployment is covered by its own vectors rather than by the host's.
+- Local test harnesses that provision their own endpoint:
+  `dev/tpm_swtpm.sh` (swtpm simulator), `dev/pkcs11_softoken.sh` (NSS
+  softoken), `dev/wasm/check.sh` (real wasm32-wasi execution),
+  `dev/orphan_check.sh`, and `dev/platform_check.sh` / `.ps1` /
+  `platform_matrix.sh`.
+- `docs/platform-support.md` — what the library has been built and run on
+  natively, per host, including the stages that did *not* run and why.
+- `tests/consumer/` — an external package that consumes zcrypto through
+  `build.zig.zon` and asserts the requested target and optimize mode actually
+  reach the dependency, with `-Dpin-dependency-debug=true` as the control that
+  must fail.
+
+### Changed
+
+- Updated the `zsync` dependency from `v0.8.4` to `v0.8.6`.
+- Raised `minimum_zig_version` to `0.17.0-dev.2085+5e36170b5`, matching the
+  toolchain used for this release pass on all four hosts.
+- `util.secureZero` and `timing.secureZero` take `[]volatile u8`. Source
+  compatible; the qualifier moves the "this store must not be optimised out"
+  guarantee into the type.
+- `zcrypto.hsm` moved from `zcrypto.formal.hsm` behind `-Denterprise=true` to a
+  root export. The gate existed to keep placeholder crypto out of a default
+  build, and a consequence of it was that **none of the provider layer's own
+  tests ran in a default `zig build test`** — which is why fabricated key
+  handles survived as long as they did. Default test count moved 605 → 648 when
+  the export was added.
+- `HSMCapabilities` is a plain `struct`, not a `packed struct`, and its fields
+  changed. `has_hardware_rng` and `has_hardware_backed_keys` require
+  `backing == .hardware` *and* the operation, so a TPM simulator or a software
+  token cannot set them however well they answer.
+- Unreferenced sources moved from `src/` to `attic/`: the `protocols/` tree
+  (noise, signal, mls, dht, gossip), `zkp/` (bulletproofs, groth16), `asm/`,
+  `pq/ml_dsa.zig` and `tls_test.zig`. `attic` is absent from `.paths`, so these
+  no longer ship; while they sat under `src/` they were published to every
+  consumer beside the real implementations. The Zig module rooted at
+  `src/root.zig` cannot import outside its own directory, so re-importing one is
+  a compile error rather than a review finding.
+- Hardware AEAD nonce validation narrowed from `>= 12` to exactly 12 at the
+  wrapper boundary.
+
+### Removed
+
+- `util.getTimestampNanos` and `util.getTimestampNanosOrZero`. **The only
+  removal from a stable module, and the only change here that breaks a build.**
+  They read the wall clock, which cannot measure a duration because it can step
+  between two reads, and the `OrZero` variant substituted `0` for a failed read
+  — so a zeroed end gave a negative difference that `@intCast` to `u64` turns
+  into illegal behaviour, and a zeroed start published roughly 56 years as an
+  elapsed time, which a benchmark then divided by. Use `getMonotonicOrError`.
+- `asym.Async`, `kdf.Async`, `sym.Async`, `tls.Async`. No migration is needed:
+  each referred to `async_crypto.AsyncAsymmetric`, `AsyncKdf`, `AsyncSymmetric`
+  or `Task`, none of which was ever declared anywhere in the tree. They were
+  uncallable. `zcrypto.async_crypto` itself is unchanged.
+- `HSMKeyHandle`, `TPMProvider.deriveKey`, `SecureEnclaveProvider.secureOperation`,
+  `HSMInterface.getHardwareRandom`, `getTPMRandom` and `generateKeyExperimental`.
+  Removed rather than renamed, so a caller depending on one gets a compile error
+  instead of a silent behaviour change. See `src/hsm.zig`'s module doc for the
+  replacement of each.
+
+### Fixed
+
+- **`src/bls.zig`, `src/schnorr.zig` and `src/zkp.zig` no longer fabricate
+  results.** Every signing, verification, aggregation and proof entry point now
+  returns `UnsupportedAlgorithm`; return types widened accordingly
+  (`verifyBLS` is `BLSError!bool`, not `bool`). What was there before was SHA-2
+  shaped like a signature scheme: `verifyBLS` returned `true` for any input
+  whose compression bits were set, `verifySchnorr` discarded the public key
+  entirely, and `Bulletproofs.verifyRange` discarded the commitment, the bounds
+  and the generators before `return true`. All three carved out inputs
+  containing the literal substring `"Wrong"` so their own negative tests would
+  pass. Verification returns an error rather than `false` deliberately: `false`
+  would imply the signature was checked. Wire sizes and key shapes are retained,
+  so code that only parses and carries this material still compiles.
+- **TLS session-ticket protection key was public-derived.** `src/tls_server.zig`
+  derived the ticket AES-GCM key as `SHA256(server_random || fixed label)`, and
+  the same `server_random` is serialized into ServerHello — so anyone with the
+  handshake random and a ticket could derive its protection key, and the ticket
+  carries a traffic secret. Replaced with server-level ticket-key material from
+  checked entropy, shared across connections, with key identity and bounded
+  rotation/retirement. Entropy failure now rejects issuance.
+- **TLS resumption is wired end to end**, with the per-ticket PSK derived from
+  the resumption master secret and ticket nonce per RFC 8446 §4.6.1. The
+  previous round-trip test asserted application traffic secret == resumption
+  secret, which encoded the wrong design. Transcript boundaries for
+  handshake and application traffic secrets were corrected and pinned against
+  independently sourced key-schedule vectors.
+- **TPM stale key references survived slot reuse**, deletion lost track of live
+  objects on error paths, `generateSigningKey` did not generate, and unseal
+  failed to wipe on a short-output error. A `KeyRef` is now bound to the
+  provider kind and session epoch that issued it.
+- **C NULL handling.** Every FFI pointer parameter is `[*]allowzero const u8`.
+  Without it the compiler is entitled to assume the pointer is non-NULL — it
+  emits LLVM's `nonnull` — and delete the written NULL check as unreachable,
+  which it was doing. Passing NULL now reliably returns
+  `ZCRYPTO_ERROR_NULL_POINTER` instead of being undefined. ABI-invisible to C.
+- **`zcrypto.tls.bbr`'s `cpu_utilization` was never assigned**, so it read 0 forever,
+  which made `getPacingAdjustment()` return 1.2 unconditionally whenever
+  hardware acceleration was on — a pacing advisor that could tell BBR to speed
+  up and never to slow down. Unknown now declines to adjust. The same file's
+  `recordEncryption` panicked on `end < start` and `predictCryptoCapacity`
+  overflowed a `u32` on an ordinary 10GbE jumbo-frame load; the timing API now
+  takes an elapsed duration, so the underflow is unrepresentable.
+- `PKCS11Provider.signatureLength` ran the `C_Sign` size query without
+  completing the operation. Cryptoki 2.40 has no cancel, so the session was left
+  with an operation active and the *next* unrelated call failed.
+- Provider-absence reporting no longer misdirects: a ready software token on a
+  host with no TPM backend built reports `DeviceAbsent`, not `ProviderNotBuilt`;
+  and two providers on one Cryptoki module report `ProviderAlreadyOpen`, naming
+  the caller's own program rather than sending an operator to inspect a module
+  that is working correctly.
+- Provider integration suites no longer collapse every not-ready status into
+  `error.SkipZigTest`. Once an operator has named a device, "I could not open
+  it" is a result about that device, and skipping let a gate report success
+  having reached no hardware at all.
+
+### Security posture, unchanged but restated
+
+- `zcrypto.vpn_crypto` **does not authenticate peers.** It is an AEAD record
+  layer: no handshake, no peer authentication, no rekey negotiation.
+  `establishTunnel` performs a raw X25519 exchange, which agrees a key with
+  whoever is on the other end and says nothing about who that is.
+  Authenticating the peer's static public key is the caller's job.
+- ML-KEM and ML-DSA wrappers remain experimental and require
+  `-Dexperimental-crypto=true`, as do the blockchain, enterprise/formal and ZKP
+  surfaces.
+
+### Hardware not exercised
+
+Recorded rather than omitted, because a check that never ran and a check that
+passed are otherwise indistinguishable once the result reaches a summary table.
+
+- **Discrete TPM hardware.** The TPM backend is proven against the `swtpm`
+  simulator only. A simulator answers `TPM2_GetRandom` exactly as hardware does,
+  which is why the code asserts a simulator reports `backing == .software` even
+  when every operation succeeds — that assertion is what stops a simulator run
+  being presented as evidence of hardware protection.
+- **PKCS#11 hardware tokens.** Proven against the NSS software token only, under
+  the same rule: a software token is asserted never to be reported as
+  hardware-backed.
+- **Apple Secure Enclave silicon.** The backend compiles, links against
+  Security.framework and runs natively on the lab Mac, which is an `iMac19,1`
+  with no T2 and therefore no enclave. What that host proves is the refusal
+  path: a `kSecAttrTokenIDSecureEnclave` request fails explicitly with
+  `EnclaveAbsent` and no software key is substituted. What it cannot prove is
+  that a real enclave signs correctly. Physical SEP execution is **pending**.
+- **aarch64, including Apple silicon.** Every host in the platform matrix is
+  x86_64.
+
+### Verified
+
+- `bash dev/tpm_swtpm.sh`
+  (44/44 tests, 4/4 steps; swtpm 0.10.1 simulator)
+- `bash dev/pkcs11_softoken.sh`
+  (34/35 plus 1 deliberate environment skip; NSS 3.128-1 softoken)
+- `zig build test -Dsecure-enclave=true` on `Darwin 25.6.0 x86_64`
+  (28/28 steps, 773/779 tests passed, 6 skipped, in both Debug and ReleaseSafe;
+  `[secure enclave] no usable enclave on this host: EnclaveAbsent`. Without the
+  flag, 27/27 steps and 767/773 — the difference is the eight-test
+  `zcrypto-secure-enclave-test` root that only exists when Security.framework is
+  linked.)
+- `zig build -Dsecure-enclave=true` on Linux
+  (refused at configure time with `SecureEnclaveRequiresMacos`, as required)
+- `bash dev/release_check.sh` on zig `0.17.0-dev.2085+5e36170b5`
+  (52 stages, 0 failures: 45 positive stages and 7 negative controls, each of
+  which asserts a specific diagnostic rather than a nonzero exit. Default
+  configuration 27/27 steps and 767/773 tests in both Debug and ReleaseSafe; the
+  feature matrix, both hardware-backend configurations and their combination all
+  pass in both modes; every compiled artifact is asserted to have used the
+  optimize mode that was requested.)
+- `bash dev/platform_check.sh` on four native hosts — Arch Linux, Ubuntu,
+  macOS, Windows 11 — all on zig `0.17.0-dev.2085+5e36170b5`
+  (9/9 stages each; 671/677 tests passed, 6 skipped, in each of Debug,
+  ReleaseSafe and ReleaseFast. Details and the skip breakdown are in
+  `docs/platform-support.md`.)
+- Packaged-candidate consumption from the release tarball rather than from a
+  checkout: fetched into an empty cache over loopback HTTP and built for the
+  core, TLS, async and post-quantum configurations, plus ReleaseSafe. The
+  fingerprint read back out of the fetched package is `0xc9ed93d230004ae`,
+  unchanged. Making the archive unreachable turns the same build into
+  `ConnectionRefused` rather than a silent fallback to the adjacent working
+  tree. (The archive digest and Zig package hash are deliberately not quoted
+  here: this file is inside the archive, so any value printed in it would be
+  invalidated by printing it.)
+- Downstream check against zquic, baseline (zcrypto v1.0.6) versus candidate
+  (this release), same compiler and configuration: `build`, `test`
+  (272/272), `integration-tests` (96/96), `fuzz-tests` (6/6) and the
+  post-quantum gate (315/315) are identical on both sides, with the two sides
+  confirmed to have resolved different zcrypto versions. **zquic requires no
+  source change to move to 1.0.7.**
+
 ## [1.0.6] - 2026-06-23
 
 ### Changed

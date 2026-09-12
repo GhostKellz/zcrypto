@@ -19,6 +19,7 @@ flowchart TD
 
     gs --> quick["quick-start.md"]
     gs --> config["build-config.md"]
+    gs --> platform["platform-support.md<br/>tested hosts"]
 
     api --> core["core.md<br/>stable API"]
     api --> reference["reference.md<br/>full surface"]
@@ -31,6 +32,9 @@ flowchart TD
 
     internals --> arch["architecture.md"]
     security --> fips["fips.md"]
+
+    start --> migration["Migration"]
+    migration --> v107["migration/v1.0.7.md"]
 ```
 
 ## Runtime Shape
@@ -78,23 +82,32 @@ flowchart TD
     task{"What are you doing?"}
     task -->|"Trying zcrypto"| quick["getting-started/quick-start.md"]
     task -->|"Choosing feature flags"| build["getting-started/build-config.md"]
+    task -->|"Checking your OS is covered"| platform["platform-support.md"]
     task -->|"Using stable primitives"| core["api/core.md"]
     task -->|"Checking all exports"| ref["api/reference.md"]
     task -->|"Integrating with another Zig package"| integ["integration.md"]
     task -->|"Using QUIC/TLS helpers"| tls["features/tls.md"]
     task -->|"Reviewing security posture"| fips["security/fips.md"]
     task -->|"Understanding internals"| arch["internals/architecture.md"]
+    task -->|"Upgrading from v1.0.6"| migrate["migration/v1.0.7.md"]
 ```
 
 ## Getting Started
 
 - [Quick Start](getting-started/quick-start.md) - Install and use the stable core APIs.
 - [Build Configuration](getting-started/build-config.md) - Feature flags, dependency shape, and example package configurations.
+- [Platform Support](platform-support.md) - Which hosts the library has been built and tested on natively, the exact stages run, and what is not covered.
 
 ## API Reference
 
 - [Core API](api/core.md) - Stable hash, authentication, symmetric, asymmetric, KDF, random, KEX, and ownership rules.
 - [Full Reference](api/reference.md) - Stable, feature-gated, experimental, FFI, and build-aware exports.
+
+## Migration
+
+- [v1.0.6 to v1.0.7](migration/v1.0.7.md) - C ABI compatibility, the removed
+  wall-clock nanosecond helpers and their monotonic replacement, the `bls`/
+  `schnorr` and `hsm` breaking changes, and additions.
 
 ## Feature Guides
 

@@ -90,13 +90,18 @@ pub fn main() !void {
 }
 ```
 
-## ⚡ Hardware Acceleration
+## ⚡ Build-Target CPU Features
+
+These are compile-time properties of the target, not a runtime capability probe,
+and nothing in `zcrypto` branches on them to pick an implementation — `std.crypto`
+already selects AES-NI, ARM crypto, or the vectorized ChaCha from the same build
+target. See [build-config.md](build-config.md#-build-target-feature-detection).
 
 ```zig
 const zcrypto = @import("zcrypto");
 
 pub fn main() !void {
-    // Detect hardware capabilities
+    // What this binary was built for.
     const hw = zcrypto.hardware.HardwareAcceleration.detect();
     std.debug.print("AES-NI: {}\n", .{hw.aes_ni});
     std.debug.print("AVX2: {}\n", .{hw.avx2});
@@ -106,7 +111,7 @@ pub fn main() !void {
     var b = [_]u8{5, 6, 7, 8};
     var result: [4]u8 = undefined;
 
-    zcrypto.hardware.SIMD.vectorizedXor(&a, &b, &result);
+    try zcrypto.hardware.SIMD.vectorizedXor(&a, &b, &result);
     // result = {4, 4, 4, 12}
 }
 ```

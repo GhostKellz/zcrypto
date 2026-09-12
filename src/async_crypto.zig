@@ -48,7 +48,10 @@ pub const AsyncCrypto = struct {
         return hash.sha256(data);
     }
 
-    /// Batch encryption using zsync concurrent tasks
+    /// Encrypts each item in turn on the calling thread.
+    ///
+    /// Despite the name this is sequential: no zsync task is spawned and the
+    /// items do not overlap. Cost is the sum of the items, not the maximum.
     pub fn batchEncryptAsync(self: AsyncCrypto, data_list: []const []const u8, key: []const u8) ![][]u8 {
         if (key.len != 32) return error.InvalidKeySize;
         var key_array: [32]u8 = undefined;
@@ -71,20 +74,30 @@ pub const AsyncCrypto = struct {
         return results;
     }
 
-    /// Encrypt with timeout-shaped API compatibility.
+    /// Encrypts `data`, ignoring `timeout_ms`.
     ///
-    /// The current implementation preserves the timeout parameter for callers,
-    /// but does not yet route the operation through `zsync.timeout()`.
+    /// The parameter is accepted for source compatibility and has no effect:
+    /// the call is not cancellable and never returns a timeout error. Do not
+    /// use this to bound work or as a denial-of-service control — it provides
+    /// neither. `encryptAsync` is equivalent and does not imply otherwise.
+    ///
+    /// A timeout is not merely unimplemented here, it is meaningless: the
+    /// operation is a synchronous AES-GCM call on the calling thread with no
+    /// blocking I/O to interrupt, so it runs to completion regardless. Honouring
+    /// the parameter would require scheduling the work on a zsync task and
+    /// cancelling it, which is outside this module's remit.
     pub fn encryptAsyncWithTimeout(self: AsyncCrypto, data: []const u8, key: []const u8, timeout_ms: u32) ![]u8 {
         _ = timeout_ms;
         return self.encryptAsync(data, key);
     }
 
-    /// Concurrent hash computation for large data
+    /// Hashes each item in turn on the calling thread.
+    ///
+    /// Sequential, like `batchEncryptAsync`: the name describes the API family,
+    /// not the execution model.
     pub fn hashBatchAsync(self: AsyncCrypto, data_list: []const []const u8) ![][32]u8 {
         var results = try self.allocator.alloc([32]u8, data_list.len);
 
-        // Process all hashes - can be made concurrent with zsync tasks
         for (data_list, 0..) |data, i| {
             results[i] = hash.sha256(data);
         }
@@ -96,9 +109,17 @@ pub const AsyncCrypto = struct {
 pub const AsyncCryptoResult = struct {
     data: ?[]u8,
     error_message: ?[]const u8,
-    execution_time_ns: u64,
+    /// Elapsed monotonic time, or null if the clock could not be read.
+    ///
+    /// Optional because whether the operation succeeded and whether it could be
+    /// measured are independent facts, and a plain `u64` cannot say the second
+    /// one failed. It previously held `end - start` over the wall clock with
+    /// each read defaulting to 0 on failure, so a failed *start* read published
+    /// the entire Unix epoch -- about 56 years -- as an execution time that a
+    /// caller had no way to tell from a real measurement.
+    execution_time_ns: ?u64,
 
-    pub fn success_result(data: []u8, time_ns: u64) AsyncCryptoResult {
+    pub fn success_result(data: []u8, time_ns: ?u64) AsyncCryptoResult {
         return AsyncCryptoResult{
             .data = data,
             .error_message = null,
@@ -106,7 +127,7 @@ pub const AsyncCryptoResult = struct {
         };
     }
 
-    pub fn error_result(message: []const u8, time_ns: u64) AsyncCryptoResult {
+    pub fn error_result(message: []const u8, time_ns: ?u64) AsyncCryptoResult {
         return AsyncCryptoResult{
             .data = null,
             .error_message = message,
@@ -256,4 +277,50 @@ test "encrypt with timeout" {
     defer std.testing.allocator.free(encrypted);
 
     try std.testing.expect(encrypted.len > test_data.len);
+}
+
+test "timeout parameter has no observable effect" {
+    // Pins the documented behaviour: the timeout is ignored, so a zero timeout
+    // must still return ciphertext rather than an error. If this ever starts
+    // failing, the parameter became meaningful and the doc comment on
+    // `encryptAsyncWithTimeout` is now wrong.
+    var rt = zsync.Runtime.init(std.testing.allocator, .{});
+    defer rt.deinit();
+    const async_crypto = AsyncCrypto.init(rt.io(), std.testing.allocator);
+    const test_key: [32]u8 = @splat(0xEF);
+
+    const with_zero = try async_crypto.encryptAsyncWithTimeout("same plaintext", &test_key, 0);
+    defer std.testing.allocator.free(with_zero);
+    const with_large = try async_crypto.encryptAsyncWithTimeout("same plaintext", &test_key, std.math.maxInt(u32));
+    defer std.testing.allocator.free(with_large);
+
+    try std.testing.expectEqual(with_zero.len, with_large.len);
+}
+
+fn batchEncryptUnderOom(allocator: std.mem.Allocator, io: Io) !void {
+    const async_crypto = AsyncCrypto.init(io, allocator);
+    const items = [_][]const u8{ "alpha", "beta", "gamma", "delta" };
+    const key: [32]u8 = @splat(0x5A);
+
+    const results = try async_crypto.batchEncryptAsync(&items, &key);
+    defer {
+        for (results) |item| allocator.free(item);
+        allocator.free(results);
+    }
+}
+
+test "batch encrypt frees partial results on allocation failure" {
+    // `batchEncryptAsync` allocates the result slice, then one buffer per item.
+    // A failure partway through must release the buffers already produced as
+    // well as the slice itself. checkAllAllocationFailures re-runs the body
+    // failing at every allocation index in turn and reports a leak at any of
+    // them, which is the only way to exercise each errdefer separately.
+    var rt = zsync.Runtime.init(std.testing.allocator, .{});
+    defer rt.deinit();
+
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        batchEncryptUnderOom,
+        .{rt.io()},
+    );
 }

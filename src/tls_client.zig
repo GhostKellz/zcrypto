@@ -83,6 +83,43 @@ pub const ExtensionType = enum(u16) {
     key_share = 51,
 };
 
+/// Everything needed to resume a later connection: what the server handed out,
+/// and what the client derived from it.
+///
+/// This outlives both the connection that received it and the one that presents
+/// it, which is why it owns its ticket bytes and is handed to the caller rather
+/// than kept inside a `TlsClient`.
+///
+/// The PSK is derived here, at receipt, rather than stored as the resumption
+/// master secret plus a nonce: the master secret can mint every future ticket,
+/// while this PSK is good for one. Keeping the narrower secret means a session
+/// that leaks costs one resumption, not all of them.
+pub const ResumptionSession = struct {
+    /// The opaque ticket, echoed back verbatim as a PSK identity. Owned.
+    ticket: []u8,
+    /// `HKDF-Expand-Label(resumption_master_secret, "resumption", nonce, 32)`,
+    /// RFC 8446 Section 4.6.1.
+    psk: [32]u8,
+    /// The suite this session ran under. RFC 8446 Section 4.2.11 only allows
+    /// resumption under a suite with the same hash, since the PSK is bound to
+    /// that hash's key schedule.
+    cipher_suite: tls_config.CipherSuite,
+    /// RFC 8446 Section 4.2.11.1: the client sends `age + ticket_age_add`, so
+    /// the add has to survive with the ticket or the field is meaningless.
+    ticket_age_add: u32,
+    /// Lifetime in seconds as advertised by the server. Kept for callers that
+    /// want to discard a session before offering it; nothing here enforces it,
+    /// because the server re-checks freshness against the stamp sealed inside
+    /// the ticket and is the only side that can be trusted to.
+    lifetime_s: u32,
+
+    pub fn deinit(self: *ResumptionSession, allocator: std.mem.Allocator) void {
+        util.secureZero(&self.psk);
+        allocator.free(self.ticket);
+        self.* = undefined;
+    }
+};
+
 /// TLS client connection state
 pub const TlsClient = struct {
     /// Configuration
@@ -109,11 +146,37 @@ pub const TlsClient = struct {
     server_handshake_secret: ?[32]u8 = null,
     client_traffic_secret: ?[32]u8 = null,
     server_traffic_secret: ?[32]u8 = null,
+    /// Resumption master secret, the input to every ticket PSK this session
+    /// can later present (RFC 8446 Section 4.6.1).
+    resumption_master_secret: ?[32]u8 = null,
+    /// Transcript digest at ClientHello..server Finished.
+    ///
+    /// Captured during the handshake because RFC 8446 Section 7.1 bounds the
+    /// application traffic secrets there, while the resumption master secret
+    /// runs one message further. A single late snapshot cannot serve both, and
+    /// using one for both is undetectable between two endpoints that make the
+    /// same mistake.
+    server_finished_transcript: ?[32]u8 = null,
     /// Traffic keys
     client_handshake_keys: ?TrafficKeys = null,
     server_handshake_keys: ?TrafficKeys = null,
     client_traffic_keys: ?TrafficKeys = null,
     server_traffic_keys: ?TrafficKeys = null,
+    /// A ticket to offer for resumption, or null for a full handshake.
+    ///
+    /// Borrowed for the length of the handshake and never freed here: a session
+    /// outlives the connection that produced it and the one that presents it,
+    /// so the caller decides when it dies. Set this before `handshake`.
+    offered_session: ?*const ResumptionSession = null,
+    /// A ticket the server issued on this connection, if one has arrived.
+    ///
+    /// Populated by `read`, because RFC 8446 Section 4.6.1 puts NewSessionTicket
+    /// after the handshake, in the application-data flow. Ownership passes to
+    /// the caller via `takeSession`; anything still here at `deinit` is freed.
+    received_session: ?ResumptionSession = null,
+    /// The PSK this handshake resumed under, set only once the server has
+    /// echoed `pre_shared_key`. Null means a full handshake.
+    psk: ?[32]u8 = null,
     /// Session ID
     session_id: ?[32]u8 = null,
     /// Server certificates
@@ -187,17 +250,31 @@ pub const TlsClient = struct {
         try self.receiveEncryptedExtensions();
         self.handshake_state = .received_encrypted_extensions;
 
-        // Receive certificate (if not PSK)
-        try self.receiveCertificate();
-        self.handshake_state = .received_certificate;
+        // Certificate and CertificateVerify, unless this handshake resumed.
+        // RFC 8446 Section 4.4.2: a server that authenticated via PSK sends
+        // neither, because possession of the ticket's PSK is the
+        // authentication. `receiveServerHello` will not leave `psk` set unless
+        // this client offered the ticket and the server echoed its selection,
+        // so a server cannot reach this branch by claiming a PSK on its own.
+        if (self.psk == null) {
+            try self.receiveCertificate();
+            self.handshake_state = .received_certificate;
 
-        // Receive CertificateVerify
-        try self.receiveCertificateVerify();
-        self.handshake_state = .received_certificate_verify;
+            try self.receiveCertificateVerify();
+            self.handshake_state = .received_certificate_verify;
+        }
 
         // Receive Finished
         try self.receiveFinished();
         self.handshake_state = .received_finished;
+
+        // RFC 8446 Section 7.1 derives the application traffic secrets over
+        // ClientHello..server Finished. That range closes here, one message
+        // before this endpoint sends its own Finished, so the digest has to be
+        // taken now rather than reconstructed later from a transcript that has
+        // moved on. The resumption master secret runs to
+        // ClientHello..client Finished and is taken from the live transcript.
+        self.server_finished_transcript = try self.snapshotTranscript();
 
         // Send client Finished
         try self.sendFinished();
@@ -232,26 +309,123 @@ pub const TlsClient = struct {
             return error.NotConnected;
         }
 
-        // Read and decrypt a record
-        const record = try self.readRecord();
-        defer self.allocator.free(record.data);
+        // Post-handshake handshake records are consumed here and the read
+        // continues, rather than being surfaced to the caller. RFC 8446
+        // Section 4.6.1 puts NewSessionTicket in the application-data flow at a
+        // time of the server's choosing, so a caller doing nothing but reading
+        // its own data would otherwise see a spurious failure whenever a ticket
+        // happened to arrive.
+        while (true) {
+            const record = try self.readRecord();
+            defer self.allocator.free(record.data);
 
-        if (record.record_type != .application_data) {
-            // Handle other record types (alerts, etc.)
-            return error.UnexpectedRecord;
+            if (record.record_type == .handshake) {
+                try self.handlePostHandshake(record.data);
+                continue;
+            }
+
+            if (record.record_type != .application_data) {
+                // Alerts and anything else still reach the caller.
+                return error.UnexpectedRecord;
+            }
+
+            const copy_len = @min(buffer.len, record.data.len);
+            @memcpy(buffer[0..copy_len], record.data[0..copy_len]);
+
+            return copy_len;
+        }
+    }
+
+    /// Dispatch a handshake message arriving after the handshake completed.
+    ///
+    /// Only NewSessionTicket is acted on. Anything else is ignored rather than
+    /// rejected, because an unrecognised post-handshake message is not grounds
+    /// to tear down a working connection -- but note that ignoring is not
+    /// neutral for KeyUpdate, which this record layer does not implement: a
+    /// peer that sends one will find subsequent records undecryptable. That
+    /// failure is the record layer's to report, not this function's to fake.
+    fn handlePostHandshake(self: *TlsClient, data: []const u8) !void {
+        if (data.len < 4) return error.InvalidHandshake;
+        const msg_len = std.mem.readInt(u24, data[1..4], .big);
+        if (4 + @as(usize, msg_len) > data.len) return error.InvalidHandshake;
+        if (data[0] != @backingInt(HandshakeType.new_session_ticket)) return;
+
+        self.receiveNewSessionTicket(data[4 .. 4 + msg_len]) catch |err| switch (err) {
+            // A ticket this client cannot parse or key costs a future
+            // resumption and nothing else. Failing the connection over it would
+            // let a malformed optional message take down live traffic.
+            error.InvalidHandshake, error.TruncatedMessage => return,
+            else => return err,
+        };
+    }
+
+    /// RFC 8446 Section 4.6.1:
+    ///     ticket_lifetime(4) || ticket_age_add(4) || nonce_len(1) || nonce
+    ///         || ticket_len(2) || ticket || extensions_len(2)
+    ///
+    /// The PSK is derived here, at receipt, from the nonce carried in this
+    /// message -- not from a nonce chosen locally. The server seals the PSK it
+    /// derived from the nonce it put on the wire, so these must be the same
+    /// bytes; if they are not, nothing fails until some later connection's
+    /// binder is rejected for no stated reason.
+    ///
+    /// Public for the same reason as `buildClientHello`: it is one half of a
+    /// cross-endpoint agreement, and the test that checks the halves agree has
+    /// to sit next to the other one.
+    pub fn receiveNewSessionTicket(self: *TlsClient, body: []const u8) !void {
+        const res_master = self.resumption_master_secret orelse return error.InvalidHandshake;
+        const suite = self.cipher_suite orelse return error.InvalidHandshake;
+
+        var cur = Cursor{ .data = body };
+        const lifetime_s = try cur.int32();
+        const age_add = try cur.int32();
+        const nonce = try cur.take(try cur.byte());
+        const ticket = try cur.take(try cur.int16());
+        if (ticket.len == 0) return error.InvalidHandshake;
+
+        const psk = try kdf.hkdfExpandLabel(self.allocator, &res_master, "resumption", nonce, 32);
+        defer {
+            util.secureZero(psk);
+            self.allocator.free(psk);
         }
 
-        const copy_len = @min(buffer.len, record.data.len);
-        @memcpy(buffer[0..copy_len], record.data[0..copy_len]);
+        const owned = try self.allocator.dupe(u8, ticket);
+        errdefer self.allocator.free(owned);
 
-        return copy_len;
+        // At most one session is held. A server may issue several; keeping the
+        // newest and dropping the rest bounds how many live PSKs this client
+        // holds, and `takeSession` gives a caller that wants them all a place
+        // to collect each one.
+        if (self.received_session) |*old| old.deinit(self.allocator);
+
+        var session = ResumptionSession{
+            .ticket = owned,
+            .psk = undefined,
+            .cipher_suite = suite,
+            .ticket_age_add = age_add,
+            .lifetime_s = lifetime_s,
+        };
+        @memcpy(&session.psk, psk);
+        self.received_session = session;
+    }
+
+    /// Take ownership of the session ticket this connection received, if any.
+    ///
+    /// Moves rather than copies: a session is a credential, and leaving a second
+    /// live copy behind in the connection would mean the caller cannot tell how
+    /// long the PSK stays in memory. After this the connection has none, so a
+    /// second call returns null.
+    pub fn takeSession(self: *TlsClient) ?ResumptionSession {
+        const session = self.received_session;
+        self.received_session = null;
+        return session;
     }
 
     /// Close the connection
     pub fn close(self: *TlsClient) !void {
         if (self.handshake_state == .connected) {
             // Send close_notify alert
-            const alert = [_]u8{ @intFromEnum(AlertLevel.warning), @intFromEnum(AlertDescription.close_notify) };
+            const alert = [_]u8{ @backingInt(AlertLevel.warning), @backingInt(AlertDescription.close_notify) };
             try self.writeRecord(.alert, &alert);
         }
 
@@ -273,6 +447,11 @@ pub const TlsClient = struct {
         if (self.server_handshake_secret) |*secret| util.secureZero(secret);
         if (self.client_traffic_secret) |*secret| util.secureZero(secret);
         if (self.server_traffic_secret) |*secret| util.secureZero(secret);
+        if (self.resumption_master_secret) |*secret| util.secureZero(secret);
+        if (self.psk) |*secret| util.secureZero(secret);
+        // `offered_session` is borrowed and deliberately untouched. Only a
+        // session the caller never claimed is freed here.
+        if (self.received_session) |*session| session.deinit(self.allocator);
 
         // Clean up keys
         if (self.client_handshake_keys) |keys| keys.deinit(self.allocator);
@@ -299,6 +478,33 @@ pub const TlsClient = struct {
         try buffer.append(allocator, val);
     }
 
+    /// Bounds-checked forward reader over a handshake message body.
+    const Cursor = struct {
+        data: []const u8,
+        pos: usize = 0,
+
+        /// Consume `len` bytes, or fail if fewer remain.
+        fn take(self: *Cursor, len: usize) ![]const u8 {
+            // Subtraction, not `pos + len > data.len`, so a huge wire-supplied
+            // length cannot wrap the comparison.
+            if (len > self.data.len - self.pos) return error.TruncatedMessage;
+            defer self.pos += len;
+            return self.data[self.pos..][0..len];
+        }
+
+        fn byte(self: *Cursor) !u8 {
+            return (try self.take(1))[0];
+        }
+
+        fn int16(self: *Cursor) !u16 {
+            return std.mem.readInt(u16, (try self.take(2))[0..2], .big);
+        }
+
+        fn int32(self: *Cursor) !u32 {
+            return std.mem.readInt(u32, (try self.take(4))[0..4], .big);
+        }
+    };
+
     fn writeU16(buffer: *std.ArrayList(u8), allocator: std.mem.Allocator, val: u16) !void {
         var bytes: [2]u8 = undefined;
         std.mem.writeInt(u16, &bytes, val, .big);
@@ -311,11 +517,43 @@ pub const TlsClient = struct {
         try buffer.appendSlice(allocator, &bytes);
     }
 
+    fn writeU32(buffer: *std.ArrayList(u8), allocator: std.mem.Allocator, val: u32) !void {
+        var bytes: [4]u8 = undefined;
+        std.mem.writeInt(u32, &bytes, val, .big);
+        try buffer.appendSlice(allocator, &bytes);
+    }
+
     fn writeBytes(buffer: *std.ArrayList(u8), allocator: std.mem.Allocator, bytes: []const u8) !void {
         try buffer.appendSlice(allocator, bytes);
     }
 
     fn sendClientHello(self: *TlsClient) !void {
+        const body = try self.buildClientHello();
+        defer self.allocator.free(body);
+
+        self.transcriptUpdate(.client_hello, body);
+        try self.writeHandshakeMessage(.client_hello, body);
+    }
+
+    /// The ClientHello body of RFC 8446 Section 4.1.2, binder included.
+    ///
+    /// Split from `sendClientHello` so the message can be read back without a
+    /// socket, the same reason the server splits `buildNewSessionTicketBody`.
+    /// The binder is the one field whose correctness cannot be judged from
+    /// either endpoint alone -- it is a MAC over these very bytes, and a client
+    /// and server that truncate the same way agree with each other whether or
+    /// not they agree with the RFC -- so being able to hand the finished message
+    /// to the server's parser, and to a hand-written check, is what makes it
+    /// testable at all.
+    ///
+    /// Deliberately does not touch the transcript: the caller decides when this
+    /// message enters it, and a test that builds a ClientHello to inspect must
+    /// not perturb the connection it came from.
+    ///
+    /// Public because the resumption tests live beside the server, and Zig
+    /// privacy is per file. Testing a copy of this logic from over there would
+    /// test the copy.
+    pub fn buildClientHello(self: *TlsClient) ![]u8 {
         var buffer: std.ArrayList(u8) = .empty;
         defer buffer.deinit(self.allocator);
 
@@ -331,10 +569,19 @@ pub const TlsClient = struct {
         // Session ID length (0 for new connection)
         try writeU8(&buffer, self.allocator, 0);
 
-        // Cipher suites
-        try writeU16(&buffer, self.allocator, @intCast(self.config.cipher_suites.len * 2));
+        // Cipher suites. Only SHA-256 suites are offered: the handshake
+        // transcript is SHA-256 only (see getTranscriptHash), so offering a
+        // SHA-384 suite invites the server to pick one we cannot complete.
+        var offered: usize = 0;
         for (self.config.cipher_suites) |suite| {
-            try writeU16(&buffer, self.allocator, @intFromEnum(suite));
+            if (suite.hashAlgorithm() == .sha256) offered += 1;
+        }
+        if (offered == 0) return error.NoCipherSuite;
+
+        try writeU16(&buffer, self.allocator, @intCast(offered * 2));
+        for (self.config.cipher_suites) |suite| {
+            if (suite.hashAlgorithm() != .sha256) continue;
+            try writeU16(&buffer, self.allocator, @backingInt(suite));
         }
 
         // Compression methods (null only)
@@ -367,15 +614,30 @@ pub const TlsClient = struct {
         // Key share extension
         try self.writeKeyShareExtension(&extensions);
 
+        // Resumption offer. `pre_shared_key` goes last and nothing may be
+        // appended after it: RFC 8446 Section 4.2.11 requires it, and the
+        // requirement is structural rather than cosmetic -- the binder is a MAC
+        // over the ClientHello up to the binders list, so that region is only a
+        // well-defined prefix if this extension terminates the message.
+        const offering = self.pskOffer();
+        if (offering) |session| {
+            try self.writePskKeyExchangeModesExtension(&extensions);
+            try self.writePreSharedKeyExtension(&extensions, session);
+        }
+
         // Write extensions length and data
         try writeU16(&buffer, self.allocator, @intCast(extensions.items.len));
         try writeBytes(&buffer, self.allocator, extensions.items);
 
-        // Update transcript
-        self.transcript.update(buffer.items);
+        // The binder can only be computed once the message is otherwise
+        // complete, because it covers the message itself. The placeholder
+        // written above is the same length as the real value, so patching it in
+        // here changes no offset and no declared length.
+        if (offering) |session| {
+            try self.fillPskBinder(buffer.items, session);
+        }
 
-        // Send handshake message
-        try self.writeHandshakeMessage(.client_hello, buffer.items);
+        return buffer.toOwnedSlice(self.allocator);
     }
 
     fn receiveServerHello(self: *TlsClient) !void {
@@ -386,46 +648,62 @@ pub const TlsClient = struct {
             return error.UnexpectedMessage;
         }
 
-        var stream = std.io.fixedBufferStream(msg.data);
-        const reader = stream.reader();
+        try self.parseServerHello(msg.data);
+    }
+
+    /// Read a ServerHello body, RFC 8446 Section 4.1.3.
+    ///
+    /// Parsed with an explicit cursor: every field here comes off the wire from
+    /// an unauthenticated peer, so each read is length-checked. The previous
+    /// reader-based version indexed the backing slice directly and would panic
+    /// on a hostile ServerHello -- an over-long session ID, or a truncated
+    /// supported_versions body.
+    ///
+    /// Public, and split from the socket, so the resumption tests can hand this
+    /// parser a ServerHello the real server built. Zig privacy is per file and
+    /// those tests live beside the server.
+    pub fn parseServerHello(self: *TlsClient, body: []const u8) !void {
+        var cur = Cursor{ .data = body };
 
         // Legacy version
-        _ = try reader.readInt(u16, .big);
+        _ = try cur.int16();
 
         // Server random
-        _ = try reader.readAll(&self.server_random);
+        @memcpy(&self.server_random, try cur.take(32));
 
-        // Session ID
-        const session_id_len = try reader.readByte();
-        if (session_id_len > 0) {
-            var session_id: [32]u8 = undefined;
-            _ = try reader.readAll(session_id[0..session_id_len]);
-            self.session_id = session_id;
-        }
+        // Session ID. We always send an empty legacy_session_id (see
+        // sendClientHello), and RFC 8446 4.1.3 requires the server to echo it
+        // verbatim, so anything else is a protocol violation.
+        const session_id_len = try cur.byte();
+        if (session_id_len != 0) return error.InvalidHandshake;
 
         // Cipher suite
-        const cipher_suite_value = try reader.readInt(u16, .big);
-        self.cipher_suite = std.meta.intToEnum(tls_config.CipherSuite, cipher_suite_value) catch {
+        const cipher_suite_value = try cur.int16();
+        self.cipher_suite = std.enums.fromInt(tls_config.CipherSuite, cipher_suite_value) orelse {
             return error.UnsupportedCipherSuite;
         };
 
         // Compression method (must be null)
-        const compression = try reader.readByte();
-        if (compression != 0) {
+        if (try cur.byte() != 0) {
             return error.UnsupportedCompression;
         }
 
         // Parse extensions
-        const extensions_len = try reader.readInt(u16, .big);
-        const extensions_start = stream.pos;
+        const extensions_len = try cur.int16();
+        var ext_cur = Cursor{ .data = try cur.take(extensions_len) };
 
-        while (stream.pos < extensions_start + extensions_len) {
-            const ext_type = try reader.readInt(u16, .big);
-            const ext_len = try reader.readInt(u16, .big);
-            const ext_data = msg.data[stream.pos .. stream.pos + ext_len];
+        var psk_accepted = false;
+        while (ext_cur.pos < ext_cur.data.len) {
+            const ext_type = try ext_cur.int16();
+            const ext_len = try ext_cur.int16();
+            const ext_data = try ext_cur.take(ext_len);
 
-            switch (std.meta.intToEnum(ExtensionType, ext_type) catch .unsupported) {
+            // Extensions we do not model are skipped, not rejected: the cursor
+            // has already stepped past the body.
+            const known = std.enums.fromInt(ExtensionType, ext_type) orelse continue;
+            switch (known) {
                 .supported_versions => {
+                    if (ext_data.len < 2) return error.InvalidExtension;
                     const version = std.mem.readInt(u16, ext_data[0..2], .big);
                     if (version != 0x0304) { // TLS 1.3
                         return error.UnsupportedVersion;
@@ -444,44 +722,76 @@ pub const TlsClient = struct {
                         }
                     }
                 },
+                .pre_shared_key => {
+                    // RFC 8446 Section 4.2.11: the server echoes only the index
+                    // of the identity it chose. One identity was offered, so the
+                    // only valid answer is 0; anything else means the server is
+                    // keyed on something this client did not send, and
+                    // continuing would fail at Finished with no explanation.
+                    if (ext_data.len != 2) return error.InvalidExtension;
+                    if (std.mem.readInt(u16, ext_data[0..2], .big) != 0) return error.InvalidExtension;
+                    // A server may not select a PSK that was never offered.
+                    // Without this, a server could induce the client into the
+                    // resumption path -- which skips Certificate and
+                    // CertificateVerify -- while `psk` is null, so the client
+                    // would complete an unauthenticated handshake.
+                    if (self.psk == null) return error.InvalidExtension;
+                    psk_accepted = true;
+                },
                 else => {},
             }
+        }
 
-            stream.pos += ext_len;
+        // The offer was declined, so this is a full handshake. Clearing the
+        // provisional PSK here is what keeps the key schedule honest: it is read
+        // back in `earlySecretIkm`, and leaving it set would mix a PSK the
+        // server is not using into every secret derived from here on.
+        if (!psk_accepted) {
+            if (self.psk) |*secret| util.secureZero(secret);
+            self.psk = null;
         }
 
         // Update transcript
-        self.transcript.update(msg.data);
+        self.transcriptUpdate(.server_hello, body);
     }
 
-    fn deriveHandshakeSecrets(self: *TlsClient) !void {
+    /// Derive both handshake traffic secrets at the ClientHello..ServerHello
+    /// boundary.
+    ///
+    /// Public only as a seam: the resumption tests live beside the server, and
+    /// comparing what the two sides derive is the one check that covers the PSK,
+    /// the ECDHE share and the whole transcript in a single assertion. Callers
+    /// driving a handshake should use `handshake`, which sequences this.
+    pub fn deriveHandshakeSecrets(self: *TlsClient) !void {
         // Perform ECDHE key exchange
         if (self.client_key_share == null or self.server_public_key == null) {
             return error.MissingKeyExchange;
         }
 
-        // Compute shared secret
-        self.shared_secret = asym.x25519.dh(self.client_key_share.?.private_key, self.server_public_key.?);
+        // Compute shared secret. `dh` returns IdentityElement when the peer's
+        // share is a low-order point; propagate it rather than continuing with a
+        // shared secret the peer could have forced to a known value.
+        self.shared_secret = try asym.x25519.dh(self.client_key_share.?.private_key, self.server_public_key.?);
 
         // Initialize key schedule with the cipher suite's hash algorithm
         const hash_alg = self.cipher_suite.?.hashAlgorithm();
         var key_schedule = try tls.KeySchedule.init(self.allocator, hash_alg);
         defer key_schedule.deinit();
 
-        // Derive early secret (no PSK)
-        try key_schedule.deriveEarlySecret(null);
+        try key_schedule.deriveEarlySecret(self.earlySecretIkm());
 
         // Derive handshake secret using ECDHE shared secret
         try key_schedule.deriveHandshakeSecret(&self.shared_secret.?);
 
-        // Derive client and server handshake secrets
-        const transcript_data = try self.getTranscriptHash();
-        defer self.allocator.free(transcript_data);
+        // RFC 8446 Section 7.1 bounds both handshake traffic secrets at
+        // ClientHello..ServerHello. This runs immediately after ServerHello is
+        // processed, which is that boundary.
+        const transcript_data = try self.snapshotTranscript();
 
-        const client_hs_secret = try key_schedule.deriveSecret(key_schedule.handshake_secret, "c hs traffic", transcript_data);
+        const client_hs_secret = try key_schedule.deriveSecretFromTranscriptHash(key_schedule.handshake_secret, "c hs traffic", &transcript_data);
         defer self.allocator.free(client_hs_secret);
 
-        const server_hs_secret = try key_schedule.deriveSecret(key_schedule.handshake_secret, "s hs traffic", transcript_data);
+        const server_hs_secret = try key_schedule.deriveSecretFromTranscriptHash(key_schedule.handshake_secret, "s hs traffic", &transcript_data);
         defer self.allocator.free(server_hs_secret);
 
         // Copy secrets (truncate to 32 bytes for now)
@@ -508,89 +818,65 @@ pub const TlsClient = struct {
         };
     }
 
+    /// Transcript hash over the handshake messages seen so far.
+    ///
+    /// `self.transcript` is a SHA-256 hasher and is the only transcript this
+    /// connection keeps, so only SHA-256 suites can be completed. The other arms
+    /// fail closed rather than approximate: RFC 8446 defines the SHA-384
+    /// transcript as SHA-384 *of the handshake messages*, which cannot be
+    /// recovered from a finished SHA-256 digest. `sendClientHello` already
+    /// declines to offer these suites; this is the backstop for a server that
+    /// selects one anyway.
     fn getTranscriptHash(self: *TlsClient) ![]u8 {
         const hash_alg = self.cipher_suite.?.hashAlgorithm();
-        const hash_len = hash_alg.digestSize();
+        if (hash_alg != .sha256) return error.UnsupportedCipherSuite;
 
-        const result = try self.allocator.alloc(u8, hash_len);
+        var transcript_copy = self.transcript;
+        const result = try self.allocator.alloc(u8, hash_alg.digestSize());
+        errdefer self.allocator.free(result);
 
-        switch (hash_alg) {
-            .sha256 => {
-                var transcript_copy = self.transcript;
-                const final_hash = transcript_copy.final();
-                @memcpy(result[0..32], &final_hash);
-            },
-            .sha384 => {
-                // Use SHA384 transcript hash
-                // Note: Would need to track SHA384 transcript separately for full support
-                // For now, hash the current SHA256 transcript data with SHA384
-                var sha384_hasher = std.crypto.hash.sha2.Sha384.init(.{});
-                var transcript_copy = self.transcript;
-                const sha256_result = transcript_copy.finalResult();
-                sha384_hasher.update(&sha256_result);
-                var sha384_result: [48]u8 = undefined;
-                sha384_hasher.final(&sha384_result);
-                @memcpy(result[0..48], &sha384_result);
-            },
-            .sha512 => {
-                // Use SHA512 transcript hash
-                var sha512_hasher = hash.Sha512.init();
-                var transcript_copy = self.transcript;
-                const sha256_result = transcript_copy.finalResult();
-                sha512_hasher.update(&sha256_result);
-                const sha512_result = sha512_hasher.final();
-                @memcpy(result[0..64], &sha512_result);
-            },
-        }
-
+        const final_hash = transcript_copy.final();
+        @memcpy(result[0..32], &final_hash);
         return result;
+    }
+
+    /// The transcript digest at this point in the handshake.
+    ///
+    /// Copies the hasher rather than finalising it: the transcript continues
+    /// through every message that follows, and `final` consumes the state. The
+    /// return is by value so a captured boundary cannot later be read through a
+    /// hasher that has moved past it.
+    fn snapshotTranscript(self: *TlsClient) ![32]u8 {
+        const hash_alg = self.cipher_suite.?.hashAlgorithm();
+        if (hash_alg != .sha256) return error.UnsupportedCipherSuite;
+        var transcript_copy = self.transcript;
+        return transcript_copy.final();
     }
 
     fn computeFinishedVerifyData(self: *TlsClient, is_client: bool) ![]u8 {
         const hash_alg = self.cipher_suite.?.hashAlgorithm();
-        const hash_len = hash_alg.digestSize();
 
-        // Get current transcript hash
         const transcript_hash = try self.getTranscriptHash();
         defer self.allocator.free(transcript_hash);
 
-        // Use appropriate handshake secret
         const secret = if (is_client)
             self.client_handshake_secret.?
         else
             self.server_handshake_secret.?;
 
-        // Compute finished key using HKDF-Expand-Label
-        const finished_key = try kdf.hkdfExpandLabel(self.allocator, &secret, "finished", "", hash_len);
-        defer self.allocator.free(finished_key);
+        return tls.verifyData(self.allocator, hash_alg, &secret, transcript_hash);
+    }
 
-        // Compute HMAC of transcript hash using the appropriate hash algorithm
-        const verify_data = try self.allocator.alloc(u8, hash_len);
-
-        switch (hash_alg) {
-            .sha256 => {
-                const key_array: [32]u8 = finished_key[0..32].*;
-                var hmac_result: [32]u8 = undefined;
-                std.crypto.auth.hmac.sha2.HmacSha256.create(&hmac_result, transcript_hash, &key_array);
-                @memcpy(verify_data, &hmac_result);
-            },
-            .sha384 => {
-                // Use HMAC-SHA384 for TLS_AES_256_GCM_SHA384
-                const key_array: [48]u8 = finished_key[0..48].*;
-                var hmac_result: [48]u8 = undefined;
-                std.crypto.auth.hmac.sha2.HmacSha384.create(&hmac_result, transcript_hash, &key_array);
-                @memcpy(verify_data, &hmac_result);
-            },
-            .sha512 => {
-                // Use HMAC-SHA512
-                const key_array: [64]u8 = finished_key[0..64].*;
-                var hmac_result: [64]u8 = undefined;
-                std.crypto.auth.hmac.sha2.HmacSha512.create(&hmac_result, transcript_hash, &key_array);
-                @memcpy(verify_data, &hmac_result);
-            },
-        }
-
-        return verify_data;
+    /// The IKM for `deriveEarlySecret`: the resumption PSK when the server
+    /// accepted one, otherwise null, which RFC 8446 Section 7.1 defines as a
+    /// string of `Hash.length` zeroes.
+    ///
+    /// Both `deriveHandshakeSecrets` and `deriveApplicationSecrets` rebuild the
+    /// key schedule from scratch, so both must start it the same way; the two
+    /// disagreeing would surface as a Finished mismatch several steps later,
+    /// pointing at neither of them.
+    fn earlySecretIkm(self: *const TlsClient) ?[]const u8 {
+        return if (self.psk) |*p| p[0..] else null;
     }
 
     fn deriveApplicationSecrets(self: *TlsClient) !void {
@@ -600,19 +886,21 @@ pub const TlsClient = struct {
         defer key_schedule.deinit();
 
         // Reconstruct the key schedule
-        try key_schedule.deriveEarlySecret(null);
+        try key_schedule.deriveEarlySecret(self.earlySecretIkm());
         try key_schedule.deriveHandshakeSecret(&self.shared_secret.?);
         try key_schedule.deriveMasterSecret();
 
-        // Get current transcript hash
-        const transcript_data = try self.getTranscriptHash();
-        defer self.allocator.free(transcript_data);
+        // RFC 8446 Section 7.1 bounds the application traffic secrets at
+        // ClientHello..server Finished. That range closed before this endpoint
+        // sent its own Finished, so the digest comes from the snapshot taken
+        // then and not from the live transcript, which has since moved on.
+        const app_transcript = self.server_finished_transcript orelse
+            return error.MissingFinishedTranscript;
 
-        // Derive application traffic secrets
-        const client_app_secret = try key_schedule.deriveSecret(key_schedule.master_secret, "c ap traffic", transcript_data);
+        const client_app_secret = try key_schedule.deriveSecretFromTranscriptHash(key_schedule.master_secret, "c ap traffic", &app_transcript);
         defer self.allocator.free(client_app_secret);
 
-        const server_app_secret = try key_schedule.deriveSecret(key_schedule.master_secret, "s ap traffic", transcript_data);
+        const server_app_secret = try key_schedule.deriveSecretFromTranscriptHash(key_schedule.master_secret, "s ap traffic", &app_transcript);
         defer self.allocator.free(server_app_secret);
 
         // Copy secrets (truncate to 32 bytes for now)
@@ -623,6 +911,19 @@ pub const TlsClient = struct {
 
         self.client_traffic_keys = try self.deriveTrafficKeys(self.client_traffic_secret.?, true);
         self.server_traffic_keys = try self.deriveTrafficKeys(self.server_traffic_secret.?, false);
+
+        // Resumption master secret, RFC 8446 Section 7.1:
+        //   Derive-Secret(Master Secret, "res master", ClientHello..client Finished)
+        // One message further than the application secrets above, which is why
+        // this takes the live transcript rather than reusing `app_transcript`.
+        const res_transcript = try self.snapshotTranscript();
+        const res_master = try key_schedule.deriveSecretFromTranscriptHash(key_schedule.master_secret, "res master", &res_transcript);
+        defer {
+            util.secureZero(res_master);
+            self.allocator.free(res_master);
+        }
+        self.resumption_master_secret = std.mem.zeroes([32]u8);
+        @memcpy(&self.resumption_master_secret.?, res_master[0..32]);
     }
 
     // TLS 1.3 Handshake Message Processing (RFC 8446)
@@ -641,7 +942,7 @@ pub const TlsClient = struct {
         }
 
         // Update transcript with the full handshake message
-        self.transcript.update(msg.data);
+        self.transcriptUpdate(.encrypted_extensions, msg.data);
 
         // Parse extensions length (2 bytes)
         if (msg.data.len < 2) {
@@ -669,15 +970,15 @@ pub const TlsClient = struct {
             // Validate extension types - some are forbidden in EncryptedExtensions
             switch (ext_type) {
                 // Forbidden extensions (must only appear in ClientHello/ServerHello)
-                @intFromEnum(ExtensionType.supported_versions),
-                @intFromEnum(ExtensionType.key_share),
-                @intFromEnum(ExtensionType.pre_shared_key),
-                @intFromEnum(ExtensionType.psk_key_exchange_modes),
-                @intFromEnum(ExtensionType.cookie),
+                @backingInt(ExtensionType.supported_versions),
+                @backingInt(ExtensionType.key_share),
+                @backingInt(ExtensionType.pre_shared_key),
+                @backingInt(ExtensionType.psk_key_exchange_modes),
+                @backingInt(ExtensionType.cookie),
                 => return error.ForbiddenExtension,
 
                 // ALPN - store selected protocol
-                @intFromEnum(ExtensionType.application_layer_protocol_negotiation) => {
+                @backingInt(ExtensionType.application_layer_protocol_negotiation) => {
                     if (ext_len >= 3) {
                         const alpn_list_len = std.mem.readInt(u16, ext_data[0..2], .big);
                         if (alpn_list_len > 0 and ext_len >= 3) {
@@ -690,7 +991,7 @@ pub const TlsClient = struct {
                 },
 
                 // Server name acknowledgment (no data expected)
-                @intFromEnum(ExtensionType.server_name) => {},
+                @backingInt(ExtensionType.server_name) => {},
 
                 // Other extensions - allow for extensibility
                 else => {},
@@ -714,7 +1015,7 @@ pub const TlsClient = struct {
         }
 
         // Update transcript
-        self.transcript.update(msg.data);
+        self.transcriptUpdate(.certificate, msg.data);
 
         // Parse Certificate message structure:
         // - certificate_request_context (1 byte length + data, empty for server cert)
@@ -925,7 +1226,11 @@ pub const TlsClient = struct {
         // - Single 0x00 byte
         // - Hash of handshake transcript (up to but not including CertificateVerify)
         const context_string = "TLS 1.3, server CertificateVerify";
-        const transcript_hash = self.transcript.finalResult();
+        // Hash a copy: `final` consumes the hasher, and the handshake is not over
+        // -- Finished still has to be computed over a transcript that continues
+        // through this CertificateVerify.
+        var transcript_copy = self.transcript;
+        const transcript_hash = transcript_copy.final();
 
         var content: [64 + context_string.len + 1 + 32]u8 = undefined;
         @memset(content[0..64], 0x20); // 64 spaces
@@ -954,7 +1259,7 @@ pub const TlsClient = struct {
         }
 
         // NOW update transcript with the CertificateVerify message
-        self.transcript.update(msg.data);
+        self.transcriptUpdate(.certificate_verify, msg.data);
     }
 
     fn receiveFinished(self: *TlsClient) !void {
@@ -975,7 +1280,7 @@ pub const TlsClient = struct {
         }
 
         // Update transcript
-        self.transcript.update(msg.data);
+        self.transcriptUpdate(.finished, msg.data);
     }
 
     fn sendFinished(self: *TlsClient) !void {
@@ -983,7 +1288,7 @@ pub const TlsClient = struct {
         defer self.allocator.free(verify_data);
 
         // Update transcript with Finished message
-        self.transcript.update(verify_data);
+        self.transcriptUpdate(.finished, verify_data);
 
         // Send Finished message
         try self.writeHandshakeMessage(.finished, verify_data);
@@ -991,14 +1296,14 @@ pub const TlsClient = struct {
 
     // Extension writers
     fn writeSupportedVersionsExtension(self: *TlsClient, buffer: *std.ArrayList(u8)) !void {
-        try writeU16(buffer, self.allocator, @intFromEnum(ExtensionType.supported_versions));
+        try writeU16(buffer, self.allocator, @backingInt(ExtensionType.supported_versions));
         try writeU16(buffer, self.allocator, 3); // Extension length
         try writeU8(buffer, self.allocator, 2); // Versions list length
         try writeU16(buffer, self.allocator, 0x0304); // TLS 1.3
     }
 
     fn writeServerNameExtension(self: *TlsClient, buffer: *std.ArrayList(u8), name: []const u8) !void {
-        try writeU16(buffer, self.allocator, @intFromEnum(ExtensionType.server_name));
+        try writeU16(buffer, self.allocator, @backingInt(ExtensionType.server_name));
         try writeU16(buffer, self.allocator, @intCast(name.len + 5));
         try writeU16(buffer, self.allocator, @intCast(name.len + 3)); // Server name list length
         try writeU8(buffer, self.allocator, 0); // Host name type
@@ -1007,14 +1312,14 @@ pub const TlsClient = struct {
     }
 
     fn writeSupportedGroupsExtension(self: *TlsClient, buffer: *std.ArrayList(u8)) !void {
-        try writeU16(buffer, self.allocator, @intFromEnum(ExtensionType.supported_groups));
+        try writeU16(buffer, self.allocator, @backingInt(ExtensionType.supported_groups));
         try writeU16(buffer, self.allocator, 4); // Extension length
         try writeU16(buffer, self.allocator, 2); // Groups list length
         try writeU16(buffer, self.allocator, 0x001d); // x25519
     }
 
     fn writeSignatureAlgorithmsExtension(self: *TlsClient, buffer: *std.ArrayList(u8)) !void {
-        try writeU16(buffer, self.allocator, @intFromEnum(ExtensionType.signature_algorithms));
+        try writeU16(buffer, self.allocator, @backingInt(ExtensionType.signature_algorithms));
         try writeU16(buffer, self.allocator, 4); // Extension length
         try writeU16(buffer, self.allocator, 2); // Algorithms list length
         try writeU16(buffer, self.allocator, 0x0807); // ed25519
@@ -1029,16 +1334,28 @@ pub const TlsClient = struct {
             try writeBytes(&proto_list, self.allocator, proto);
         }
 
-        try writeU16(buffer, self.allocator, @intFromEnum(ExtensionType.application_layer_protocol_negotiation));
+        try writeU16(buffer, self.allocator, @backingInt(ExtensionType.application_layer_protocol_negotiation));
         try writeU16(buffer, self.allocator, @intCast(proto_list.items.len + 2));
         try writeU16(buffer, self.allocator, @intCast(proto_list.items.len));
         try writeBytes(buffer, self.allocator, proto_list.items);
     }
 
     fn writeKeyShareExtension(self: *TlsClient, buffer: *std.ArrayList(u8)) !void {
-        try writeU16(buffer, self.allocator, @intFromEnum(ExtensionType.key_share));
-        try writeU16(buffer, self.allocator, 36); // Extension length
-        try writeU16(buffer, self.allocator, 34); // Client shares length
+        // RFC 8446 Section 4.2.8: a ClientHello key_share carries a
+        // KeyShareClientHello, which is a length-prefixed *list* of entries.
+        // One x25519 entry is group(2) + key_exchange length(2) + 32 = 36, so
+        // the list prefix is 36 and the extension body is 2 + 36 = 38.
+        //
+        // Both numbers used to be two short, counted as though the entry began
+        // at its key_exchange length. Nothing caught it because a ClientHello
+        // this client built had never been handed to a parser: the server's
+        // key_share arm bounds-checks and silently skips a short entry, so the
+        // handshake failed later at key exchange with a missing peer key rather
+        // than here, and the two-byte shortfall desynchronised every extension
+        // that followed.
+        try writeU16(buffer, self.allocator, @backingInt(ExtensionType.key_share));
+        try writeU16(buffer, self.allocator, 38); // Extension length
+        try writeU16(buffer, self.allocator, 36); // Client shares length
         try writeU16(buffer, self.allocator, 0x001d); // x25519
         try writeU16(buffer, self.allocator, 32); // Key length
 
@@ -1048,6 +1365,106 @@ pub const TlsClient = struct {
         } else {
             return error.NoKeyShare;
         }
+    }
+
+    /// The number of bytes a single-identity `binders` list occupies, counting
+    /// the one-byte per-binder length but not the two-byte list prefix. This is
+    /// the value the list prefix carries, and the same number
+    /// `tls.clientHelloBinderPrefix` truncates from.
+    const single_binder_list_len: usize = 1 + 32;
+
+    /// The session this ClientHello should offer, or null for a full handshake.
+    ///
+    /// A session whose suite hashes with anything but SHA-256 is silently not
+    /// offered rather than rejected: RFC 8446 Section 4.2.11 only permits
+    /// resumption under a matching hash, this client offers SHA-256 suites
+    /// exclusively (see `sendClientHello`), and a mismatched session therefore
+    /// could never be accepted. Declining to offer it costs a resumption;
+    /// offering it would invite a server to key off a PSK from a different key
+    /// schedule.
+    fn pskOffer(self: *const TlsClient) ?*const ResumptionSession {
+        const session = self.offered_session orelse return null;
+        if (session.cipher_suite.hashAlgorithm() != .sha256) return null;
+        return session;
+    }
+
+    /// RFC 8446 Section 4.2.9. Only `psk_dhe_ke` (1) is offered: bare `psk_ke`
+    /// resumes without a fresh key exchange, so the resumed connection would
+    /// inherit the original's secrecy rather than having its own.
+    fn writePskKeyExchangeModesExtension(self: *TlsClient, buffer: *std.ArrayList(u8)) !void {
+        try writeU16(buffer, self.allocator, @backingInt(ExtensionType.psk_key_exchange_modes));
+        try writeU16(buffer, self.allocator, 2);
+        try writeU8(buffer, self.allocator, 1); // one mode
+        try writeU8(buffer, self.allocator, 1); // psk_dhe_ke
+    }
+
+    /// RFC 8446 Section 4.2.11, with the binder left zeroed for `fillPskBinder`.
+    ///
+    /// One identity is offered. Several would be legal, but each needs its own
+    /// binder over the same transcript, and every additional identity is another
+    /// ticket handed to whoever is listening in exchange for a chance at one
+    /// fewer round trip.
+    fn writePreSharedKeyExtension(self: *TlsClient, buffer: *std.ArrayList(u8), session: *const ResumptionSession) !void {
+        const identities_len = 2 + session.ticket.len + 4;
+        const ext_len = 2 + identities_len + 2 + single_binder_list_len;
+
+        try writeU16(buffer, self.allocator, @backingInt(ExtensionType.pre_shared_key));
+        try writeU16(buffer, self.allocator, @intCast(ext_len));
+
+        try writeU16(buffer, self.allocator, @intCast(identities_len));
+        try writeU16(buffer, self.allocator, @intCast(session.ticket.len));
+        try writeBytes(buffer, self.allocator, session.ticket);
+        // Obfuscated ticket age, RFC 8446 Section 4.2.11.1: elapsed
+        // milliseconds plus the server's `ticket_age_add`. The elapsed term is
+        // zero because this client has no clock wired in. That is honest for
+        // this pairing -- the server judges freshness from the timestamp sealed
+        // inside the ticket, which a client cannot influence -- but a server
+        // using this field for 0-RTT anti-replay would need a real age here,
+        // and this client offers no early data for exactly that reason.
+        try writeU32(buffer, self.allocator, session.ticket_age_add);
+
+        try writeU16(buffer, self.allocator, @intCast(single_binder_list_len));
+        try writeU8(buffer, self.allocator, 32);
+        const placeholder = std.mem.zeroes([32]u8);
+        try writeBytes(buffer, self.allocator, &placeholder);
+    }
+
+    /// Compute the binder over the assembled ClientHello and write it into the
+    /// placeholder at the end.
+    ///
+    /// `body` is the complete ClientHello body, binders included; the binder is
+    /// its final 32 bytes. `tls.clientHelloBinderTranscript` does the truncation
+    /// and restores the handshake header carrying the *untruncated* length,
+    /// which is the part that cannot be checked against this repository's own
+    /// server -- both sides would make the same mistake and agree. It is pinned
+    /// against RFC 8448 Section 4 in `known_answer_vectors.zig` instead.
+    fn fillPskBinder(self: *TlsClient, body: []u8, session: *const ResumptionSession) !void {
+        const transcript = try tls.clientHelloBinderTranscript(body, single_binder_list_len);
+
+        var ks = try tls.KeySchedule.init(self.allocator, .sha256);
+        defer ks.deinit();
+        try ks.deriveEarlySecret(&session.psk);
+
+        const binder_key = try ks.resumptionBinderKey();
+        defer {
+            util.secureZero(binder_key);
+            self.allocator.free(binder_key);
+        }
+
+        const binder = try tls.verifyData(self.allocator, .sha256, binder_key, &transcript);
+        defer {
+            util.secureZero(binder);
+            self.allocator.free(binder);
+        }
+
+        if (binder.len != 32) return error.InvalidHandshake;
+        @memcpy(body[body.len - 32 ..], binder);
+
+        // Held so the key schedule can start from the same PSK. The server only
+        // confirms its choice in ServerHello, so this is provisional: if no
+        // `pre_shared_key` comes back, `receiveServerHello` clears it and the
+        // handshake proceeds as a full one.
+        self.psk = session.psk;
     }
 
     // Record layer helpers
@@ -1078,7 +1495,7 @@ pub const TlsClient = struct {
     /// Write a plaintext TLS record (only for initial handshake before keys are derived)
     fn writePlaintextRecord(self: *TlsClient, record_type: RecordType, data: []const u8) !void {
         var header: [5]u8 = undefined;
-        header[0] = @intFromEnum(record_type);
+        header[0] = @backingInt(record_type);
         header[1] = 0x03; // Legacy version high byte
         header[2] = 0x03; // Legacy version low byte
         header[3] = @intCast((data.len >> 8) & 0xFF);
@@ -1107,7 +1524,7 @@ pub const TlsClient = struct {
         const inner_plaintext = try self.allocator.alloc(u8, data.len + 1);
         defer self.allocator.free(inner_plaintext);
         @memcpy(inner_plaintext[0..data.len], data);
-        inner_plaintext[data.len] = @intFromEnum(record_type);
+        inner_plaintext[data.len] = @backingInt(record_type);
 
         // Construct nonce: XOR IV with sequence number (padded to 12 bytes)
         var nonce: [12]u8 = undefined;
@@ -1122,7 +1539,7 @@ pub const TlsClient = struct {
         // AAD = record_type || legacy_version || length
         const ciphertext_len = inner_plaintext.len + 16; // +16 for auth tag
         var aad: [5]u8 = undefined;
-        aad[0] = @intFromEnum(RecordType.application_data); // Outer type is always application_data
+        aad[0] = @backingInt(RecordType.application_data); // Outer type is always application_data
         aad[1] = 0x03;
         aad[2] = 0x03;
         std.mem.writeInt(u16, aad[3..5], @intCast(ciphertext_len), .big);
@@ -1194,7 +1611,7 @@ pub const TlsClient = struct {
         var r = self.stream.reader(self.io, &read_buf);
         try r.interface.readSliceAll(&header);
 
-        const outer_type = std.meta.intToEnum(RecordType, header[0]) catch {
+        const outer_type = std.enums.fromInt(RecordType, header[0]) orelse {
             return error.UnknownRecordType;
         };
         const length = std.mem.readInt(u16, header[3..5], .big);
@@ -1318,7 +1735,7 @@ pub const TlsClient = struct {
         }
 
         // Last non-zero byte is the content type
-        const inner_type = std.meta.intToEnum(RecordType, plaintext[content_end - 1]) catch {
+        const inner_type = std.enums.fromInt(RecordType, plaintext[content_end - 1]) orelse {
             self.allocator.free(plaintext);
             return error.UnknownRecordType;
         };
@@ -1334,10 +1751,16 @@ pub const TlsClient = struct {
         };
     }
 
+    /// Feed one complete handshake message into the transcript. See
+    /// `tls.transcriptUpdate` for why the four-byte header is part of the hash.
+    fn transcriptUpdate(self: *TlsClient, msg_type: HandshakeType, body: []const u8) void {
+        tls.transcriptUpdate(&self.transcript, @backingInt(msg_type), body);
+    }
+
     fn writeHandshakeMessage(self: *TlsClient, msg_type: HandshakeType, data: []const u8) !void {
         // Build handshake header: 1 byte type + 3 bytes length (u24 big endian)
         var header: [4]u8 = undefined;
-        header[0] = @intFromEnum(msg_type);
+        header[0] = @backingInt(msg_type);
         header[1] = @intCast((data.len >> 16) & 0xFF);
         header[2] = @intCast((data.len >> 8) & 0xFF);
         header[3] = @intCast(data.len & 0xFF);
@@ -1359,7 +1782,7 @@ pub const TlsClient = struct {
             return error.ExpectedHandshake;
         }
 
-        const msg_type = std.meta.intToEnum(HandshakeType, record.data[0]) catch {
+        const msg_type = std.enums.fromInt(HandshakeType, record.data[0]) orelse {
             return error.UnknownHandshakeType;
         };
         const length = std.mem.readInt(u24, record.data[1..4], .big);
@@ -1460,4 +1883,109 @@ test "CertificateVerify parser requires exact signature length" {
 
     const trailing = [_]u8{ 0x08, 0x07, 0x00, 0x01, 0xaa, 0xbb };
     try std.testing.expectError(error.InvalidCertificateVerify, TlsClient.parseCertificateVerify(&trailing));
+}
+
+/// A client with no socket behind it, positioned just after the client's
+/// Finished went out. Enough state for the application-phase derivation and
+/// nothing else; `deinit` never touches the stream or the io runtime, so
+/// leaving them undefined is safe for the duration of this test.
+fn transcriptTestClient(allocator: std.mem.Allocator) TlsClient {
+    return TlsClient{
+        .config = tls_config.TlsConfig.init(allocator),
+        .stream = undefined,
+        .io = undefined,
+        .transcript = hash.Sha256.init(),
+        .client_random = std.mem.zeroes([32]u8),
+        .server_random = std.mem.zeroes([32]u8),
+        .cipher_suite = .TLS_AES_128_GCM_SHA256,
+        .shared_secret = @splat(0x99),
+        .allocator = allocator,
+    };
+}
+
+test "every client secret is derived at its own transcript boundary" {
+    const allocator = std.testing.allocator;
+    var client = transcriptTestClient(allocator);
+    defer client.deinit();
+
+    // Three distinct transcript states, one per RFC 8446 Section 7.1 boundary:
+    // ClientHello..ServerHello for the handshake traffic secrets,
+    // ClientHello..server Finished for the application traffic secrets, and
+    // ClientHello..client Finished for the resumption master secret. The
+    // strings fed here stand in for the messages between them; all that matters
+    // is that the three digests differ, so a derivation reaching for the wrong
+    // one cannot accidentally agree.
+    const peer = asym.generateCurve25519();
+    client.client_key_share = asym.generateCurve25519();
+    client.server_public_key = peer.public_key;
+
+    client.transcript.update("ServerHello");
+    const at_server_hello = try client.snapshotTranscript();
+    try client.deriveHandshakeSecrets();
+
+    client.transcript.update("server Finished");
+    const at_server_finished = try client.snapshotTranscript();
+    client.server_finished_transcript = at_server_finished;
+
+    client.transcript.update("client Finished");
+    const at_client_finished = try client.snapshotTranscript();
+    try client.deriveApplicationSecrets();
+
+    try std.testing.expect(!std.mem.eql(u8, &at_server_hello, &at_server_finished));
+    try std.testing.expect(!std.mem.eql(u8, &at_server_finished, &at_client_finished));
+
+    // Recompute each secret from the boundary it belongs to and assert the
+    // client produced exactly that. Equality is what gives this teeth: it fails
+    // if the transcript is hashed a second time on the way in, and it fails if
+    // the wrong boundary is used. A client and a server running this same code
+    // agree with each other in either case, so nothing but an explicit
+    // assertion against an independently recomputed value catches it.
+    var ks = try tls.KeySchedule.init(allocator, .sha256);
+    defer ks.deinit();
+    try ks.deriveEarlySecret(null);
+    try ks.deriveHandshakeSecret(&client.shared_secret.?);
+    try ks.deriveMasterSecret();
+
+    const Expect = struct {
+        secret: []const u8,
+        label: []const u8,
+        right: *const [32]u8,
+        wrong: *const [32]u8,
+        got: *const [32]u8,
+    };
+    const cases = [_]Expect{
+        .{ .secret = ks.handshake_secret, .label = "c hs traffic", .right = &at_server_hello, .wrong = &at_server_finished, .got = &client.client_handshake_secret.? },
+        .{ .secret = ks.handshake_secret, .label = "s hs traffic", .right = &at_server_hello, .wrong = &at_server_finished, .got = &client.server_handshake_secret.? },
+        .{ .secret = ks.master_secret, .label = "c ap traffic", .right = &at_server_finished, .wrong = &at_client_finished, .got = &client.client_traffic_secret.? },
+        .{ .secret = ks.master_secret, .label = "s ap traffic", .right = &at_server_finished, .wrong = &at_client_finished, .got = &client.server_traffic_secret.? },
+        .{ .secret = ks.master_secret, .label = "res master", .right = &at_client_finished, .wrong = &at_server_finished, .got = &client.resumption_master_secret.? },
+    };
+
+    for (cases) |case| {
+        const right = try ks.deriveSecretFromTranscriptHash(case.secret, case.label, case.right);
+        defer allocator.free(right);
+        try std.testing.expectEqualSlices(u8, right, case.got);
+
+        const swapped = try ks.deriveSecretFromTranscriptHash(case.secret, case.label, case.wrong);
+        defer allocator.free(swapped);
+        try std.testing.expect(!std.mem.eql(u8, swapped, case.got));
+
+        // The transcript is already a digest. Hashing it again yields a secret
+        // no conforming peer will ever derive.
+        const double_hashed = try ks.deriveSecret(case.secret, case.label, case.right);
+        defer allocator.free(double_hashed);
+        try std.testing.expect(!std.mem.eql(u8, double_hashed, case.got));
+    }
+}
+
+test "the client refuses application secrets without the server Finished boundary" {
+    const allocator = std.testing.allocator;
+    var client = transcriptTestClient(allocator);
+    defer client.deinit();
+
+    // The application secrets are bound to ClientHello..server Finished, a
+    // boundary the live transcript has already passed by the time this runs.
+    // Without the snapshot there is no honest way to reach it, so the
+    // derivation refuses rather than substituting the transcript it can see.
+    try std.testing.expectError(error.MissingFinishedTranscript, client.deriveApplicationSecrets());
 }

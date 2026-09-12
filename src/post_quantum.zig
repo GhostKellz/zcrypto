@@ -260,7 +260,22 @@ pub const ML_DSA_87 = struct {
     }
 };
 
-/// Hybrid key exchange combining classical and post-quantum algorithms
+/// Hybrid key exchange: X25519 + ML-KEM-768.
+///
+/// The KEM half is not symmetric, so the two peers run different functions:
+/// the initiator calls `initiate` and transmits the returned ciphertext, and
+/// the responder calls `respond` with it. Both then hold the same
+/// `combined_secret`.
+///
+/// History: `generateKeypair` used to fill the classical public key with random
+/// bytes instead of deriving it from the private key, and the classical
+/// "exchange" hashed our own private key together with the peer's public key
+/// rather than performing a Diffie-Hellman — so two peers never agreed. The
+/// single `keyExchange` entry point also encapsulated to the peer's ML-KEM key
+/// and then discarded the ciphertext, leaving the peer no way to recover the
+/// same secret. Its test asserted only that the result was not all zeros, which
+/// is the one property that construction could satisfy; it never checked that
+/// the two sides agreed.
 pub const HybridKeyExchange = struct {
     pub const ClassicalKeyPair = struct {
         public_key: [32]u8, // X25519 public key
@@ -283,57 +298,73 @@ pub const HybridKeyExchange = struct {
         combined_secret: [32]u8,
     };
 
-    /// Generate hybrid key pair with both classical and post-quantum keys
+    /// An initiator's shared secret plus the ciphertext the responder needs.
+    pub const Initiation = struct {
+        ciphertext: [ML_KEM_768.CIPHERTEXT_SIZE]u8,
+        shared: HybridSharedSecret,
+    };
+
+    /// Generate a hybrid key pair: a real X25519 key pair and a real ML-KEM-768
+    /// key pair.
     pub fn generateKeypair() !HybridKeyPair {
-        var keypair = HybridKeyPair{
-            .classical = ClassicalKeyPair{
-                .public_key = undefined,
-                .private_key = undefined,
+        var classical_private: [32]u8 = undefined;
+        rand.fill(&classical_private);
+
+        const basepoint = [_]u8{9} ++ std.mem.zeroes([31]u8);
+        const classical_public = try crypto.dh.X25519.scalarmult(classical_private, basepoint);
+
+        const pq_keypair = try ML_KEM_768.generateKeypair();
+
+        return HybridKeyPair{
+            .classical = .{
+                .public_key = classical_public,
+                .private_key = classical_private,
             },
-            .post_quantum = PQKeyPair{
-                .public_key = undefined,
-                .private_key = undefined,
+            .post_quantum = .{
+                .public_key = pq_keypair.public_key,
+                .private_key = pq_keypair.private_key,
             },
         };
-
-        // Generate X25519 keypair (stub - would use proper X25519)
-        rand.fill(&keypair.classical.private_key);
-        rand.fill(&keypair.classical.public_key);
-
-        // Generate ML-KEM-768 keypair
-        const pq_keypair = try ML_KEM_768.generateKeypair();
-        keypair.post_quantum.public_key = pq_keypair.public_key;
-        keypair.post_quantum.private_key = pq_keypair.private_key;
-
-        return keypair;
     }
 
-    /// Perform hybrid key exchange combining both algorithms
-    pub fn keyExchange(our_private: HybridKeyPair, their_classical_public: [32]u8, their_pq_public: [ML_KEM_768.PUBLIC_KEY_SIZE]u8) !HybridSharedSecret {
-        var shared = HybridSharedSecret{
-            .classical_secret = undefined,
-            .pq_secret = undefined,
-            .combined_secret = undefined,
+    /// Initiator side: X25519 against the peer's classical key, ML-KEM-768
+    /// encapsulation against the peer's KEM key.
+    ///
+    /// The returned ciphertext must be sent to the peer; without it the peer
+    /// cannot derive the same secret.
+    pub fn initiate(our_keypair: HybridKeyPair, their_classical_public: [32]u8, their_pq_public: [ML_KEM_768.PUBLIC_KEY_SIZE]u8) !Initiation {
+        const classical_secret = try crypto.dh.X25519.scalarmult(our_keypair.classical.private_key, their_classical_public);
+        const encap = try ML_KEM_768.encapsulate(their_pq_public);
+
+        return Initiation{
+            .ciphertext = encap.ciphertext,
+            .shared = combine(classical_secret, encap.shared_secret),
         };
+    }
 
-        // X25519 key exchange (stub)
-        var hasher = crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(&our_private.classical.private_key);
-        hasher.update(&their_classical_public);
-        hasher.final(&shared.classical_secret);
+    /// Responder side: X25519 against the peer's classical key, ML-KEM-768
+    /// decapsulation of the ciphertext the initiator sent.
+    pub fn respond(our_keypair: HybridKeyPair, their_classical_public: [32]u8, ciphertext: [ML_KEM_768.CIPHERTEXT_SIZE]u8) !HybridSharedSecret {
+        const classical_secret = try crypto.dh.X25519.scalarmult(our_keypair.classical.private_key, their_classical_public);
+        const pq_secret = try ML_KEM_768.decapsulate(our_keypair.post_quantum.private_key, ciphertext);
 
-        // ML-KEM-768 encapsulation
-        const encap_result = try ML_KEM_768.encapsulate(their_pq_public);
-        shared.pq_secret = encap_result.shared_secret;
+        return combine(classical_secret, pq_secret);
+    }
 
-        // Combine secrets using HKDF
-        hasher = crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(&shared.classical_secret);
-        hasher.update(&shared.pq_secret);
-        hasher.update("hybrid-kdf-label");
-        hasher.final(&shared.combined_secret);
+    /// Concatenation combiner: both inputs are fixed-length, so no separator is
+    /// needed to make the encoding unambiguous.
+    fn combine(classical_secret: [32]u8, pq_secret: [32]u8) HybridSharedSecret {
+        var ikm: [64]u8 = undefined;
+        @memcpy(ikm[0..32], &classical_secret);
+        @memcpy(ikm[32..64], &pq_secret);
 
-        return shared;
+        const combined = crypto.kdf.hkdf.HkdfSha256.extract("zcrypto-hybrid-x25519-mlkem768", &ikm);
+
+        return HybridSharedSecret{
+            .classical_secret = classical_secret,
+            .pq_secret = pq_secret,
+            .combined_secret = combined,
+        };
     }
 };
 
@@ -442,6 +473,41 @@ test "ML-KEM-768 key exchange" {
     try testing.expectEqualSlices(u8, &encap_result.shared_secret, &decap_secret);
 }
 
+test "ML-KEM implicit rejection: tampered ciphertext yields an unrelated secret, not an error" {
+    // FIPS 203 decapsulation never reports failure: on an invalid ciphertext it
+    // returns a pseudorandom secret derived from the private key's rejection
+    // seed. Asserting `expectError` here would be wrong, and a future change
+    // that made decapsulation fault on bad input would be a spec violation as
+    // well as a decryption-failure oracle. This pins the correct contract.
+    inline for (.{ ML_KEM_512, ML_KEM_768, ML_KEM_1024 }) |KEM| {
+        const keypair = try KEM.generateKeypair();
+        const encap = try KEM.encapsulate(keypair.public_key);
+
+        var tampered = encap.ciphertext;
+        tampered[0] ^= 0x01;
+
+        const rejected = try KEM.decapsulate(keypair.private_key, tampered);
+        try testing.expect(!std.mem.eql(u8, &encap.shared_secret, &rejected));
+        try testing.expect(!std.mem.allEqual(u8, &rejected, 0));
+
+        // Implicit rejection is deterministic in the private key and the
+        // ciphertext, so the same bad ciphertext must give the same secret.
+        const rejected_again = try KEM.decapsulate(keypair.private_key, tampered);
+        try testing.expectEqualSlices(u8, &rejected, &rejected_again);
+    }
+}
+
+test "ML-KEM decapsulation under the wrong private key does not recover the secret" {
+    inline for (.{ ML_KEM_512, ML_KEM_768, ML_KEM_1024 }) |KEM| {
+        const keypair = try KEM.generateKeypair();
+        const other = try KEM.generateKeypair();
+        const encap = try KEM.encapsulate(keypair.public_key);
+
+        const wrong = try KEM.decapsulate(other.private_key, encap.ciphertext);
+        try testing.expect(!std.mem.eql(u8, &encap.shared_secret, &wrong));
+    }
+}
+
 test "ML-DSA-65 signature" {
     const keypair = try ML_DSA_65.generateKeypair();
     const message = "test message for post-quantum signature";
@@ -452,21 +518,85 @@ test "ML-DSA-65 signature" {
     try testing.expect(valid);
 }
 
-test "hybrid key exchange" {
-    const alice_keypair = try HybridKeyExchange.generateKeypair();
-    const bob_keypair = try HybridKeyExchange.generateKeypair();
+test "ML-DSA rejects tampered signatures, messages, and keys" {
+    inline for (.{ ML_DSA_44, ML_DSA_65, ML_DSA_87 }) |DSA| {
+        const keypair = try DSA.generateKeypair();
+        const other = try DSA.generateKeypair();
+        const message = "post-quantum negative coverage";
 
-    const alice_shared = try HybridKeyExchange.keyExchange(alice_keypair, bob_keypair.classical.public_key, bob_keypair.post_quantum.public_key);
+        const signature = try DSA.sign(keypair.private_key, message);
+        try testing.expect(try DSA.verify(keypair.public_key, message, signature));
 
-    // Basic sanity check
-    var all_zeros = true;
-    for (alice_shared.combined_secret) |byte| {
-        if (byte != 0) {
-            all_zeros = false;
-            break;
-        }
+        var tampered = signature;
+        tampered[0] ^= 0x01;
+        try testing.expect(!(DSA.verify(keypair.public_key, message, tampered) catch false));
+
+        try testing.expect(!(DSA.verify(keypair.public_key, "different message", signature) catch false));
+        try testing.expect(!(DSA.verify(other.public_key, message, signature) catch false));
     }
-    try testing.expect(!all_zeros);
+}
+
+test "hybrid key exchange: both peers agree" {
+    // The agreement assertion is the whole point. The previous implementation
+    // could not satisfy it, and the previous test avoided asking for it.
+    const alice = try HybridKeyExchange.generateKeypair();
+    const bob = try HybridKeyExchange.generateKeypair();
+
+    const init = try HybridKeyExchange.initiate(alice, bob.classical.public_key, bob.post_quantum.public_key);
+    const bob_shared = try HybridKeyExchange.respond(bob, alice.classical.public_key, init.ciphertext);
+
+    try testing.expectEqualSlices(u8, &init.shared.classical_secret, &bob_shared.classical_secret);
+    try testing.expectEqualSlices(u8, &init.shared.pq_secret, &bob_shared.pq_secret);
+    try testing.expectEqualSlices(u8, &init.shared.combined_secret, &bob_shared.combined_secret);
+
+    try testing.expect(!std.mem.allEqual(u8, &init.shared.combined_secret, 0));
+    // The combiner must actually mix: the output must not be either input.
+    try testing.expect(!std.mem.eql(u8, &init.shared.combined_secret, &init.shared.classical_secret));
+    try testing.expect(!std.mem.eql(u8, &init.shared.combined_secret, &init.shared.pq_secret));
+}
+
+test "hybrid key exchange: X25519 public key really derives from the private key" {
+    // Guards the old stub, which filled the public key with random bytes.
+    const kp = try HybridKeyExchange.generateKeypair();
+    const basepoint = [_]u8{9} ++ std.mem.zeroes([31]u8);
+    const derived = try crypto.dh.X25519.scalarmult(kp.classical.private_key, basepoint);
+    try testing.expectEqualSlices(u8, &derived, &kp.classical.public_key);
+}
+
+test "hybrid key exchange: a third party does not learn the secret" {
+    const alice = try HybridKeyExchange.generateKeypair();
+    const bob = try HybridKeyExchange.generateKeypair();
+    const eve = try HybridKeyExchange.generateKeypair();
+
+    const init = try HybridKeyExchange.initiate(alice, bob.classical.public_key, bob.post_quantum.public_key);
+
+    // Eve holds the ciphertext but not Bob's keys, so she cannot reach the
+    // same secret. Her ML-KEM decapsulation succeeds via implicit rejection
+    // and yields an unrelated value rather than an error.
+    const eve_shared = try HybridKeyExchange.respond(eve, alice.classical.public_key, init.ciphertext);
+    try testing.expect(!std.mem.eql(u8, &init.shared.combined_secret, &eve_shared.combined_secret));
+    try testing.expect(!std.mem.eql(u8, &init.shared.pq_secret, &eve_shared.pq_secret));
+
+    // Wrong classical peer key also breaks agreement.
+    const wrong_classical = try HybridKeyExchange.respond(bob, eve.classical.public_key, init.ciphertext);
+    try testing.expect(!std.mem.eql(u8, &init.shared.combined_secret, &wrong_classical.combined_secret));
+}
+
+test "hybrid key exchange: tampered ciphertext does not yield the initiator secret" {
+    // ML-KEM implicit rejection means decapsulation returns a pseudorandom
+    // secret rather than failing; the contract is that it differs, not that it
+    // errors.
+    const alice = try HybridKeyExchange.generateKeypair();
+    const bob = try HybridKeyExchange.generateKeypair();
+
+    const init = try HybridKeyExchange.initiate(alice, bob.classical.public_key, bob.post_quantum.public_key);
+
+    var tampered = init.ciphertext;
+    tampered[0] ^= 0x01;
+
+    const bob_shared = try HybridKeyExchange.respond(bob, alice.classical.public_key, tampered);
+    try testing.expect(!std.mem.eql(u8, &init.shared.pq_secret, &bob_shared.pq_secret));
+    try testing.expect(!std.mem.eql(u8, &init.shared.combined_secret, &bob_shared.combined_secret));
 }
 
 test "hybrid signature" {

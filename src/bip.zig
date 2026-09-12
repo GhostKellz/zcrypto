@@ -140,7 +140,7 @@ pub const bip39 = struct {
     pub fn generate(allocator: std.mem.Allocator, length: MnemonicLength) !Mnemonic {
         // For this implementation, we'll create a simplified word list
         // In a production system, you'd use the official BIP-39 word list
-        const word_count = @intFromEnum(length);
+        const word_count = @backingInt(length);
         const words = try allocator.alloc([]const u8, word_count);
 
         // Generate simple words for demo (replace with proper BIP-39 wordlist)

@@ -175,15 +175,19 @@ pub const MemoryLeakDetector = struct {
     current_usage: u64,
     allocator: std.mem.Allocator,
 
+    // Both records hold a monotonic `Instant` rather than a wall-clock nanosecond
+    // count. Every consumer below subtracts these -- allocation age, and the
+    // span the frequency is divided by -- so they are only ever used as
+    // durations, and the wall clock can step between two reads of it.
     const AllocationRecord = struct {
         size: usize,
-        timestamp: i128,
+        timestamp: util.Instant,
         call_site: ?[]const u8 = null,
         thread_id: u32 = 0,
     };
 
     const AllocationEvent = struct {
-        timestamp: i128,
+        timestamp: util.Instant,
         event_type: EventType,
         address: usize,
         size: usize,
@@ -210,7 +214,7 @@ pub const MemoryLeakDetector = struct {
 
     /// Record memory allocation
     pub fn recordAllocation(self: *MemoryLeakDetector, address: usize, size: usize, call_site: ?[]const u8) !void {
-        const timestamp = (try util.getTimestampOrError()).toNanos();
+        const timestamp = try util.getMonotonicOrError();
 
         const record = AllocationRecord{
             .size = size,
@@ -238,7 +242,7 @@ pub const MemoryLeakDetector = struct {
     /// Record memory deallocation
     pub fn recordDeallocation(self: *MemoryLeakDetector, address: usize) !void {
         if (self.allocations.get(address)) |record| {
-            const timestamp = (try util.getTimestampOrError()).toNanos();
+            const timestamp = try util.getMonotonicOrError();
 
             try self.allocation_timeline.append(self.allocator, AllocationEvent{
                 .timestamp = timestamp,
@@ -260,11 +264,11 @@ pub const MemoryLeakDetector = struct {
 
         var iterator = self.allocations.iterator();
         while (iterator.next()) |entry| {
-            const now = (try util.getTimestampOrError()).toNanos();
+            const now = try util.getMonotonicOrError();
             const leak = LeakDetail{
                 .address = entry.key_ptr.*,
                 .size = entry.value_ptr.size,
-                .age_ns = now - entry.value_ptr.timestamp,
+                .age_ns = try now.since(entry.value_ptr.timestamp),
                 .call_site = entry.value_ptr.call_site,
             };
             try leak_details.append(self.allocator, leak);
@@ -304,7 +308,12 @@ pub const MemoryLeakDetector = struct {
 
         const first_timestamp = self.allocation_timeline.items[0].timestamp;
         const last_timestamp = self.allocation_timeline.items[self.allocation_timeline.items.len - 1].timestamp;
-        const duration_ns = @as(f64, @floatFromInt(last_timestamp - first_timestamp));
+        // A span that cannot be computed collapses to zero, which the guard below
+        // turns into a frequency of 0.0 rather than a number derived from a
+        // duration nobody can vouch for. This is the divisor of a published rate,
+        // so a wrong value here is not a wrong timestamp -- it is a wrong Hz.
+        const span_ns = last_timestamp.since(first_timestamp) catch 0;
+        const duration_ns = @as(f64, @floatFromInt(span_ns));
 
         for (self.allocation_timeline.items) |event| {
             if (event.event_type == .allocate) {
@@ -329,7 +338,10 @@ pub const MemoryLeakDetector = struct {
 pub const LeakDetail = struct {
     address: usize,
     size: usize,
-    age_ns: i128,
+    /// How long the allocation has been outstanding. Unsigned because it is a
+    /// monotonic elapsed time: a negative age was never meaningful, and the
+    /// signed type existed only to hold the difference of two wall-clock reads.
+    age_ns: u64,
     call_site: ?[]const u8,
 };
 
@@ -347,15 +359,15 @@ pub const LeakReport = struct {
 
     /// Print formatted leak report
     pub fn print(self: LeakReport) void {
-        std.log.info("=== Memory Leak Report ===");
+        std.log.info("=== Memory Leak Report ===", .{});
         std.log.info("Total leaked: {} bytes", .{self.total_leaked_bytes});
         std.log.info("Leak count: {}", .{self.leak_count});
         std.log.info("Peak usage: {} bytes", .{self.peak_usage_bytes});
         std.log.info("Current usage: {} bytes", .{self.current_usage_bytes});
-        std.log.info("");
+        std.log.info("", .{});
 
         if (self.leak_details.len > 0) {
-            std.log.info("Top leaks:");
+            std.log.info("Top leaks:", .{});
             for (self.leak_details[0..@min(5, self.leak_details.len)]) |leak| {
                 const age_ms = @as(f64, @floatFromInt(leak.age_ns)) / 1e6;
                 std.log.info("  {} bytes at 0x{X} (age: {d:.2}ms)", .{ leak.size, leak.address, age_ms });
@@ -482,26 +494,26 @@ pub const PerformanceReport = struct {
 
     /// Generate comprehensive performance summary
     pub fn printSummary(self: PerformanceReport) void {
-        std.log.info("=== Performance Analysis Summary ===");
+        std.log.info("=== Performance Analysis Summary ===", .{});
         std.log.info("Monitoring duration: {d:.2} ms", .{@as(f64, @floatFromInt(self.monitoring_duration_ns)) / 1e6});
         std.log.info("Crypto operations tracked: {}", .{self.crypto_operations_count});
-        std.log.info("");
+        std.log.info("", .{});
 
         // Statistical summary
-        std.log.info("Performance Statistics:");
+        std.log.info("Performance Statistics:", .{});
         std.log.info("  Samples: {}", .{self.statistical_results.sample_count});
         std.log.info("  Mean: {d:.2} ns", .{self.statistical_results.mean});
         std.log.info("  Std Dev: {d:.2} ns", .{self.statistical_results.std_deviation});
         std.log.info("  95th percentile: {} ns", .{self.statistical_results.percentile_95});
         std.log.info("  99th percentile: {} ns", .{self.statistical_results.percentile_99});
-        std.log.info("");
+        std.log.info("", .{});
 
         // Memory summary
         self.leak_report.print();
-        std.log.info("");
+        std.log.info("", .{});
 
         // Allocation patterns
-        std.log.info("Allocation Patterns:");
+        std.log.info("Allocation Patterns:", .{});
         std.log.info("  Average allocation size: {} bytes", .{self.allocation_pattern.average_allocation_size});
         std.log.info("  Allocation frequency: {d:.2} Hz", .{self.allocation_pattern.allocation_frequency_hz});
         std.log.info("  Memory churn rate: {d:.2}%", .{self.allocation_pattern.memory_churn_rate * 100});

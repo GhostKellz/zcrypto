@@ -82,7 +82,7 @@ pub const Alert = struct {
     description: AlertDescription,
 
     pub fn toBytes(self: Alert) [2]u8 {
-        return [2]u8{ @intFromEnum(self.level), @intFromEnum(self.description) };
+        return [2]u8{ @backingInt(self.level), @backingInt(self.description) };
     }
 
     pub fn fromBytes(bytes: [2]u8) !Alert {
@@ -92,7 +92,7 @@ pub const Alert = struct {
             2 => .fatal,
             else => return errors.TlsError.InvalidRecordFormat,
         };
-        const description: AlertDescription = @enumFromInt(bytes[1]);
+        const description: AlertDescription = @fromBackingInt(@intCast(bytes[1]));
         return Alert{
             .level = level,
             .description = description,
@@ -120,7 +120,7 @@ pub const RecordHeader = struct {
     /// Encode header to bytes
     pub fn toBytes(self: RecordHeader) [RECORD_HEADER_SIZE]u8 {
         var bytes: [RECORD_HEADER_SIZE]u8 = undefined;
-        bytes[0] = @intFromEnum(self.record_type);
+        bytes[0] = @backingInt(self.record_type);
         util.writeU16BigEndian(bytes[1..3], self.version);
         util.writeU16BigEndian(bytes[3..5], self.length);
         return bytes;
@@ -183,7 +183,7 @@ pub const TlsPlaintext = struct {
         const inner = try allocator.alloc(u8, inner_size);
 
         @memcpy(inner[0..self.data.len], self.data);
-        inner[self.data.len] = @intFromEnum(self.content_type);
+        inner[self.data.len] = @backingInt(self.content_type);
 
         return inner;
     }
@@ -387,7 +387,7 @@ pub const RecordLayer = struct {
         defer if (decrypted) |d| self.allocator.free(d);
 
         if (decrypted == null) {
-            return errors.TlsError.AuthenticationFailed;
+            return errors.TlsError.DecryptionFailed;
         }
 
         self.sequence_number += 1;

@@ -26,7 +26,7 @@ The core API in this release is intended to be stable. Several optional modules 
 * **Explicit ownership:** APIs that accept an allocator and return slices return caller-owned memory. Free returned buffers with the same allocator unless the return type has its own `deinit`.
 * **Modular architecture:** Enable only the features you need with build-time flags.
 * **Audit-friendly:** Easy to read, easy to verify. Minimal dependencies.
-* **Cross-platform:** Works seamlessly on Linux, macOS, Windows, and embedded targets.
+* **Cross-platform:** Built and tested natively on Linux, macOS and Windows — see [Platform support](docs/platform-support.md) for the evidence and for what is *not* covered. Freestanding/bare-metal targets are deliberately rejected at compile time, because they have no entropy source.
 * **Complements Zig std.crypto:** Zig now offers crypto functionality in its standard library; this library provides curated wrappers, QUIC/TLS helpers, feature-gated integrations, and experimental opt-in modules.
 
 ---
@@ -42,7 +42,7 @@ Zcrypto supports selective compilation with feature flags:
 | **+ Post-Quantum** | +5MB | Experimental ML-KEM / ML-DSA APIs |
 | **+ Hardware Accel** | +2MB | AES-NI, AVX2, SIMD optimizations |
 | **+ Blockchain** | +3MB | Experimental blockchain helpers |
-| **+ VPN** | +4MB | WireGuard, IPsec, IKEv2 protocols |
+| **+ VPN** | +4MB | AEAD tunnel primitives (no VPN protocol implementation) |
 | **+ Enterprise** | +3MB | Experimental HSM / formal-analysis helpers |
 | **+ ZKP** | +6MB | Experimental zero-knowledge proof APIs |
 | **+ Async** | +2MB | Opt-in async crypto with zsync integration |
@@ -72,7 +72,7 @@ Zcrypto supports selective compilation with feature flags:
 * **Post-Quantum** - Experimental ML-KEM and ML-DSA APIs
 * **Hardware Acceleration** - AES-NI, AVX2, SIMD optimizations
 * **Blockchain** - Experimental blockchain-oriented helpers
-* **VPN** - WireGuard, IPsec, IKEv2 protocol implementations
+* **VPN** - AEAD tunnel and key-derivation primitives; not a WireGuard/IPsec/IKEv2 implementation
 * **WebAssembly** - Browser-compatible crypto operations
 * **Enterprise** - Experimental HSM and analysis helpers
 * **Zero-Knowledge Proofs** - Experimental proof-system APIs
@@ -188,7 +188,7 @@ zig build run-advanced -Dpost-quantum=true -Dexperimental-crypto=true -Dhardware
 * **Embedded/IoT:** Core crypto in ~3MB binaries
 * **Web Services:** TLS + async for secure APIs
 * **Blockchain Research:** Experimental helpers with explicit opt-in
-* **VPN Servers:** Complete protocol implementations
+* **VPN Data Channels:** Tunnel primitives to build a protocol on, not a turnkey VPN
 * **Enterprise Research:** Experimental HSM and verification helpers
 * **Privacy Research:** Experimental post-quantum and proof-system APIs
 
@@ -232,7 +232,7 @@ zig build run-advanced -Dpost-quantum=true -Dexperimental-crypto=true -Dhardware
 
 ## ✨ License
 
-MIT or dual MIT/Apache2 for maximum compatibility.
+MIT — see [LICENSE](LICENSE).
 
 ---
 

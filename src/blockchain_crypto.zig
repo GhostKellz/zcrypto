@@ -20,6 +20,10 @@ pub const BlockchainCryptoError = error{
     ProofGenerationFailed,
     ProofVerificationFailed,
     OutOfMemory,
+    /// No implementation backs the requested operation. Returned instead of a
+    /// verification verdict so a caller cannot mistake "not implemented" for
+    /// "valid".
+    UnsupportedAlgorithm,
 };
 
 /// High-performance Merkle tree implementation
@@ -83,8 +87,21 @@ pub const MerkleTree = struct {
         }
     }
 
-    /// Get the root hash
+    /// Number of nodes `buildTree` writes for a given leaf count.
+    fn nodeCount(leaf_count: usize) usize {
+        if (leaf_count == 0) return 0;
+        var total = leaf_count;
+        var level = leaf_count;
+        while (level > 1) {
+            level = (level + 1) / 2;
+            total += level;
+        }
+        return total;
+    }
+
+    /// Get the root hash. Null until `buildTree` has run.
     pub fn getRoot(self: MerkleTree) ?[32]u8 {
+        if (self.tree.items.len != nodeCount(self.leaves.items.len)) return null;
         if (self.tree.items.len == 0) return null;
         return self.tree.items[self.tree.items.len - 1];
     }
@@ -94,20 +111,29 @@ pub const MerkleTree = struct {
         if (leaf_index >= self.leaves.items.len) {
             return BlockchainCryptoError.InvalidMerkleProof;
         }
+        // The walk below indexes `tree` using level offsets derived from the leaf
+        // count, so it is only in bounds while the two agree. They diverge when
+        // `buildTree` was never called, or when leaves were appended after it ran.
+        if (self.tree.items.len != nodeCount(self.leaves.items.len)) {
+            return BlockchainCryptoError.InvalidMerkleProof;
+        }
 
         var proof = MerkleProof.init(allocator);
+        errdefer proof.deinit();
+
         var current_index = leaf_index;
         var level_size = self.leaves.items.len;
         var level_start: usize = 0;
 
         while (level_size > 1) {
-            const sibling_index = if (current_index % 2 == 0) current_index + 1 else current_index - 1;
             const is_left = current_index % 2 == 0;
+            const paired_index = if (is_left) current_index + 1 else current_index - 1;
+            // `buildTree` hashes the final node of an odd-sized level against
+            // itself, so the unpaired node's sibling is itself. Omitting the step
+            // (the previous behaviour) produced proofs that never verified.
+            const sibling_index = if (paired_index < level_size) paired_index else current_index;
 
-            if (sibling_index < level_size) {
-                const sibling_hash = self.tree.items[level_start + sibling_index];
-                try proof.addStep(sibling_hash, is_left);
-            }
+            try proof.addStep(self.tree.items[level_start + sibling_index], is_left);
 
             current_index /= 2;
             level_start += level_size;
@@ -203,25 +229,29 @@ pub const BatchVerifier = struct {
         });
     }
 
-    /// Verify all signatures in the batch
+    /// Verify every Ed25519 signature in the batch.
+    ///
+    /// Returns false as soon as one entry fails, including entries whose key or
+    /// signature bytes are not a well-formed Ed25519 encoding. An empty batch
+    /// verifies vacuously, matching the "all entries valid" contract.
+    ///
+    /// This checks each signature independently rather than using a randomized
+    /// batch equation, so it is not faster than verifying one at a time; the
+    /// name describes the input shape, not a speedup.
     pub fn verifyBatch(self: BatchVerifier) bool {
         for (self.signatures.items) |sig_data| {
-            // Note: This is a simplified verification - real implementation would use proper Ed25519
-            var hash: [32]u8 = undefined;
-            crypto.hash.sha2.Sha256.hash(sig_data.message, &hash, .{});
-
-            // Simplified verification - in reality would check Ed25519 signature
-            if (!std.mem.eql(u8, hash[0..32], sig_data.public_key[0..32])) {
-                return false;
-            }
+            const public_key = crypto.sign.Ed25519.PublicKey.fromBytes(sig_data.public_key) catch return false;
+            const signature = crypto.sign.Ed25519.Signature.fromBytes(sig_data.signature);
+            signature.verify(sig_data.message, public_key) catch return false;
         }
         return true;
     }
 
-    /// Parallel batch verification for high throughput
+    /// Same verification as `verifyBatch`, on the calling thread.
+    ///
+    /// No thread pool is used and no work overlaps. Retained only so existing
+    /// callers keep compiling.
     pub fn verifyBatchParallel(self: BatchVerifier) !bool {
-        // For now, fall back to sequential verification
-        // In a real implementation, this would use thread pools
         return self.verifyBatch();
     }
 };
@@ -264,123 +294,107 @@ pub const ConsensusHash = struct {
     }
 };
 
-/// Quantum-safe signatures using placeholder ML-DSA
+/// Quantum-safe blockchain signatures — NOT IMPLEMENTED here.
+///
+/// Every operation returns `BlockchainCryptoError.UnsupportedAlgorithm`. The
+/// key and signature shapes are kept so existing callers still compile and get
+/// an error instead of silently wrong results.
+///
+/// History: this type carried hash-based stand-ins whose sizes matched no ML-DSA
+/// parameter set. `sign` copied the first 32 bytes of the private key straight
+/// into the signature, so publishing a signature published half the signing key.
+/// `verify` recomputed that same hash and additionally compared the public key
+/// against `signature.data[64..96]`, bytes that `sign` filled with fresh random
+/// data — so a signature this module produced never verified, and the whole
+/// construction gave neither authenticity nor secrecy.
+///
+/// For real post-quantum signatures use the ML-DSA implementations behind
+/// `-Dpost-quantum=true` (`post_quantum.ML_DSA_44/65/87`), which are backed by
+/// the standard library rather than reimplemented here.
 pub const PostQuantumSig = struct {
     pub const PrivateKey = struct {
-        data: [64]u8, // Placeholder size
+        data: [64]u8,
     };
 
     pub const PublicKey = struct {
-        data: [32]u8, // Placeholder size
+        data: [32]u8,
     };
 
     pub const Signature = struct {
-        data: [128]u8, // Placeholder size
+        data: [128]u8,
     };
 
-    /// Generate a new key pair
-    pub fn generateKeyPair() !struct { private_key: PrivateKey, public_key: PublicKey } {
-        var private_key: PrivateKey = undefined;
-        var public_key: PublicKey = undefined;
-
-        // Generate random private key
-        rand.fill(&private_key.data);
-
-        // Derive public key (simplified)
-        crypto.hash.sha2.Sha256.hash(private_key.data[0..32], &public_key.data, .{});
-
-        return .{ .private_key = private_key, .public_key = public_key };
+    /// Always fails: use `post_quantum.ML_DSA_65.generateKeypair`.
+    pub fn generateKeyPair() BlockchainCryptoError!struct { private_key: PrivateKey, public_key: PublicKey } {
+        return BlockchainCryptoError.UnsupportedAlgorithm;
     }
 
-    /// Sign a message
-    pub fn sign(message: []const u8, private_key: PrivateKey) !Signature {
-        var signature: Signature = undefined;
-
-        // Simplified signing - real ML-DSA would be much more complex
-        var hasher = crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(message);
-        hasher.update(&private_key.data);
-
-        var hash: [32]u8 = undefined;
-        hasher.final(&hash);
-
-        @memcpy(signature.data[0..32], &hash);
-        @memcpy(signature.data[32..64], private_key.data[0..32]);
-        rand.fill(signature.data[64..128]);
-
-        return signature;
+    /// Always fails: use `post_quantum.ML_DSA_65.sign`.
+    pub fn sign(message: []const u8, private_key: PrivateKey) BlockchainCryptoError!Signature {
+        _ = message;
+        _ = private_key;
+        return BlockchainCryptoError.UnsupportedAlgorithm;
     }
 
-    /// Verify a signature
-    pub fn verify(message: []const u8, signature: Signature, public_key: PublicKey) bool {
-        // Simplified verification
-        var hasher = crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(message);
-        hasher.update(signature.data[32..64]);
-
-        var expected_hash: [32]u8 = undefined;
-        hasher.final(&expected_hash);
-
-        return std.mem.eql(u8, &expected_hash, signature.data[0..32]) and
-            std.mem.eql(u8, &public_key.data, signature.data[64..96]);
+    /// Always fails: use `post_quantum.ML_DSA_65.verify`.
+    ///
+    /// Returns an error rather than `false` on purpose. A `false` would imply
+    /// the signature was checked and rejected; nothing here checks anything.
+    pub fn verify(message: []const u8, signature: Signature, public_key: PublicKey) BlockchainCryptoError!bool {
+        _ = message;
+        _ = signature;
+        _ = public_key;
+        return BlockchainCryptoError.UnsupportedAlgorithm;
     }
 };
 
-/// Zero-knowledge proof primitives (simplified)
+/// Zero-knowledge proofs — NOT IMPLEMENTED here.
+///
+/// Every operation returns `BlockchainCryptoError.UnsupportedAlgorithm`.
+///
+/// History: `verify` ignored both the statement and the verifying key and
+/// returned `true` for any proof that was not entirely zero bytes. Since `prove`
+/// filled 224 of the 256 proof bytes with random data, essentially every byte
+/// string was accepted as a valid proof of every statement — the exact opposite
+/// of soundness.
+///
+/// The `zkp` module behind `-Dzkp=true` is where proof systems would live; see
+/// its documentation for the current state of each one.
 pub const ZKProof = struct {
     pub const Proof = struct {
-        data: [256]u8, // Placeholder
+        data: [256]u8,
     };
 
     pub const VerifyingKey = struct {
-        data: [128]u8, // Placeholder
+        data: [128]u8,
     };
 
     pub const ProvingKey = struct {
-        data: [256]u8, // Placeholder
+        data: [256]u8,
     };
 
-    /// Generate proving and verifying keys
-    pub fn setup() !struct { proving_key: ProvingKey, verifying_key: VerifyingKey } {
-        var proving_key: ProvingKey = undefined;
-        var verifying_key: VerifyingKey = undefined;
-
-        rand.fill(&proving_key.data);
-        rand.fill(&verifying_key.data);
-
-        return .{ .proving_key = proving_key, .verifying_key = verifying_key };
+    /// Always fails: there is no proof system to set up.
+    pub fn setup() BlockchainCryptoError!struct { proving_key: ProvingKey, verifying_key: VerifyingKey } {
+        return BlockchainCryptoError.UnsupportedAlgorithm;
     }
 
-    /// Generate a proof for a statement
-    pub fn prove(statement: []const u8, witness: []const u8, proving_key: ProvingKey) !Proof {
-        var proof: Proof = undefined;
-
-        // Simplified proof generation
-        var hasher = crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(statement);
-        hasher.update(witness);
-        hasher.update(&proving_key.data);
-
-        var hash: [32]u8 = undefined;
-        hasher.final(&hash);
-
-        @memcpy(proof.data[0..32], &hash);
-        rand.fill(proof.data[32..256]);
-
-        return proof;
-    }
-
-    /// Verify a proof
-    pub fn verify(statement: []const u8, proof: Proof, verifying_key: VerifyingKey) bool {
-        // Simplified verification
+    /// Always fails: there is no proof system.
+    pub fn prove(statement: []const u8, witness: []const u8, proving_key: ProvingKey) BlockchainCryptoError!Proof {
         _ = statement;
-        _ = verifying_key;
+        _ = witness;
+        _ = proving_key;
+        return BlockchainCryptoError.UnsupportedAlgorithm;
+    }
 
-        // Check if proof is not all zeros (basic sanity check)
-        for (proof.data) |byte| {
-            if (byte != 0) return true;
-        }
-        return false;
+    /// Always fails: there is no proof system.
+    ///
+    /// Returns an error rather than `false` on purpose. A `false` would imply
+    /// the proof was checked and rejected; nothing here checks anything.
+    pub fn verify(statement: []const u8, proof: Proof, verifying_key: VerifyingKey) BlockchainCryptoError!bool {
+        _ = statement;
+        _ = proof;
+        _ = verifying_key;
+        return BlockchainCryptoError.UnsupportedAlgorithm;
     }
 };
 
@@ -452,28 +466,185 @@ test "merkle proof generation and verification" {
     try testing.expect(proof.verify(leaf_hash, root));
 }
 
-test "batch signature verification" {
+test "merkle proofs verify for every leaf at every tree size" {
+    // Odd leaf counts exercise the duplicated final node. Before the sibling fix
+    // the unpaired leaf's step was dropped and its proof never verified.
+    inline for (.{ 1, 2, 3, 4, 5, 7, 8, 9 }) |leaf_count| {
+        var tree = MerkleTree.init(testing.allocator);
+        defer tree.deinit();
+
+        var buf: [32]u8 = undefined;
+        for (0..leaf_count) |i| {
+            const label = try std.fmt.bufPrint(&buf, "tx-{d}-of-{d}", .{ i, leaf_count });
+            try tree.addLeaf(label);
+        }
+        try tree.buildTree();
+        const root = tree.getRoot().?;
+
+        for (0..leaf_count) |i| {
+            var proof = try tree.generateProof(i, testing.allocator);
+            defer proof.deinit();
+            try testing.expect(proof.verify(tree.leaves.items[i], root));
+            // A proof only authenticates its own leaf.
+            var wrong_leaf = tree.leaves.items[i];
+            wrong_leaf[0] ^= 0x01;
+            try testing.expect(!proof.verify(wrong_leaf, root));
+            var wrong_root = root;
+            wrong_root[31] ^= 0x80;
+            try testing.expect(!proof.verify(tree.leaves.items[i], wrong_root));
+        }
+    }
+}
+
+test "merkle tree rejects proofs it cannot index" {
+    var tree = MerkleTree.init(testing.allocator);
+    defer tree.deinit();
+
+    // No leaves, no tree: nothing to prove and no root to report.
+    try testing.expect(tree.getRoot() == null);
+    try testing.expectError(BlockchainCryptoError.InvalidMerkleProof, tree.generateProof(0, testing.allocator));
+
+    try tree.addLeaf("a");
+    try tree.addLeaf("b");
+    try tree.addLeaf("c");
+
+    // buildTree has not run, so the level offsets would read past `tree`.
+    try testing.expect(tree.getRoot() == null);
+    try testing.expectError(BlockchainCryptoError.InvalidMerkleProof, tree.generateProof(0, testing.allocator));
+
+    try tree.buildTree();
+    try testing.expect(tree.getRoot() != null);
+    try testing.expectError(BlockchainCryptoError.InvalidMerkleProof, tree.generateProof(3, testing.allocator));
+
+    // Appending after building leaves the two out of step again.
+    try tree.addLeaf("d");
+    try testing.expect(tree.getRoot() == null);
+    try testing.expectError(BlockchainCryptoError.InvalidMerkleProof, tree.generateProof(0, testing.allocator));
+
+    try tree.buildTree();
+    try testing.expect(tree.getRoot() != null);
+    var proof = try tree.generateProof(3, testing.allocator);
+    defer proof.deinit();
+    try testing.expect(proof.verify(tree.leaves.items[3], tree.getRoot().?));
+}
+
+test "merkle proofs do not transfer between trees" {
+    var left = MerkleTree.init(testing.allocator);
+    defer left.deinit();
+    var right = MerkleTree.init(testing.allocator);
+    defer right.deinit();
+
+    for ([_][]const u8{ "a", "b", "c" }) |leaf| try left.addLeaf(leaf);
+    for ([_][]const u8{ "a", "b", "z" }) |leaf| try right.addLeaf(leaf);
+    try left.buildTree();
+    try right.buildTree();
+
+    try testing.expect(!std.mem.eql(u8, &left.getRoot().?, &right.getRoot().?));
+
+    var proof = try left.generateProof(2, testing.allocator);
+    defer proof.deinit();
+    try testing.expect(proof.verify(left.leaves.items[2], left.getRoot().?));
+    try testing.expect(!proof.verify(left.leaves.items[2], right.getRoot().?));
+    try testing.expect(!proof.verify(right.leaves.items[2], left.getRoot().?));
+}
+
+test "batch verification accepts genuine Ed25519 signatures" {
+    const seed: [32]u8 = @splat(0x42);
+    const kp = try crypto.sign.Ed25519.KeyPair.generateDeterministic(seed);
+    const message = "test transaction";
+    const signature = try kp.sign(message, null);
+
     var verifier = BatchVerifier.init(testing.allocator);
     defer verifier.deinit();
 
-    const message = "test transaction";
-    const signature = std.mem.zeroes([64]u8);
-    const public_key = std.mem.zeroes([32]u8);
-
-    try verifier.addSignature(message, signature, public_key);
-
-    // This will fail due to simplified verification, but tests the structure
-    _ = verifier.verifyBatch();
+    try verifier.addSignature(message, signature.toBytes(), kp.public_key.toBytes());
+    try testing.expect(verifier.verifyBatch());
+    try testing.expect(try verifier.verifyBatchParallel());
 }
 
-test "post-quantum signatures" {
-    const keypair = try PostQuantumSig.generateKeyPair();
-    const message = "blockchain transaction";
+test "batch verification rejects tampered input" {
+    // Each case below passed under the previous hash-comparison stand-in, which
+    // ignored the signature entirely. They are the regression guard for it.
+    const seed: [32]u8 = @splat(0x42);
+    const kp = try crypto.sign.Ed25519.KeyPair.generateDeterministic(seed);
+    const message = "test transaction";
+    const signature = try kp.sign(message, null);
+    const public_key = kp.public_key.toBytes();
 
-    const signature = try PostQuantumSig.sign(message, keypair.private_key);
-    const is_valid = PostQuantumSig.verify(message, signature, keypair.public_key);
+    // Altered message.
+    {
+        var verifier = BatchVerifier.init(testing.allocator);
+        defer verifier.deinit();
+        try verifier.addSignature("test transactioX", signature.toBytes(), public_key);
+        try testing.expect(!verifier.verifyBatch());
+    }
 
-    try testing.expect(!is_valid); // Simplified implementation won't verify correctly
+    // Flipped signature bit.
+    {
+        var bad_sig = signature.toBytes();
+        bad_sig[0] ^= 0x01;
+        var verifier = BatchVerifier.init(testing.allocator);
+        defer verifier.deinit();
+        try verifier.addSignature(message, bad_sig, public_key);
+        try testing.expect(!verifier.verifyBatch());
+    }
+
+    // Signature from a different key.
+    {
+        const other_seed: [32]u8 = @splat(0x43);
+        const other = try crypto.sign.Ed25519.KeyPair.generateDeterministic(other_seed);
+        var verifier = BatchVerifier.init(testing.allocator);
+        defer verifier.deinit();
+        try verifier.addSignature(message, signature.toBytes(), other.public_key.toBytes());
+        try testing.expect(!verifier.verifyBatch());
+    }
+
+    // All-zero key and signature: not a well-formed Ed25519 encoding. The old
+    // implementation compared SHA256(message) against the key bytes and never
+    // looked at the signature at all.
+    {
+        var verifier = BatchVerifier.init(testing.allocator);
+        defer verifier.deinit();
+        try verifier.addSignature(message, std.mem.zeroes([64]u8), std.mem.zeroes([32]u8));
+        try testing.expect(!verifier.verifyBatch());
+    }
+
+    // One bad entry poisons an otherwise valid batch.
+    {
+        var verifier = BatchVerifier.init(testing.allocator);
+        defer verifier.deinit();
+        try verifier.addSignature(message, signature.toBytes(), public_key);
+        try verifier.addSignature("other transaction", signature.toBytes(), public_key);
+        try testing.expect(!verifier.verifyBatch());
+    }
+}
+
+test "empty batch verifies vacuously" {
+    var verifier = BatchVerifier.init(testing.allocator);
+    defer verifier.deinit();
+    try testing.expect(verifier.verifyBatch());
+}
+
+test "PostQuantumSig and ZKProof report themselves unsupported" {
+    // If real backends are ever added, these expectations must be replaced with
+    // known-answer vectors, not deleted.
+    const priv = PostQuantumSig.PrivateKey{ .data = @splat(0) };
+    const pub_key = PostQuantumSig.PublicKey{ .data = @splat(0) };
+    const sig = PostQuantumSig.Signature{ .data = @splat(0) };
+
+    try testing.expectError(BlockchainCryptoError.UnsupportedAlgorithm, PostQuantumSig.generateKeyPair());
+    try testing.expectError(BlockchainCryptoError.UnsupportedAlgorithm, PostQuantumSig.sign("m", priv));
+    try testing.expectError(BlockchainCryptoError.UnsupportedAlgorithm, PostQuantumSig.verify("m", sig, pub_key));
+
+    const proof = ZKProof.Proof{ .data = @splat(0xFF) };
+    const vk = ZKProof.VerifyingKey{ .data = @splat(0) };
+    const pk = ZKProof.ProvingKey{ .data = @splat(0) };
+
+    try testing.expectError(BlockchainCryptoError.UnsupportedAlgorithm, ZKProof.setup());
+    try testing.expectError(BlockchainCryptoError.UnsupportedAlgorithm, ZKProof.prove("statement", "witness", pk));
+    // A non-zero proof was exactly what the old `verify` accepted for any
+    // statement; it must now refuse instead of returning a verdict.
+    try testing.expectError(BlockchainCryptoError.UnsupportedAlgorithm, ZKProof.verify("statement", proof, vk));
 }
 
 test "consensus hash functions" {

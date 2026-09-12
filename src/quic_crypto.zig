@@ -166,7 +166,15 @@ pub const QuicCrypto = struct {
                 },
                 .chacha20_poly1305 => {
                     const counter = std.mem.readInt(u32, sample[0..4], .little);
-                    var chacha_mask: [64]u8 = undefined;
+                    // RFC 9001 section 5.4.4 defines the mask as ChaCha20
+                    // applied to five zero bytes, so the input has to be zeroed.
+                    // It was `undefined` here and passed as both source and
+                    // destination, which made the mask the keystream XOR
+                    // whatever the stack held: not the RFC mask, so not
+                    // interoperable, and not even stable between two calls in
+                    // the same process once the safety fill is gone. That is
+                    // what broke the round trip in ReleaseFast.
+                    var chacha_mask: [64]u8 = @splat(0);
                     const key_array: [32]u8 = self.key[0..32].*;
                     const nonce_array: [12]u8 = sample[4..16].*;
                     crypto.stream.chacha.ChaCha20IETF.xor(&chacha_mask, &chacha_mask, counter, key_array, nonce_array);
@@ -543,6 +551,28 @@ test "AEAD seal and open" {
 
     // Should decrypt back to original
     try testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0x65, 0x6c, 0x6c, 0x6f }, &plaintext);
+}
+
+test "Header protection matches RFC 9001 A.5 mask" {
+    // The round-trip test below only proves apply/remove agree with each other,
+    // which stayed true while the mask itself was wrong. This vector is from
+    // RFC 9001 appendix A.5, so it fails if the mask stops matching what other
+    // QUIC implementations compute.
+    var hp_key: [32]u8 = undefined;
+    _ = try std.fmt.hexToBytes(&hp_key, "25a282b9e82f06f21f488917a4fc8f1b73573685608597d0efcb076b0ab7a7a4");
+
+    var sample: [16]u8 = undefined;
+    _ = try std.fmt.hexToBytes(&sample, "5e5cd55c41f69080575d7999c25a5bfb");
+
+    var expected: [5]u8 = undefined;
+    _ = try std.fmt.hexToBytes(&expected, "aefefe7d03");
+
+    const hp = QuicCrypto.HeaderProtection.init(.chacha20_poly1305, &hp_key);
+
+    var mask: [5]u8 = undefined;
+    try hp.createMask(&sample, &mask);
+
+    try testing.expectEqualSlices(u8, &expected, &mask);
 }
 
 test "Header protection" {

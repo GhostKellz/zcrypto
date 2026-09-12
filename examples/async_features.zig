@@ -40,14 +40,28 @@ fn demoAsyncResults(allocator: std.mem.Allocator) !void {
     if (success_result.data) |data| {
         std.debug.print("  Data size: {} bytes\n", .{data.len});
     }
-    std.debug.print("  Processing time: {d:.2} ms\n", .{@as(f64, @floatFromInt(success_result.execution_time_ns)) / 1_000_000.0});
+    printDuration("  Processing time", success_result.execution_time_ns);
 
     std.debug.print("Error result:\n", .{});
     if (error_result.error_message) |msg| {
         std.debug.print("  Error: {s}\n", .{msg});
     }
-    std.debug.print("  Time to error: {d:.2} ms\n", .{@as(f64, @floatFromInt(error_result.execution_time_ns)) / 1_000_000.0});
+    printDuration("  Time to error", error_result.execution_time_ns);
 
     _ = allocator; // For future use
     std.debug.print("\n", .{});
+}
+
+/// Print an elapsed time, or say plainly that there is none.
+///
+/// Written out rather than unwrapped with `.?` because this is the example a
+/// consumer copies: `execution_time_ns` is optional precisely so an unreadable
+/// clock cannot be mistaken for a measurement, and demonstrating the unwrap
+/// would teach the habit the type exists to prevent.
+fn printDuration(label: []const u8, ns: ?u64) void {
+    if (ns) |value| {
+        std.debug.print("{s}: {d:.2} ms\n", .{ label, @as(f64, @floatFromInt(value)) / 1_000_000.0 });
+    } else {
+        std.debug.print("{s}: unavailable (clock could not be read)\n", .{label});
+    }
 }

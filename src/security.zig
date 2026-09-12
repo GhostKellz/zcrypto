@@ -27,7 +27,7 @@ pub const allow_insecure_options = build_options.allow_insecure_options;
 
 /// Returns true if this is a release/optimized build
 pub fn isReleaseBuild() bool {
-    return builtin.mode != .Debug;
+    return builtin.mode != .debug;
 }
 
 /// Compile-time assertion that experimental crypto is enabled.
@@ -42,10 +42,27 @@ pub fn requireExperimentalCrypto(comptime feature_name: []const u8) void {
     }
 }
 
+/// Whether insecure options are permitted by this build's configuration.
+///
+/// Split out of `checkInsecureOption` so the policy can be asserted from an
+/// ordinary test without emitting anything: the refusing branch below writes to
+/// `std.log.err` by design, Zig's test runner owns `std_options` and fails any
+/// test that logs an error, and the release gate rejects any stage whose log
+/// carries a diagnostic. A guard nothing can exercise is how this one came to
+/// compare against a `.Debug` tag that no longer existed and go unnoticed.
+///
+/// Asserting this predicate is not a substitute for exercising the branch that
+/// consumes it -- a missing `return error` below leaves such a test green.
+/// `tests/insecure_option_guard.zig` is a separate release-pinned program that
+/// installs its own log sink, drives the refusal and asserts the diagnostic.
+pub fn insecureOptionsPermitted() bool {
+    return !isReleaseBuild() or allow_insecure_options;
+}
+
 /// Runtime check for insecure options in release builds.
 /// Returns an error if insecure options are used in release builds without explicit opt-in.
 pub fn checkInsecureOption(comptime option_name: []const u8) error{InsecureOptionInReleaseBuild}!void {
-    if (isReleaseBuild() and !allow_insecure_options) {
+    if (!insecureOptionsPermitted()) {
         std.log.err(
             "SECURITY ERROR: '{s}' is not allowed in release builds. " ++
                 "This option bypasses critical security checks. " ++
@@ -82,11 +99,20 @@ pub const SecurityError = error{
     PlaceholderCryptoDisabled,
 };
 
-test "security guards compile-time check" {
-    // This test verifies the security module compiles correctly.
-    // The actual compile-time guards are tested by attempting to
-    // use guarded code paths without the experimental flag.
-    if (allow_experimental_crypto) {
-        warnExperimentalCrypto("test");
+test "insecure options are refused in release builds unless opted in" {
+    // The mode is enumerated rather than re-derived as `mode != .debug`, so the
+    // assertion is a table the implementation has to agree with rather than a
+    // copy of it: inverting the guard, or adding a mode and forgetting it, fails
+    // here.
+    try std.testing.expect(switch (builtin.mode) {
+        .debug => insecureOptionsPermitted(),
+        .safe, .fast, .small => insecureOptionsPermitted() == allow_insecure_options,
+    });
+
+    // Drive the real entry point, but only on the branch that stays quiet.
+    // `checkInsecureOption` logs on both the refusing and the opted-in paths,
+    // and the gate fails any stage that prints a diagnostic while passing.
+    if (insecureOptionsPermitted() and !allow_insecure_options) {
+        try checkInsecureOption("gate_test");
     }
 }

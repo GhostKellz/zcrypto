@@ -25,6 +25,7 @@ test "stable root exports are present" {
             "key_rotation",
             "version",
             "build_config",
+            "build_info",
         };
 
         for (stable_decls) |decl| {
@@ -69,6 +70,26 @@ test "stable function signatures are force referenced" {
         if (!@hasDecl(zcrypto.quic_crypto, "QuicCrypto")) @compileError("missing zcrypto.quic_crypto.QuicCrypto");
         if (!@hasDecl(zcrypto.quic, "QuicCrypto")) @compileError("missing zcrypto.quic.QuicCrypto");
     }
+}
+
+// v1.0.7 removed `util.getTimestampNanos` and `util.getTimestampNanosOrZero`
+// from this stable module and the migration note points callers at the
+// monotonic clock instead. That note is only worth as much as the replacement's
+// availability, so the replacement is pinned here: the removal was deliberate,
+// a second removal taking its successor with it would not be.
+test "monotonic clock replacement for the removed nanosecond helpers is stable" {
+    const monotonic_fn: fn () ?zcrypto.util.Instant = zcrypto.util.getMonotonic;
+    _ = monotonic_fn;
+
+    const start = zcrypto.util.getMonotonic() orelse return error.SkipZigTest;
+    const end = zcrypto.util.getMonotonic() orelse return error.SkipZigTest;
+
+    // The property the removed helpers could not offer. `getTimestampNanosOrZero`
+    // substituted 0 for a failed read, so this subtraction could yield a whole
+    // Unix epoch of elapsed time or underflow; `since` returns an error instead.
+    _ = try end.since(start);
+    const later = zcrypto.util.Instant{ .ns = start.ns + 1 };
+    try std.testing.expectError(error.ClockWentBackwards, start.since(later));
 }
 
 test "stable AEAD wrappers round trip and reject tampering" {

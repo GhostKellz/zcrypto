@@ -1,6 +1,7 @@
 //! Example usage of zcrypto's optional features.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const zcrypto = @import("zcrypto");
 
 pub fn main() !void {
@@ -22,13 +23,35 @@ fn demoHardwareAcceleration() !void {
         return;
     }
 
+    // Build-target features, not a runtime probe, and not what selects the
+    // implementation. `std.crypto` publishes the AES answer that actually
+    // applies, so print that next to it rather than implying the two agree.
+    //
+    // This line is the release gate's only record of which target a run was
+    // built for: it is captured by the `smoke-runs` stage, and the same values
+    // cannot be printed from a test body without the build runner reporting the
+    // passing run as `failed command` (see tests/hardware_parity.zig). Keep the
+    // full field list if this demo is edited.
     const features = zcrypto.hardware.HardwareAcceleration.detect();
-    std.debug.print("hardware acceleration: aes_ni={}, avx2={}\n", .{ features.aes_ni, features.avx2 });
+    std.debug.print(
+        "built for: arch={s} aes_ni={} sha_ext={} pclmulqdq={} avx2={} avx512={} arm_crypto={}" ++
+            " | std.crypto aes hardware-backed: {}\n",
+        .{
+            @tagName(builtin.target.cpu.arch),
+            features.aes_ni,
+            features.sha_ext,
+            features.pclmulqdq,
+            features.avx2,
+            features.avx512,
+            features.arm_crypto,
+            std.crypto.core.aes.has_hardware_support,
+        },
+    );
 
     const a = [_]u8{ 0x11, 0x22, 0x33, 0x44 };
     const b = [_]u8{ 0x55, 0x66, 0x77, 0x88 };
     var result: [4]u8 = undefined;
-    zcrypto.hardware.SIMD.vectorizedXor(&a, &b, &result);
+    try zcrypto.hardware.SIMD.vectorizedXor(&a, &b, &result);
     std.debug.print("simd xor sample: {x}\n", .{result});
 }
 

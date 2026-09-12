@@ -3,6 +3,7 @@
 //! Designed for high-performance, memory-safe cryptographic operations
 //! with a focus on TLS 1.3, QUIC, and modern public-key cryptography.
 const std = @import("std");
+const builtin = @import("builtin");
 const build_options = @import("build_options");
 
 /// Core module and standardized crypto errors for stable v1.0.x callers.
@@ -27,6 +28,19 @@ pub const blake3 = @import("blake3.zig");
 pub const merkle = @import("merkle.zig");
 pub const timing = @import("timing.zig");
 pub const arena = @import("arena.zig");
+
+/// Hardware-backed key storage: TPM 2.0 and PKCS#11 tokens.
+///
+/// Not behind `enable_enterprise`, unlike the `formal.hsm` alias that still
+/// reaches the same file. That gate exists to keep placeholder crypto out of a
+/// default build, and this module no longer contains any: the fabricated key
+/// handles, host-side HKDF sold as TPM derivation and OS entropy returned under
+/// a hardware name are gone. It also costs a default build nothing — with
+/// `-Dtpm`/`-Dpkcs11` off the backend names resolve to shims that report
+/// `BackendNotBuilt`, so there is no dependency to acquire and no native
+/// library to find. Keeping it gated only meant its tests never ran in the
+/// default test build, which is the situation that let the placeholders live.
+pub const hsm = @import("hsm.zig");
 
 // Stable QUIC-oriented helpers.
 pub const quic_crypto = @import("quic_crypto.zig");
@@ -74,7 +88,46 @@ pub const build_config = struct {
     pub const experimental_crypto_enabled = build_options.allow_experimental_crypto;
 };
 
+/// How this copy of zcrypto was actually compiled.
+///
+/// `@import("builtin")` is resolved per module instance, so these describe the
+/// zcrypto module itself rather than whoever imported it. That distinction is
+/// the whole point: a consumer that asserts on its *own* `builtin.mode` learns
+/// nothing about the library it linked against, because a dependency pinned to
+/// Debug looks identical from the outside. Comparing `build_info` against the
+/// consumer's own `builtin` is what actually proves the build graph propagated
+/// the requested mode and target.
+pub const build_info = struct {
+    pub const mode = builtin.mode;
+    pub const cpu_arch = builtin.target.cpu.arch;
+    pub const os_tag = builtin.target.os.tag;
+    pub const abi = builtin.target.abi;
+};
+
+/// Negative control for `api_surface.zig`. Empty unless `-Dapi-surface-control`
+/// is passed, in which case it exports a function that cannot compile.
+///
+/// `api_surface.zig` is only worth anything if it still analyses exported
+/// functions nothing calls. Nothing about that is self-evident from a green run
+/// -- a `refRecursive` that quietly stopped descending, or a `_ = &@field` the
+/// compiler folded away, would leave the test passing and the surface
+/// unchecked, which is exactly the state this repository was in before it
+/// existed. The gate builds with this flag on and requires the build to *fail*.
+///
+/// A wrong-arity call rather than `@compileError`, because that is the bug class
+/// being guarded against and it exercises the same body analysis a real defect
+/// would.
+pub const api_surface_control = if (build_options.api_surface_control) struct {
+    pub fn neverCalledAndCannotCompile() void {
+        _ = std.crypto.kdf.hkdf.HkdfSha256.extract();
+    }
+} else struct {};
+
 test {
+    // Compiles every public declaration. Keep this first: it is the only thing
+    // here that fails for a decl no other test calls.
+    _ = @import("api_surface.zig");
+
     _ = core;
 
     // Import all core module tests
@@ -94,6 +147,7 @@ test {
     _ = merkle;
     _ = timing;
     _ = arena;
+    _ = hsm;
 
     // Feature modules (conditionally available)
     // Note: These tests will only run if the features were enabled during build

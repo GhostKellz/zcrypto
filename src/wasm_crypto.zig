@@ -46,18 +46,41 @@ pub const WasmMemory = struct {
         };
     }
 
+    /// Compute `offset + len` in u64 so the bound cannot be wrapped past.
+    ///
+    /// Both of these bounds checks used to add in the operands' own width: u32
+    /// for `read`, and usize for `write` — which is also u32 on wasm32, the one
+    /// target this module exists for. An offset near the top of the address
+    /// space therefore wrapped, the sum compared small, and the check passed on
+    /// a request that was far out of bounds. In a safety build that then
+    /// panicked on the reversed slice; in ReleaseFast it was an out-of-bounds
+    /// access at the boundary between the host and untrusted WASM.
+    ///
+    /// The width is `u64` rather than `usize` for the same reason. `usize` is
+    /// 64-bit on every host this library is developed on and 32-bit on wasm32,
+    /// so widening to `usize` reads as a fix, tests clean on the host, and
+    /// leaves the defect in place exactly where it matters. Measured:
+    /// reintroducing the `usize` form fails the test below under wasm32-wasi
+    /// with "start index 4294967280 is larger than end index 16", and passes
+    /// the entire native suite.
+    fn endOffset(offset: u32, len: usize) u64 {
+        return @as(u64, offset) + @as(u64, len);
+    }
+
     pub fn read(self: WasmMemory, offset: u32, len: u32) WasmCryptoError![]const u8 {
-        if (offset + len > self.data.len or len > self.max_size) {
+        const end = endOffset(offset, len);
+        if (end > self.data.len or len > self.max_size) {
             return WasmCryptoError.InvalidWasmMemory;
         }
-        return self.data[offset .. offset + len];
+        return self.data[offset..@intCast(end)];
     }
 
     pub fn write(self: WasmMemory, offset: u32, data: []const u8) WasmCryptoError!void {
-        if (offset + data.len > self.data.len or data.len > self.max_size) {
+        const end = endOffset(offset, data.len);
+        if (end > self.data.len or data.len > self.max_size) {
             return WasmCryptoError.InvalidWasmMemory;
         }
-        @memcpy(self.data[offset .. offset + data.len], data);
+        @memcpy(self.data[offset..@intCast(end)], data);
     }
 };
 
@@ -74,10 +97,16 @@ pub const GasMeter = struct {
     }
 
     pub fn consumeGas(self: *GasMeter, amount: u64) WasmCryptoError!void {
-        if (self.used_gas + amount > self.available_gas) {
+        // `amount` is derived from a caller-supplied length, so `used_gas +
+        // amount` could wrap and make an over-budget request compare as
+        // in-budget. An overflow can only mean the limit was exceeded.
+        const total = std.math.add(u64, self.used_gas, amount) catch {
+            return WasmCryptoError.GasLimitExceeded;
+        };
+        if (total > self.available_gas) {
             return WasmCryptoError.GasLimitExceeded;
         }
-        self.used_gas += amount;
+        self.used_gas = total;
     }
 
     pub fn remainingGas(self: GasMeter) u64 {
@@ -218,6 +247,14 @@ pub const WasmCrypto = struct {
             return WasmCryptoError.BufferTooLarge;
         }
 
+        // HKDF-Expand cannot produce more than 255 blocks; std asserts on it.
+        // `max_buffer_size` is host policy and may be set above that, so the
+        // structural limit has to be checked separately or a guest can choose an
+        // `okm_len` that panics the host.
+        if (okm_len > 255 * crypto.kdf.hkdf.HkdfSha256.prk_length) {
+            return WasmCryptoError.BufferTooLarge;
+        }
+
         // Read inputs
         const ikm = try memory.read(ikm_offset, ikm_len);
         const salt = try memory.read(salt_offset, salt_len);
@@ -227,10 +264,10 @@ pub const WasmCrypto = struct {
         const okm = try self.allocator.alloc(u8, okm_len);
         defer self.allocator.free(okm);
 
-        // Perform HKDF
-        var prk: [32]u8 = undefined;
-        crypto.kdf.hkdf.HkdfSha256.extract(&prk, ikm, salt);
-        crypto.kdf.hkdf.HkdfSha256.expand(okm, info, &prk);
+        // Perform HKDF. `extract` takes (salt, ikm) in that order and returns the
+        // PRK; `expand` takes it by value.
+        const prk = crypto.kdf.hkdf.HkdfSha256.extract(salt, ikm);
+        crypto.kdf.hkdf.HkdfSha256.expand(okm, info, prk);
 
         // Write result
         try memory.write(okm_offset, okm);
@@ -355,6 +392,40 @@ test "wasm memory operations" {
 
     const read_data = try memory.read(0, test_data.len);
     try testing.expectEqualSlices(u8, test_data, read_data);
+}
+
+test "wasm memory bounds survive an offset that wraps the address space" {
+    var buffer: [1024]u8 = undefined;
+    const memory = WasmMemory.init(&buffer, 1024);
+
+    // Both offsets are far outside a 1 KiB buffer, but `offset + len` wrapped
+    // to a small in-bounds-looking value in the operands' own width, so the
+    // check passed and the slice that followed was out of bounds.
+    //
+    // This test only has teeth when it runs on wasm32. `usize` is 64 bits on
+    // the development hosts, where these operands cannot wrap at all and the
+    // assertions below hold no matter how the addition is written. It is the
+    // wasm32-wasi run in `dev/wasm/check.sh` that makes it a test rather than a
+    // statement of intent.
+    try testing.expectError(WasmCryptoError.InvalidWasmMemory, memory.read(0xFFFF_FFF0, 0x20));
+    try testing.expectError(WasmCryptoError.InvalidWasmMemory, memory.read(0xFFFF_FFFF, 1));
+    const wrapping_payload: [0x20]u8 = @splat(0);
+    try testing.expectError(WasmCryptoError.InvalidWasmMemory, memory.write(0xFFFF_FFF0, &wrapping_payload));
+
+    // The ordinary boundary cases still behave: exactly full is fine, one past
+    // the end is not.
+    _ = try memory.read(0, 1024);
+    try testing.expectError(WasmCryptoError.InvalidWasmMemory, memory.read(1, 1024));
+}
+
+test "gas accounting cannot be wrapped past the limit" {
+    var meter = GasMeter.init(1000);
+    try meter.consumeGas(100);
+
+    // `used_gas + amount` overflowed u64 and compared below the limit, which
+    // let an over-budget request through and left the meter under-counted.
+    try testing.expectError(WasmCryptoError.GasLimitExceeded, meter.consumeGas(std.math.maxInt(u64)));
+    try testing.expectEqual(@as(u64, 100), meter.used_gas);
 }
 
 test "gas meter" {

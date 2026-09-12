@@ -14,6 +14,24 @@ const sym = @import("sym.zig");
 const pq = @import("pq.zig");
 const security = @import("security.zig");
 
+fn addChecked(a: usize, b: usize) QuicError!usize {
+    return std.math.add(usize, a, b) catch QuicError.HeaderProtectionFailed;
+}
+
+/// Decode a QUIC variable-length integer (RFC 9000 Section 16). The top two
+/// bits of the first byte select a 1, 2, 4, or 8 byte encoding.
+fn decodeVarint(buf: []const u8) QuicError!struct { value: u64, len: usize } {
+    if (buf.len == 0) return QuicError.HeaderProtectionFailed;
+    const len = @as(usize, 1) << @as(u2, @intCast(buf[0] >> 6));
+    if (buf.len < len) return QuicError.HeaderProtectionFailed;
+
+    var value: u64 = buf[0] & 0x3f;
+    for (buf[1..len]) |b| {
+        value = (value << 8) | b;
+    }
+    return .{ .value = value, .len = len };
+}
+
 fn packetKeysAreInitialized(keys: *const PacketKeys) bool {
     return !std.mem.allEqual(u8, &keys.aead_key, 0) and
         !std.mem.allEqual(u8, &keys.header_protection_key, 0) and
@@ -312,8 +330,8 @@ pub const QuicCrypto = struct {
 
         const keys = try self.requireKeys(level, is_server);
         const pn_len = self.getPacketNumberLength(header);
-        const pn_offset = self.getPacketNumberOffset(header);
-        if (pn_offset + pn_len > header.len) return QuicError.HeaderProtectionFailed;
+        const pn_offset = try self.getPacketNumberOffset(header);
+        if (try addChecked(pn_offset, pn_len) > header.len) return QuicError.HeaderProtectionFailed;
 
         const mask = self.createHeaderProtectionMask(keys, sample);
 
@@ -340,6 +358,13 @@ pub const QuicCrypto = struct {
         }
 
         const keys = try self.requireKeys(level, is_server);
+
+        // Header protection never covers the bits this offset is parsed from
+        // (the form bit and, for long headers, the packet type), so it can be
+        // resolved before unmasking. Doing so keeps a malformed header from
+        // being left half-modified when the parse fails.
+        const pn_offset = try self.getPacketNumberOffset(header);
+
         const mask = self.createHeaderProtectionMask(keys, sample);
 
         const is_long_header = (header[0] & 0x80) != 0;
@@ -350,8 +375,11 @@ pub const QuicCrypto = struct {
         }
 
         const pn_len = self.getPacketNumberLength(header);
-        const pn_offset = self.getPacketNumberOffset(header);
-        if (pn_offset + pn_len > header.len) return QuicError.HeaderProtectionFailed;
+        if (try addChecked(pn_offset, pn_len) > header.len) {
+            // Restore the first byte so the caller's buffer is unchanged.
+            header[0] ^= if (is_long_header) (mask[0] & 0x0f) else (mask[0] & 0x1f);
+            return QuicError.HeaderProtectionFailed;
+        }
 
         for (0..pn_len) |i| {
             header[pn_offset + i] ^= mask[1 + i];
@@ -404,16 +432,54 @@ pub const QuicCrypto = struct {
         return keys;
     }
 
-    /// Get packet number offset in header (simplified)
-    fn getPacketNumberOffset(self: *const QuicCrypto, header: []const u8) usize {
+    /// Offset of the packet number field within a QUIC header.
+    ///
+    /// Long headers carry length-prefixed connection IDs and, for Initial
+    /// packets, a token, so this offset has to be parsed off the wire
+    /// (RFC 8999 Section 5.1, RFC 9000 Section 17.2). It was previously
+    /// hardcoded to 7, which is wrong for every long header with a non-empty
+    /// connection ID: RFC 9001 A.3 puts the packet number at offset 18. The
+    /// round-trip tests did not catch it because protect and unprotect shared
+    /// the same wrong offset.
+    ///
+    /// Short headers are a known limitation: the Destination Connection ID
+    /// length is not encoded on the wire, so a zero-length DCID is assumed.
+    /// Callers using non-empty short-header DCIDs must not use this path.
+    fn getPacketNumberOffset(self: *const QuicCrypto, header: []const u8) QuicError!usize {
         _ = self;
-        if (header.len > 0 and (header[0] & 0x80) != 0) {
-            // Long header
-            return if (header.len >= 7) 7 else header.len;
-        } else {
-            // Short header
-            return 1;
+        if (header.len == 0) return QuicError.HeaderProtectionFailed;
+        if ((header[0] & 0x80) == 0) return 1;
+
+        // Version Negotiation packets (version 0) and Retry packets carry no
+        // packet number, so there is nothing to protect.
+        if (header.len < 5) return QuicError.HeaderProtectionFailed;
+        if (std.mem.readInt(u32, header[1..5], .big) == 0) return QuicError.HeaderProtectionFailed;
+
+        // First byte, 4-byte version, then length-prefixed DCID and SCID.
+        var offset: usize = 5;
+        for (0..2) |_| {
+            if (offset >= header.len) return QuicError.HeaderProtectionFailed;
+            const cid_len = header[offset];
+            if (cid_len > 20) return QuicError.HeaderProtectionFailed;
+            offset = try addChecked(offset, 1 + @as(usize, cid_len));
         }
+
+        switch ((header[0] & 0x30) >> 4) {
+            0x00 => {
+                // Initial: Token Length (varint), Token, Length (varint).
+                if (offset >= header.len) return QuicError.HeaderProtectionFailed;
+                const token_len = try decodeVarint(header[offset..]);
+                offset = try addChecked(offset, token_len.len);
+                offset = try addChecked(offset, std.math.cast(usize, token_len.value) orelse
+                    return QuicError.HeaderProtectionFailed);
+            },
+            0x01, 0x02 => {}, // 0-RTT and Handshake: Length (varint) only.
+            else => return QuicError.HeaderProtectionFailed, // Retry: no packet number.
+        }
+
+        if (offset >= header.len) return QuicError.HeaderProtectionFailed;
+        const length_field = try decodeVarint(header[offset..]);
+        return try addChecked(offset, length_field.len);
     }
 
     /// Get packet number length from header (simplified)
@@ -1075,4 +1141,325 @@ test "QUIC zero-copy rejects uninitialized application keys" {
         QuicError.InvalidKeys,
         ZeroCopy.encryptInPlace(&crypto, .application, false, 1, &packet, 1),
     );
+}
+
+// ---------------------------------------------------------------------------
+// RFC 9001 Appendix A published test vectors.
+//
+// Provenance: RFC 9001 "Using TLS to Secure QUIC", Appendix A "Sample Packet
+// Protection", retrieved from https://www.rfc-editor.org/rfc/rfc9001.txt
+// (sha256 3bbaecdf5afd278052a2c48348ce118c4ff8d0cf6b9915549858171b3f98a591).
+// These are an independent oracle: the expected bytes come from the
+// specification, not from this implementation, so a round-trip that is
+// self-consistent but wrong cannot satisfy them.
+// ---------------------------------------------------------------------------
+
+fn decodeHex(comptime N: usize, hex: []const u8) [N]u8 {
+    var out: [N]u8 = undefined;
+    _ = std.fmt.hexToBytes(&out, hex) catch unreachable;
+    return out;
+}
+
+/// RFC 9001 A.1: the 8-byte client-chosen Destination Connection ID.
+const RFC9001_DCID = decodeHex(8, "8394c8f03e515708");
+
+test "RFC 9001 A.1: initial salt matches the specification" {
+    try std.testing.expectEqualSlices(
+        u8,
+        &decodeHex(20, "38762cf7f55934b34d179ae6a4c80cadccbb7f0a"),
+        &QUIC_V1_SALT,
+    );
+}
+
+test "RFC 9001 A.1: initial secret derivation matches published vector" {
+    const HkdfSha256 = std.crypto.kdf.hkdf.HkdfSha256;
+    const initial_secret = HkdfSha256.extract(&QUIC_V1_SALT, &RFC9001_DCID);
+
+    try std.testing.expectEqualSlices(
+        u8,
+        &decodeHex(32, "7db5df06e7a69e432496adedb00851923595221596ae2ae9fb8115c1e9ed0a44"),
+        &initial_secret,
+    );
+
+    var client_secret: [32]u8 = undefined;
+    try hkdfExpandLabel(&initial_secret, "client in", "", &client_secret);
+    try std.testing.expectEqualSlices(
+        u8,
+        &decodeHex(32, "c00cf151ca5be075ed0ebfb5c80323c42d6b7db67881289af4008f1f6c357aea"),
+        &client_secret,
+    );
+
+    var server_secret: [32]u8 = undefined;
+    try hkdfExpandLabel(&initial_secret, "server in", "", &server_secret);
+    try std.testing.expectEqualSlices(
+        u8,
+        &decodeHex(32, "3c199828fd139efd216c155ad844cc81fb82fa8d7446fa7d78be803acdda951b"),
+        &server_secret,
+    );
+}
+
+test "RFC 9001 A.1: deriveInitialKeys produces the published key, iv, and hp" {
+    var crypto = QuicCrypto.init(.TLS_AES_128_GCM_SHA256);
+    try crypto.deriveInitialKeys(&RFC9001_DCID);
+
+    // Client packet protection keys.
+    try std.testing.expectEqualSlices(
+        u8,
+        &decodeHex(16, "1f369613dd76d5467730efcbe3b1a22d"),
+        crypto.initial_keys_client.aead_key[0..16],
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        &decodeHex(12, "fa044b2f42a3fd3b46fb255c"),
+        &crypto.initial_keys_client.iv,
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        &decodeHex(16, "9f50449e04a0e810283a1e9933adedd2"),
+        crypto.initial_keys_client.header_protection_key[0..16],
+    );
+
+    // Server packet protection keys.
+    try std.testing.expectEqualSlices(
+        u8,
+        &decodeHex(16, "cf3a5331653c364c88f0f379b6067e37"),
+        crypto.initial_keys_server.aead_key[0..16],
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        &decodeHex(12, "0ac1493ca1905853b0bba03e"),
+        &crypto.initial_keys_server.iv,
+    );
+    try std.testing.expectEqualSlices(
+        u8,
+        &decodeHex(16, "c206b8d9b9f0f37644430b490eeaa314"),
+        crypto.initial_keys_server.header_protection_key[0..16],
+    );
+}
+
+/// RFC 9001 A.3: the server Initial packet, unprotected payload (99 bytes).
+const RFC9001_A3_PAYLOAD = decodeHex(99, "02000000000600405a020000560303ee" ++
+    "fce7f7b37ba1d1632e96677825ddf739" ++
+    "88cfc79825df566dc5430b9a045a1200" ++
+    "130100002e00330024001d00209d3c94" ++
+    "0d89690b84d08a60993c144eca684d10" ++
+    "81287c834d5311bcf32bb9da1a002b00" ++
+    "020304");
+
+/// RFC 9001 A.3: the unprotected server header. Packet number 1, encoded in
+/// 2 bytes, sitting at offset 18 (after version, an empty DCID, an 8-byte
+/// SCID, an empty token, and the 2-byte Length varint).
+const RFC9001_A3_HEADER = decodeHex(20, "c1000000010008f067a5502a4262b50040750001");
+
+/// RFC 9001 A.3: the fully protected packet (135 bytes = 20 header + 99 + 16 tag).
+const RFC9001_A3_PROTECTED = decodeHex(135, "cf000000010008f067a5502a4262b500" ++
+    "4075c0d95a482cd0991cd25b0aac406a" ++
+    "5816b6394100f37a1c69797554780bb3" ++
+    "8cc5a99f5ede4cf73c3ec2493a1839b3" ++
+    "dbcba3f6ea46c5b7684df3548e7ddeb9" ++
+    "c3bf9c73cc3f3bded74b562bfb19fb84" ++
+    "022f8ef4cdd93795d77d06edbb7aaf2f" ++
+    "58891850abbdca3d20398c276456cbc4" ++
+    "2158407dd074ee");
+
+test "RFC 9001 A.3: server Initial AEAD matches the published ciphertext" {
+    var crypto = QuicCrypto.init(.TLS_AES_128_GCM_SHA256);
+    try crypto.deriveInitialKeys(&RFC9001_DCID);
+
+    var output: [RFC9001_A3_PAYLOAD.len + 16]u8 = undefined;
+    const written = try crypto.encryptPacket(
+        .initial,
+        true,
+        1,
+        &RFC9001_A3_HEADER,
+        &RFC9001_A3_PAYLOAD,
+        &output,
+    );
+
+    // The ciphertext follows the 20-byte header in the published packet, and
+    // the unprotected header is the AAD. Matching here pins the nonce
+    // construction and the AAD choice, not just "some AEAD ran".
+    try std.testing.expectEqual(RFC9001_A3_PROTECTED.len - RFC9001_A3_HEADER.len, written);
+    try std.testing.expectEqualSlices(
+        u8,
+        RFC9001_A3_PROTECTED[RFC9001_A3_HEADER.len..],
+        output[0..written],
+    );
+
+    // And the same keys must recover the published plaintext.
+    var recovered: [RFC9001_A3_PAYLOAD.len]u8 = undefined;
+    const plaintext_len = try crypto.decryptPacket(
+        .initial,
+        true,
+        1,
+        &RFC9001_A3_HEADER,
+        RFC9001_A3_PROTECTED[RFC9001_A3_HEADER.len..],
+        &recovered,
+    );
+    try std.testing.expectEqualSlices(u8, &RFC9001_A3_PAYLOAD, recovered[0..plaintext_len]);
+}
+
+test "RFC 9001 A.3: header protection mask matches the published sample" {
+    var crypto = QuicCrypto.init(.TLS_AES_128_GCM_SHA256);
+    try crypto.deriveInitialKeys(&RFC9001_DCID);
+
+    // "the header protection sample is taken starting from the third protected
+    // byte", i.e. pn_offset + 4 == 22 into the packet.
+    const sample = RFC9001_A3_PROTECTED[22..38];
+    try std.testing.expectEqualSlices(u8, &decodeHex(16, "2cd0991cd25b0aac406a5816b6394100"), sample);
+
+    const mask = crypto.createHeaderProtectionMask(&crypto.initial_keys_server, sample);
+    try std.testing.expectEqualSlices(u8, &decodeHex(5, "2ec0d8356a"), &mask);
+}
+
+test "RFC 9001 A.3: protectHeader reproduces the published protected header" {
+    var crypto = QuicCrypto.init(.TLS_AES_128_GCM_SHA256);
+    try crypto.deriveInitialKeys(&RFC9001_DCID);
+
+    const sample = RFC9001_A3_PROTECTED[22..38];
+
+    var header = RFC9001_A3_HEADER;
+    try crypto.protectHeader(.initial, true, &header, sample);
+    try std.testing.expectEqualSlices(u8, RFC9001_A3_PROTECTED[0..20], &header);
+
+    // Removing protection must return the original header exactly.
+    try crypto.unprotectHeader(.initial, true, &header, sample);
+    try std.testing.expectEqualSlices(u8, &RFC9001_A3_HEADER, &header);
+}
+
+test "RFC 9001 A.3: AEAD rejects tampered tag, header, and packet number" {
+    var crypto = QuicCrypto.init(.TLS_AES_128_GCM_SHA256);
+    try crypto.deriveInitialKeys(&RFC9001_DCID);
+
+    const ciphertext = RFC9001_A3_PROTECTED[RFC9001_A3_HEADER.len..];
+    var recovered: [RFC9001_A3_PAYLOAD.len]u8 = undefined;
+
+    // Flipping any tag bit must fail authentication.
+    var bad_tag: [ciphertext.len]u8 = ciphertext.*;
+    bad_tag[bad_tag.len - 1] ^= 0x01;
+    try std.testing.expectError(QuicError.DecryptionFailed, crypto.decryptPacket(.initial, true, 1, &RFC9001_A3_HEADER, &bad_tag, &recovered));
+
+    // Flipping a ciphertext bit must fail authentication.
+    var bad_body: [ciphertext.len]u8 = ciphertext.*;
+    bad_body[0] ^= 0x01;
+    try std.testing.expectError(QuicError.DecryptionFailed, crypto.decryptPacket(.initial, true, 1, &RFC9001_A3_HEADER, &bad_body, &recovered));
+
+    // The header is the AAD, so altering it must fail authentication.
+    var bad_header = RFC9001_A3_HEADER;
+    bad_header[9] ^= 0x01;
+    try std.testing.expectError(QuicError.DecryptionFailed, crypto.decryptPacket(.initial, true, 1, &bad_header, ciphertext, &recovered));
+
+    // The packet number feeds the nonce, so the wrong one must fail.
+    try std.testing.expectError(QuicError.DecryptionFailed, crypto.decryptPacket(.initial, true, 2, &RFC9001_A3_HEADER, ciphertext, &recovered));
+
+    // Client keys must not open a server packet.
+    try std.testing.expectError(QuicError.DecryptionFailed, crypto.decryptPacket(.initial, false, 1, &RFC9001_A3_HEADER, ciphertext, &recovered));
+}
+
+test "QUIC AEAD rejects truncated ciphertext and undersized output" {
+    var crypto = QuicCrypto.init(.TLS_AES_128_GCM_SHA256);
+    try crypto.deriveInitialKeys(&RFC9001_DCID);
+
+    var out: [64]u8 = undefined;
+
+    // Anything shorter than the 16-byte tag cannot be a packet.
+    for (0..16) |n| {
+        try std.testing.expectError(QuicError.InvalidPacket, crypto.decryptPacket(.initial, true, 1, &RFC9001_A3_HEADER, RFC9001_A3_PROTECTED[20 .. 20 + n], &out));
+    }
+
+    // Output buffer must have room for the recovered plaintext.
+    var tiny: [4]u8 = undefined;
+    try std.testing.expectError(QuicError.InvalidPacket, crypto.decryptPacket(.initial, true, 1, &RFC9001_A3_HEADER, RFC9001_A3_PROTECTED[20..], &tiny));
+
+    // And for the ciphertext plus tag on the way out.
+    try std.testing.expectError(QuicError.InvalidPacket, crypto.encryptPacket(.initial, true, 1, &RFC9001_A3_HEADER, &RFC9001_A3_PAYLOAD, &out));
+}
+
+test "QUIC header protection parses packet number offset from the wire" {
+    var crypto = QuicCrypto.init(.TLS_AES_128_GCM_SHA256);
+    try crypto.deriveInitialKeys(&RFC9001_DCID);
+
+    // The RFC 9001 A.3 header: empty DCID, 8-byte SCID, empty token.
+    try std.testing.expectEqual(@as(usize, 18), try crypto.getPacketNumberOffset(&RFC9001_A3_HEADER));
+
+    // A Handshake packet (type 0x02) has no token, so the Length varint
+    // follows the connection IDs directly.
+    const handshake = decodeHex(11, "e100000001000040750001");
+    try std.testing.expectEqual(@as(usize, 9), try crypto.getPacketNumberOffset(&handshake));
+
+    // Short headers assume a zero-length connection ID.
+    const short = decodeHex(4, "41000001");
+    try std.testing.expectEqual(@as(usize, 1), try crypto.getPacketNumberOffset(&short));
+}
+
+test "QUIC header protection rejects malformed long headers" {
+    var crypto = QuicCrypto.init(.TLS_AES_128_GCM_SHA256);
+    try crypto.deriveInitialKeys(&RFC9001_DCID);
+
+    const cases = [_][]const u8{
+        // Version Negotiation (version 0) carries no packet number.
+        &decodeHex(11, "c000000000000040750001"),
+        // Retry (type 0x03) carries no packet number.
+        &decodeHex(11, "f100000001000040750001"),
+        // Connection ID length exceeds the 20-byte maximum.
+        &decodeHex(8, "c1000000012a0001"),
+        // A valid DCID length that runs past the end of the header.
+        &decodeHex(6, "c10000000114"),
+        // Truncated before the version.
+        &decodeHex(3, "c10000"),
+        // Truncated before the Length varint.
+        &decodeHex(16, "c1000000010008f067a5502a4262b500"),
+    };
+
+    const sample: [16]u8 = @splat(0xab);
+    for (cases) |case| {
+        try std.testing.expectError(QuicError.HeaderProtectionFailed, crypto.getPacketNumberOffset(case));
+
+        // The same rejection must surface through the public entry points,
+        // and must leave the caller's buffer untouched.
+        var buf = std.mem.zeroes([32]u8);
+        @memcpy(buf[0..case.len], case);
+        const before = buf;
+        try std.testing.expectError(QuicError.HeaderProtectionFailed, crypto.unprotectHeader(.initial, true, buf[0..case.len], &sample));
+        try std.testing.expectEqualSlices(u8, &before, &buf);
+    }
+}
+
+test "QUIC header protection requires a full 16-byte sample" {
+    var crypto = QuicCrypto.init(.TLS_AES_128_GCM_SHA256);
+    try crypto.deriveInitialKeys(&RFC9001_DCID);
+
+    var header = RFC9001_A3_HEADER;
+    const full_sample = RFC9001_A3_PROTECTED[22..38];
+
+    for (0..16) |n| {
+        try std.testing.expectError(QuicError.HeaderProtectionFailed, crypto.protectHeader(.initial, true, &header, full_sample[0..n]));
+    }
+    // Rejected samples must not have altered the header.
+    try std.testing.expectEqualSlices(u8, &RFC9001_A3_HEADER, &header);
+}
+
+test "QUIC header protection round trips every packet number length" {
+    var crypto = QuicCrypto.init(.TLS_AES_128_GCM_SHA256);
+    try crypto.deriveInitialKeys(&RFC9001_DCID);
+
+    const sample = RFC9001_A3_PROTECTED[22..38];
+
+    for (1..5) |pn_len| {
+        // Header is the A.3 shape with the packet number length varied; the
+        // Length varint stays 2 bytes so the offset is unchanged at 18.
+        var header: [18 + 4]u8 = undefined;
+        @memcpy(header[0..18], RFC9001_A3_HEADER[0..18]);
+        @memset(header[18..], 0x00);
+        header[0] = (RFC9001_A3_HEADER[0] & 0xfc) | @as(u8, @intCast(pn_len - 1));
+
+        const original = header;
+        const in_use = header[0 .. 18 + pn_len];
+
+        try crypto.protectHeader(.initial, true, in_use, sample);
+        try std.testing.expect(!std.mem.eql(u8, original[0 .. 18 + pn_len], in_use));
+
+        try crypto.unprotectHeader(.initial, true, in_use, sample);
+        try std.testing.expectEqualSlices(u8, original[0 .. 18 + pn_len], in_use);
+    }
 }

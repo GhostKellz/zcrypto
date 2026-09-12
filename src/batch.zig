@@ -4,6 +4,7 @@
 //! to improve performance when processing multiple operations.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const asym = @import("asym.zig");
 const hash = @import("hash.zig");
 
@@ -268,6 +269,18 @@ pub fn verifyBatchEd25519Parallel(
     var results = try allocator.alloc(bool, count);
     errdefer allocator.free(results);
 
+    // `std.Thread.spawn` is a compile error, not a runtime failure, on a
+    // single-threaded target such as wasm32 without the threads proposal. The
+    // condition is comptime-known and this branch returns, so nothing below is
+    // analysed there. Verification is identical either way; only the scheduling
+    // differs, so falling back is preferable to dropping the API on wasm.
+    if (builtin.single_threaded) {
+        for (messages, signatures, public_keys, 0..) |message, signature, pubkey, i| {
+            results[i] = asym.ed25519.verify(message, signature, pubkey);
+        }
+        return results;
+    }
+
     // Auto-detect thread count if not specified
     const num_threads = if (thread_count == 0)
         @min(std.Thread.getCpuCount() catch 4, count)
@@ -291,7 +304,12 @@ pub fn verifyBatchEd25519Parallel(
     var contexts = try allocator.alloc(VerifyWorker, num_threads);
     defer allocator.free(contexts);
 
-    // Spawn threads
+    // Workers borrow `contexts` and `results`, both of which are released on the
+    // way out. A failed spawn must therefore join what is already running before
+    // those buffers go away, or the survivors write into freed memory.
+    var spawned: usize = 0;
+    errdefer for (threads[0..spawned]) |thread| thread.join();
+
     for (0..num_threads) |i| {
         const start = i * chunk_size;
         const end = @min(start + chunk_size, count);
@@ -308,10 +326,10 @@ pub fn verifyBatchEd25519Parallel(
         };
 
         threads[i] = try std.Thread.spawn(.{}, verifyWorkerEd25519, .{&contexts[i]});
+        spawned += 1;
     }
 
-    // Wait for all threads
-    for (threads[0..@min(num_threads, (count + chunk_size - 1) / chunk_size)]) |thread| {
+    for (threads[0..spawned]) |thread| {
         thread.join();
     }
 
@@ -461,4 +479,77 @@ test "parallel fast-fail verification" {
     );
 
     try std.testing.expect(!all_valid);
+}
+
+test "parallel batch verification reports per-index results across chunk boundaries" {
+    const allocator = std.testing.allocator;
+
+    // 101 is not a multiple of any thread count used below, so the final chunk is
+    // always short and the spawn loop's early `break` is exercised.
+    const count = 101;
+    var messages = try allocator.alloc([]const u8, count);
+    defer {
+        for (messages) |msg| allocator.free(msg);
+        allocator.free(messages);
+    }
+
+    var signatures = try allocator.alloc([64]u8, count);
+    defer allocator.free(signatures);
+
+    var public_keys = try allocator.alloc([32]u8, count);
+    defer allocator.free(public_keys);
+
+    for (0..count) |i| {
+        const keypair = asym.ed25519.generate();
+        const msg = try std.fmt.allocPrint(allocator, "chunked-message-{d}", .{i});
+        messages[i] = msg;
+        signatures[i] = try keypair.sign(msg);
+        public_keys[i] = keypair.public_key;
+    }
+
+    // First, last, and an interior index, so a chunking error cannot hide a bad
+    // entry by dropping the head or the tail of the batch.
+    const tampered = [_]usize{ 0, 50, count - 1 };
+    for (tampered) |i| signatures[i][0] ^= 0x01;
+
+    // 0 auto-detects; 3 and 8 leave a short final chunk; 150 exceeds the batch so
+    // most of the thread slots are never spawned.
+    for ([_]usize{ 0, 3, 8, 150 }) |thread_count| {
+        const results = try verifyBatchEd25519Parallel(
+            messages,
+            signatures,
+            public_keys,
+            thread_count,
+            allocator,
+        );
+        defer allocator.free(results);
+
+        try std.testing.expectEqual(count, results.len);
+        for (results, 0..) |valid, i| {
+            const expected = !(i == tampered[0] or i == tampered[1] or i == tampered[2]);
+            try std.testing.expectEqual(expected, valid);
+        }
+    }
+}
+
+test "parallel batch verification rejects mismatched input lengths" {
+    const allocator = std.testing.allocator;
+
+    const keypair = asym.ed25519.generate();
+    const messages = [_][]const u8{ "a", "b" };
+    const signatures = [_][64]u8{try keypair.sign("a")};
+    const public_keys = [_][32]u8{ keypair.public_key, keypair.public_key };
+
+    try std.testing.expectError(
+        error.LengthMismatch,
+        verifyBatchEd25519Parallel(&messages, &signatures, &public_keys, 4, allocator),
+    );
+    try std.testing.expectError(
+        error.LengthMismatch,
+        verifyBatchEd25519Fast(&messages, &signatures, &public_keys, 4, allocator),
+    );
+    try std.testing.expectError(
+        error.LengthMismatch,
+        verifyBatchEd25519(&messages, &signatures, &public_keys, allocator),
+    );
 }
