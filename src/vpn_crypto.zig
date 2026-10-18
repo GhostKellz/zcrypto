@@ -334,9 +334,7 @@ pub const VpnTunnel = struct {
         };
         defer crypto.secureZero(u8, &shared_secret);
 
-        const local_public = crypto.dh.X25519.recoverPublicKey(setup.local_private) catch {
-            return VpnCryptoError.TunnelEstablishmentFailed;
-        };
+        const local_public = crypto.dh.X25519.recoverPublicKey(setup.local_private);
 
         // Order both the public keys and the session nonces by role rather than
         // by who is local, so the two peers feed an identical transcript into
@@ -750,8 +748,8 @@ fn testTunnelPairSeeded(
     initiator_nonce: [session_nonce_length]u8,
     responder_nonce: [session_nonce_length]u8,
 ) !TestTunnelPair {
-    const a = try crypto.dh.X25519.KeyPair.generateDeterministic(seed_a);
-    const b = try crypto.dh.X25519.KeyPair.generateDeterministic(seed_b);
+    const a = crypto.dh.X25519.KeyPair.generateDeterministic(seed_a);
+    const b = crypto.dh.X25519.KeyPair.generateDeterministic(seed_b);
 
     const config = TunnelConfig{ .tunnel_id = 1, .encryption_algorithm = algorithm };
     var initiator = VpnTunnel.init(config);
@@ -861,8 +859,8 @@ test "tampered packet is rejected" {
 test "mismatched roles cannot talk" {
     const seed_a: [32]u8 = @splat(0x33);
     const seed_b: [32]u8 = @splat(0x44);
-    const a = try crypto.dh.X25519.KeyPair.generateDeterministic(seed_a);
-    const b = try crypto.dh.X25519.KeyPair.generateDeterministic(seed_b);
+    const a = crypto.dh.X25519.KeyPair.generateDeterministic(seed_a);
+    const b = crypto.dh.X25519.KeyPair.generateDeterministic(seed_b);
 
     const config = TunnelConfig{ .tunnel_id = 7, .encryption_algorithm = .ChaCha20Poly1305 };
     var left = VpnTunnel.init(config);
@@ -980,8 +978,8 @@ test "re-establishing invalidates the previous session's traffic" {
     // captured packets replayable.
     const seed_a: [32]u8 = @splat(0x55);
     const seed_b: [32]u8 = @splat(0x66);
-    const a = try crypto.dh.X25519.KeyPair.generateDeterministic(seed_a);
-    const b = try crypto.dh.X25519.KeyPair.generateDeterministic(seed_b);
+    const a = crypto.dh.X25519.KeyPair.generateDeterministic(seed_a);
+    const b = crypto.dh.X25519.KeyPair.generateDeterministic(seed_b);
 
     var pair = try testTunnelPairSeeded(.ChaCha20Poly1305, seed_a, seed_b, @splat(0x0a), @splat(0x0b));
 
@@ -1008,8 +1006,8 @@ test "re-establishing invalidates the previous session's traffic" {
 
 test "establishment rejects a repeated session nonce" {
     var tunnel = VpnTunnel.init(.{ .tunnel_id = 1, .encryption_algorithm = .ChaCha20Poly1305 });
-    const kp = try crypto.dh.X25519.KeyPair.generateDeterministic(@splat(0x77));
-    const peer = try crypto.dh.X25519.KeyPair.generateDeterministic(@splat(0x78));
+    const kp = crypto.dh.X25519.KeyPair.generateDeterministic(@splat(0x77));
+    const peer = crypto.dh.X25519.KeyPair.generateDeterministic(@splat(0x78));
 
     // Both zeroed is the "I forgot to fill these in" case.
     try testing.expectError(VpnCryptoError.SessionMaterialReused, tunnel.establishTunnel(.{
@@ -1471,8 +1469,8 @@ test "multi-hop layers peel back to the original plaintext" {
     defer for (&peers) |*peer| peer.deinit();
 
     for (seeds, 0..) |seed, i| {
-        const local = try crypto.dh.X25519.KeyPair.generateDeterministic(@splat(seed));
-        const remote = try crypto.dh.X25519.KeyPair.generateDeterministic(@splat(seed +% 0x80));
+        const local = crypto.dh.X25519.KeyPair.generateDeterministic(@splat(seed));
+        const remote = crypto.dh.X25519.KeyPair.generateDeterministic(@splat(seed +% 0x80));
         const config = TunnelConfig{ .tunnel_id = i + 1, .encryption_algorithm = .ChaCha20Poly1305 };
         const local_nonce: [session_nonce_length]u8 = @splat(seed);
         const remote_nonce: [session_nonce_length]u8 = @splat(seed +% 0x40);

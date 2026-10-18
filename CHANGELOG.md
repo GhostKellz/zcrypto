@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.8] - 2026-10-18
+
+Zig 0.18 nightly compatibility. No public API changes: the C ABI and every
+stable Zig signature are unchanged.
+
+### Fixed
+- Builds on Zig `0.18.0-dev.253+16d31ceed`. std made
+  `X25519.recoverPublicKey` and `X25519.KeyPair.generate*` infallible, so the
+  `catch`/`try` on them in `asym`, `kex` and `vpn_crypto` no longer compiled.
+  The dead fallbacks are removed; `asym.x25519PublicKeyChecked` and
+  `kex.X25519.derivePublicKey` keep their error-union return types.
+- `build.zig` compiles now that `standardOptimizeOption` returns an optional:
+  the translate-c steps for the TPM, PKCS#11 and Secure Enclave backends
+  resolve an unset mode to `.debug`, and test roots accept the optional.
+- `libzcrypto.a` links into C programs again. Built without libc, the archive
+  took std's libc-free paths, which depend on `std.start` and left
+  `__zig_elf_auxv`/`__zig_elf_static_tls` undefined for a C caller. The FFI
+  library now links libc.
+
+### Changed
+- Raised `minimum_zig_version` to `0.18.0-dev.253+16d31ceed`.
+- `zsync` dependency updated to v0.8.7.
+- `build.zig` uses the lowercase `OptimizeMode` names (`.fast`, `.safe`).
+
 ## [1.0.7] - 2026-09-11
 
 Consumer-facing upgrade notes are in

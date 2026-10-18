@@ -4,6 +4,8 @@ const build_zon = @import("build.zig.zon");
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    // translate-c needs a concrete mode; an unset `-Doptimize` means Debug.
+    const translate_c_optimize = optimize orelse .debug;
 
     // ============================================================================
     // FEATURE FLAGS - Enable/disable optional components for modular builds
@@ -111,7 +113,7 @@ pub fn build(b: *std.Build) !void {
         const tss2 = b.addTranslateC(.{
             .root_source_file = b.path("src/hsm/tss2_headers.h"),
             .target = target,
-            .optimize = optimize,
+            .optimize = translate_c_optimize,
         });
         tss2.addSystemIncludePath(.{ .cwd_relative = "/usr/include" });
         tss2.linkSystemLibrary("tss2-esys", .{});
@@ -145,7 +147,7 @@ pub fn build(b: *std.Build) !void {
         const cryptoki = b.addTranslateC(.{
             .root_source_file = b.path("src/hsm/pkcs11_headers.h"),
             .target = target,
-            .optimize = optimize,
+            .optimize = translate_c_optimize,
         });
         // p11-kit installs its headers under a versioned prefix, so the
         // `<p11-kit/pkcs11.h>` spelling only resolves with this on the path.
@@ -182,7 +184,7 @@ pub fn build(b: *std.Build) !void {
         const security = b.addTranslateC(.{
             .root_source_file = b.path("src/hsm/security_headers.h"),
             .target = target,
-            .optimize = optimize,
+            .optimize = translate_c_optimize,
         });
         // The frameworks are linked on the module rather than on the translate
         // step: `translate-c` only ever reads headers, and `TranslateC` has no
@@ -489,7 +491,7 @@ pub fn build(b: *std.Build) !void {
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/bench.zig"),
             .target = target,
-            .optimize = .ReleaseFast,
+            .optimize = .fast,
             .imports = &.{
                 .{ .name = "zcrypto", .module = zcrypto_mod },
             },
@@ -576,6 +578,14 @@ pub fn build(b: *std.Build) !void {
         // when making a PIE object". The archive is meant to be linked by
         // third parties, so it has to be position independent.
         .pic = true,
+        // A C caller never runs `std.start`, so std's libc-free paths cannot
+        // work inside this archive: they read the auxiliary vector and static
+        // TLS layout that `std.start` records, and the link fails on the
+        // undefined `__zig_elf_auxv`/`__zig_elf_static_tls`. Every C consumer
+        // already has a libc, so build against it. Only ELF targets take those
+        // paths; wasm32-wasi does not, and its libc build of std does not
+        // compile on the current toolchain.
+        .link_libc = target.result.ofmt == .elf,
     });
 
     // The public header carries a second, hand-maintained copy of the error
@@ -689,7 +699,7 @@ pub fn build(b: *std.Build) !void {
         .root_module = b.createModule(.{
             .root_source_file = b.path("tests/insecure_option_guard.zig"),
             .target = target,
-            .optimize = .ReleaseSafe,
+            .optimize = .safe,
             .imports = &.{
                 .{ .name = "zcrypto", .module = zcrypto_mod },
             },
@@ -979,7 +989,7 @@ fn addTestRun(b: *std.Build, tests: *std.Build.Step.Compile) *std.Build.Step.Run
 fn testRootOver(
     b: *std.Build,
     mod: *std.Build.Module,
-    optimize: std.builtin.OptimizeMode,
+    optimize: ?std.builtin.OptimizeMode,
 ) *std.Build.Module {
     const root = b.createModule(.{
         .root_source_file = mod.root_source_file,

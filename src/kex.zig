@@ -67,7 +67,7 @@ pub const X25519 = struct {
     /// Derive public key from private key
     pub fn derivePublicKey(private_key: [PRIVATE_KEY_SIZE]u8) ![PUBLIC_KEY_SIZE]u8 {
         // Use real X25519 implementation from Zig's std.crypto
-        return crypto.dh.X25519.recoverPublicKey(private_key) catch error.InvalidKey;
+        return crypto.dh.X25519.recoverPublicKey(private_key);
     }
 
     /// Import a keypair from raw bytes and verify the public key matches.

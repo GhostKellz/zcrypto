@@ -122,7 +122,7 @@ pub fn generateEd25519() Ed25519KeyPair {
 pub fn generateCurve25519() Curve25519KeyPair {
     var private_key: [CURVE25519_PRIVATE_KEY_SIZE]u8 = undefined;
     rand.fill(&private_key);
-    const public_key = std.crypto.dh.X25519.recoverPublicKey(private_key) catch return Curve25519KeyPair{ .public_key = std.mem.zeroes([32]u8), .private_key = private_key };
+    const public_key = std.crypto.dh.X25519.recoverPublicKey(private_key);
 
     return Curve25519KeyPair{
         .public_key = public_key,
@@ -160,12 +160,12 @@ pub fn dhX25519(private_key: [CURVE25519_PRIVATE_KEY_SIZE]u8, public_key: [CURVE
 
 /// Generate X25519 public key from private key
 pub fn x25519PublicKey(private_key: [CURVE25519_PRIVATE_KEY_SIZE]u8) [CURVE25519_PUBLIC_KEY_SIZE]u8 {
-    return std.crypto.dh.X25519.recoverPublicKey(private_key) catch std.mem.zeroes([32]u8);
+    return std.crypto.dh.X25519.recoverPublicKey(private_key);
 }
 
 /// Generate X25519 public key from private key, returning errors instead of a zero fallback.
 pub fn x25519PublicKeyChecked(private_key: [CURVE25519_PRIVATE_KEY_SIZE]u8) ![CURVE25519_PUBLIC_KEY_SIZE]u8 {
-    return std.crypto.dh.X25519.recoverPublicKey(private_key) catch return error.InvalidPrivateKey;
+    return std.crypto.dh.X25519.recoverPublicKey(private_key);
 }
 
 /// Ed25519 module with clean API matching your docs

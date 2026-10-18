@@ -81,8 +81,8 @@ test "vpn surface completes an authenticated round trip when enabled" {
     var responder_secret: [32]u8 = undefined;
     zcrypto.rand.fill(&initiator_secret);
     zcrypto.rand.fill(&responder_secret);
-    const initiator_public = try std.crypto.dh.X25519.recoverPublicKey(initiator_secret);
-    const responder_public = try std.crypto.dh.X25519.recoverPublicKey(responder_secret);
+    const initiator_public = std.crypto.dh.X25519.recoverPublicKey(initiator_secret);
+    const responder_public = std.crypto.dh.X25519.recoverPublicKey(responder_secret);
 
     var initiator_nonce: [vpn.session_nonce_length]u8 = undefined;
     var responder_nonce: [vpn.session_nonce_length]u8 = undefined;
