@@ -4,8 +4,8 @@ const build_zon = @import("build.zig.zon");
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    // translate-c needs a concrete mode; an unset `-Doptimize` means Debug.
-    const translate_c_optimize = optimize orelse .debug;
+    // Older supported compilers return null for the default debug mode.
+    const translate_c_optimize = if (@typeInfo(@TypeOf(optimize)) == .optional) optimize orelse .debug else optimize;
 
     // ============================================================================
     // FEATURE FLAGS - Enable/disable optional components for modular builds

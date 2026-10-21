@@ -29,8 +29,8 @@ pub const BlockchainCryptoError = error{
 /// High-performance Merkle tree implementation
 pub const MerkleTree = struct {
     allocator: Allocator,
-    leaves: std.ArrayListUnmanaged([32]u8),
-    tree: std.ArrayListUnmanaged([32]u8),
+    leaves: std.ArrayList([32]u8),
+    tree: std.ArrayList([32]u8),
 
     pub fn init(allocator: Allocator) MerkleTree {
         return MerkleTree{
@@ -147,7 +147,7 @@ pub const MerkleTree = struct {
 /// Merkle proof structure
 pub const MerkleProof = struct {
     allocator: Allocator,
-    steps: std.ArrayListUnmanaged(ProofStep),
+    steps: std.ArrayList(ProofStep),
 
     const ProofStep = struct {
         hash: [32]u8,
@@ -197,7 +197,7 @@ pub const MerkleProof = struct {
 /// Batch signature verification for transaction blocks
 pub const BatchVerifier = struct {
     allocator: Allocator,
-    signatures: std.ArrayListUnmanaged(SignatureData),
+    signatures: std.ArrayList(SignatureData),
 
     const SignatureData = struct {
         message: []const u8,
