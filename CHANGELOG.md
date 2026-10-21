@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.9] - 2026-10-21
+
+### Fixed
+- Accept both optional and non-optional optimization modes from Zig's build
+  API when configuring translate-c.
+- Replace the removed `std.ArrayListUnmanaged` alias with `std.ArrayList` in
+  blockchain crypto helpers, preserving explicit allocator ownership.
+
+The C ABI and stable Zig API are unchanged.
+
 ## [1.0.8] - 2026-10-18
 
 Zig 0.18 nightly compatibility. No public API changes: the C ABI and every
